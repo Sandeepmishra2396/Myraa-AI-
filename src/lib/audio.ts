@@ -591,23 +591,22 @@ export class MyraAudioSession {
       } else if (this.nextStartTime < currentTime) {
         // Network catch-up: resume immediately at currentTime with zero inserted silence gap
         this.nextStartTime = currentTime;
-      } else if (queueAhead > 1.5) {
-        // Audio queue has built up more than 1.5s ahead of real-time hardware clock.
-        // Resync nextStartTime to prevent 40-70s runaway sequential delay.
+      } else if (queueAhead > 1.0) {
+        // Audio queue has built up more than 1.0s ahead of real-time hardware clock.
+        // Stop all future-scheduled nodes and resync the cursor to prevent runaway delay.
         console.warn(
-          `[Myraa Audio] Audio queue drift exceeded 1.5s (${queueAhead.toFixed(2)}s ahead, ${this.activeSources.length} active nodes). Clamping playback cursor.`
+          `[Myraa Audio] Audio queue drift exceeded 1.0s (${queueAhead.toFixed(2)}s ahead, ${this.activeSources.length} active nodes). Flushing queue and clamping cursor.`
         );
-        if (queueAhead > 3.5) {
-          // Severe backlog: stop lingering unstarted nodes to instantly recover
-          this.activeSources.forEach((s) => {
-            try { s.stop(); } catch {}
-          });
-          this.activeSources = [];
-        }
+        // Flush all scheduled-but-not-yet-started nodes immediately
+        this.activeSources.forEach((s) => {
+          try { s.stop(); } catch {}
+        });
+        this.activeSources = [];
         this.nextStartTime = currentTime + 0.03;
       }
 
       this.audioChunksCount++;
+
       if (this.audioChunksCount === 1 || this.audioChunksCount % 50 === 0) {
         console.log(
           `[Myraa Audio Latency Diag] Chunk #${this.audioChunksCount}: Active nodes: ${this.activeSources.length}, Queue ahead: ${Math.max(0, this.nextStartTime - currentTime).toFixed(2)}s, Hardware clock: ${currentTime.toFixed(2)}s`

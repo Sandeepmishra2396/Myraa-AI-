@@ -691,11 +691,23 @@ export default function App() {
             callback({ error: `Unsupported color '${colorName}'. Supported themes are: ${validColors.join(", ")}` });
           }
         } else {
-          // If running in Electron companion or on desktop, dispatch to local agent
+          // If running in Electron companion or on desktop, dispatch to local agent.
+          // IMPORTANT: When loaded from the Render cloud URL (isRemoteHost), we cannot reach
+          // localhost:8765 from the browser — Chrome's Private Network Access policy blocks it.
+          // In that case, return a clear error immediately so Gemini can respond gracefully.
           const isDesktopEnv = typeof window !== "undefined" && !/android|iphone|ipad|mobile/i.test(navigator.userAgent);
           if ((window as any).myraa?.executeDesktopTool) {
             (window as any).myraa.executeDesktopTool(name, args).then(callback).catch((err: any) => {
               callback({ error: err?.message || `Desktop execution failed for ${name}` });
+            });
+          } else if (isRemoteHost) {
+            // Running in the Render-hosted web client — cannot reach localhost:8765 from here.
+            // The Windows Desktop Companion app (paired device) must be running and connected
+            // for desktop tools to work. Route via server when companion is paired.
+            console.warn(`[App] Desktop tool '${name}' requested but browser is on remote host — desktop agent unreachable via browser. Requires Desktop Companion app.`);
+            callback({
+              ok: false,
+              error: `Desktop tool '${name}' is not available in the web browser. Please open the MYRAA Desktop Companion app on your Windows PC to enable desktop control features.`,
             });
           } else if (isDesktopEnv) {
             fetch("http://127.0.0.1:8765/execute", {
@@ -716,7 +728,7 @@ export default function App() {
                 callback({ error: `Desktop agent is not reachable on your PC. Please run: uvicorn desktop_agent.main:app --port 8765` });
               });
           } else {
-            callback({ error: `Tool ${name} is not implemented.` });
+            callback({ error: `Tool ${name} is not implemented on this device.` });
           }
         }
       },
