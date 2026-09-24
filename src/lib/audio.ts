@@ -603,44 +603,22 @@ export class MyraAudioSession {
       const currentTime = this.outputAudioCtx.currentTime;
       const queueAhead = this.nextStartTime - currentTime;
 
-      // Gapless scheduler sync & runaway queue prevention
+      // Gapless scheduler sync & runaway queue prevention.
+      // 1-3s of queue ahead is NORMAL for streaming — Web Audio API handles it natively.
+      // Do NOT trim nodes in that range: resetting nextStartTime while nodes are pending
+      // causes those nodes to play simultaneously with the next chunk (double voice).
       if (this.activeSources.length === 0) {
-        // Initial burst: 25ms lead time so subsequent packets queue seamlessly
+        // Fresh start — 25ms lead so subsequent packets queue seamlessly
         this.nextStartTime = currentTime + 0.025;
       } else if (this.nextStartTime < currentTime) {
-        // Network catch-up: resume immediately at currentTime with zero inserted silence gap
+        // Network catch-up — cursor fell behind hardware clock, start immediately
         this.nextStartTime = currentTime;
       } else if (queueAhead > 3.5) {
-        // Safety valve: audio queue is severely ahead (>3.5s) — likely a stuck or runaway response.
-        // Flush all future-scheduled nodes and resync the cursor to prevent runaway delay.
-        // NOTE: Normal streaming will build 1–2s of queue ahead — that is correct and expected.
-        // Only barge-in (handleInterruption) should flush nodes during active speech.
-        console.warn(
-          `[Myraa Audio] Audio queue severely drifted (${queueAhead.toFixed(2)}s ahead, ${this.activeSources.length} active nodes). Flushing queue and clamping cursor.`
-        );
-        this.activeSources.forEach((s) => {
-          try { s.stop(); } catch {}
-        });
+        // Severe safety flush only — >3.5s means something is genuinely stuck
+        console.warn(`[Myraa Audio] Queue severely drifted (${queueAhead.toFixed(2)}s, ${this.activeSources.length} nodes). Flushing.`);
+        this.activeSources.forEach((s) => { try { s.stop(); } catch {} });
         this.activeSources = [];
         this.nextStartTime = currentTime + 0.05;
-      } else if (queueAhead > 1.5) {
-        // Mild drift: trim future-scheduled-but-not-yet-playing nodes, keep current playback.
-        // Reset cursor so next chunk queues tightly after what's already playing.
-        // This prevents double-voice overlap when cursor is reset mid-stream.
-        const kept: AudioBufferSourceNode[] = [];
-        this.activeSources.forEach((s) => {
-          // Keep only the first (currently-playing) node; stop all future-queued ones.
-          if (kept.length === 0) {
-            kept.push(s);
-          } else {
-            try { s.stop(); } catch {}
-          }
-        });
-        this.activeSources = kept;
-        // Schedule next chunk tightly after current playback
-        this.nextStartTime = kept.length > 0
-          ? currentTime + 0.1
-          : currentTime + 0.025;
       }
 
       this.audioChunksCount++;
@@ -822,9 +800,16 @@ export class MyraAudioSession {
       // Handle live captions transcription
       if (data.type === "transcription") {
         this.onTranscription(data.role, data.text);
+        // When the server confirms user speech while MYRAA is playing, clear the
+        // playback queue. But respect the same 600ms cooldown used by the local VAD
+        // barge-in to avoid re-triggering immediately after we just interrupted.
         if (data.role === "user" && this.activeSources.length > 0) {
-          console.log("[Myraa Audio] User speech recognized by model; clearing lingering playback sources.");
-          this.handleInterruption();
+          const now = Date.now();
+          if (now - this._lastBargeInTime > 600) {
+            console.log("[Myraa Audio] User speech recognized by model; clearing lingering playback sources.");
+            this._lastBargeInTime = now;
+            this.handleInterruption();
+          }
         }
       }
 
