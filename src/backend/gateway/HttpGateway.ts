@@ -827,17 +827,52 @@ export function createHttpApp(): express.Application {
     return res.status(401).json({ error: "Unauthorized: Localhost access or valid Bearer device token required." });
   };
 
-  // Generate a new 5-minute pairing code (localhost or paired admin)
-  app.post("/api/remote/pair-code", requireLocalhostOrPairedDevice, async (req: any, res) => {
+  // Generate a new 5-minute pairing code (localhost, paired admin, or atomic first-device bootstrap)
+  app.post("/api/remote/pair-code", async (req: any, res) => {
     try {
-      if (req.remoteDevice && req.remoteDevice.role !== "admin") {
-        return res.status(403).json({ error: "Forbidden: Only admins can generate device pairing codes." });
-      }
+      const forwardedIp = req.headers["x-forwarded-for"];
+      const ip = forwardedIp
+        ? String(forwardedIp).split(",")[0].trim()
+        : req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || "";
+      const isLocal = !forwardedIp && (ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1" || ip === "localhost");
+
+      const authHeader = req.headers.authorization || "";
+      const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : authHeader.trim();
+
+      const { remoteStore } = await import("../remote/RemoteStore.ts");
       const { pairingManager } = await import("../remote/PairingManager.ts");
-      const codeInfo = pairingManager.generatePairCode(req.ip);
-      res.status(201).json(codeInfo);
+
+      // 1. Authenticated Remote Admin Device
+      if (token) {
+        const { remoteSecurityCoordinator } = await import("../security/RemoteSecurityCoordinator.ts");
+        const auth = await remoteSecurityCoordinator.authenticateRemoteCredential(token, ip, req.headers["user-agent"]);
+        if (!auth.authenticated || !auth.device) {
+          return res.status(401).json({ error: auth.error || "Unauthorized: Invalid or revoked device token." });
+        }
+        if (auth.device.role !== "admin") {
+          return res.status(403).json({ error: "Forbidden: Only admins can generate device pairing codes." });
+        }
+        const codeInfo = pairingManager.generatePairCode(ip);
+        return res.status(201).json(codeInfo);
+      }
+
+      // 2. Localhost Access (Loopback desktop)
+      if (isLocal) {
+        const codeInfo = pairingManager.generatePairCode(ip);
+        return res.status(201).json(codeInfo);
+      }
+
+      // 3. Atomic First-Device Bootstrap (Remote caller when zero devices exist in database)
+      const bootstrapCode = await pairingManager.generateBootstrapPairCode(ip);
+      return res.status(201).json(bootstrapCode);
     } catch (e: any) {
-      res.status(500).json({ error: sanitizeError(e?.message || e) });
+      const msg = sanitizeError(e?.message || e);
+      const status = msg.includes("BOOTSTRAP_CONFLICT")
+        ? 409
+        : msg.includes("BOOTSTRAP_CLOSED")
+        ? 403
+        : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -845,8 +880,14 @@ export function createHttpApp(): express.Application {
   app.get("/api/remote/pair-code/status", async (_req, res) => {
     try {
       const { pairingManager } = await import("../remote/PairingManager.ts");
+      const { remoteStore } = await import("../remote/RemoteStore.ts");
       const status = pairingManager.getActivePairCode();
-      res.json({ active: status !== null, ...(status || {}) });
+      const devices = await remoteStore.listDevices();
+      res.json({
+        active: status !== null,
+        canBootstrap: devices.length === 0,
+        ...(status || {}),
+      });
     } catch (e: any) {
       res.status(500).json({ error: sanitizeError(e?.message || e) });
     }

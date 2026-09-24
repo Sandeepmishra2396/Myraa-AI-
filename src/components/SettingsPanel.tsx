@@ -16,6 +16,7 @@ import {
   Eye,
   EyeOff,
   ExternalLink,
+  Shield,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -24,6 +25,7 @@ import {
   loadSettings,
   saveSettings,
 } from "../lib/settingsStore";
+import type { StoredRemoteSession } from "./remote/CloudPairingModal";
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -33,6 +35,8 @@ interface SettingsPanelProps {
   /** Persist a settings patch (also notifies App of changes). */
   onChange: (patch: Partial<MyraaSettings>) => void;
   themeColor: string;
+  remoteSession?: StoredRemoteSession | null;
+  onUnpair?: () => void;
 }
 
 type SettingsTab = "general" | "voice" | "system" | "about";
@@ -73,7 +77,15 @@ function ToggleRow({
   );
 }
 
-export function SettingsPanel({ isOpen, onClose, settings, onChange, themeColor }: SettingsPanelProps) {
+export function SettingsPanel({
+  isOpen,
+  onClose,
+  settings,
+  onChange,
+  themeColor,
+  remoteSession,
+  onUnpair,
+}: SettingsPanelProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [agentHealth, setAgentHealth] = useState<{
@@ -439,6 +451,44 @@ export function SettingsPanel({ isOpen, onClose, settings, onChange, themeColor 
                       Supports Google Gemini API keys (<span className="text-slate-300 font-bold">AIza...</span>) and AI Studio Auth keys (<span className="text-slate-300 font-bold">AQ....</span>). Stored locally and never exposed.
                     </p>
                   </div>
+
+                  {remoteSession && (
+                    <div className="p-4 rounded-xl border border-indigo-500/20 bg-indigo-500/5 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Shield size={14} className="text-indigo-400" />
+                          <span className="text-xs font-mono text-white">Cloud Companion Device</span>
+                        </div>
+                        <span className="text-[10px] font-mono text-emerald-400 font-semibold px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20">
+                          Authenticated
+                        </span>
+                      </div>
+                      <div className="space-y-1 text-[10px] font-mono text-slate-400">
+                        <div className="flex justify-between">
+                          <span>DEVICE NAME</span>
+                          <span className="text-slate-200">{remoteSession.deviceName}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>ROLE</span>
+                          <span className="text-indigo-300 uppercase">{remoteSession.role}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>DEVICE ID</span>
+                          <span className="text-slate-300 font-mono">{remoteSession.deviceId.slice(0, 10)}...</span>
+                        </div>
+                      </div>
+                      {onUnpair && (
+                        <button
+                          onClick={onUnpair}
+                          type="button"
+                          className="w-full py-1.5 px-3 rounded-lg border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-xs font-mono text-rose-300 flex items-center justify-center gap-1.5 transition cursor-pointer"
+                        >
+                          <Trash2 size={12} />
+                          <span>Unpair Device</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 

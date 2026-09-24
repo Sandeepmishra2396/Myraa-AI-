@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MYRAA — PairingManager (Phase 7)
  *
  * Ephemeral pairing protocol with brute-force defense:
@@ -136,12 +136,42 @@ export class PairingManager {
       createdByIp,
     };
 
-    console.log(`[PairingManager] Generated pairing code '${code}' (expires in 5 minutes).`);
+    console.log(`[PairingManager] Generated ephemeral pairing code (expires in 5 minutes).`);
     return {
       code,
       expiresAt: new Date(expiresAt).toISOString(),
       ttlSeconds: Math.floor(PAIRING_CODE_TTL_MS / 1000),
     };
+  }
+
+  /**
+   * Generates a bootstrap pairing code for initial device setup if and only if
+   * zero devices are currently registered in the database and no active bootstrap PIN exists.
+   * Atomically prevents concurrent requests from creating multiple initial setup PINs.
+   */
+  async generateBootstrapPairCode(
+    clientIp = "unknown",
+  ): Promise<{ code: string; expiresAt: string; ttlSeconds: number; isBootstrap: true }> {
+    const devices = await remoteStore.listDevices();
+    if (devices.length > 0) {
+      throw new Error(
+        "BOOTSTRAP_CLOSED: Initial device bootstrap is permanently closed. Existing admin token or localhost access required.",
+      );
+    }
+
+    const now = Date.now();
+    if (
+      this._activeSession &&
+      !this._activeSession.consumed &&
+      now <= this._activeSession.expiresAt
+    ) {
+      throw new Error(
+        "BOOTSTRAP_CONFLICT: An initial bootstrap pairing code is already active. Please use the active code or wait for it to expire.",
+      );
+    }
+
+    const codeInfo = this.generatePairCode(clientIp);
+    return { ...codeInfo, isBootstrap: true };
   }
 
   /** Return the currently active unexpired pairing code info (if any). */

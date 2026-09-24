@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { MyraAudioSession, LiveState } from "./lib/audio";
 import { MyraaCoreVisualizer, MyraaEmotion } from "./components/MyraaCoreVisualizer";
 import { BrowserAgent } from "./components/BrowserAgent";
@@ -33,6 +33,7 @@ import { MemoryDashboard } from "./components/MemoryDashboard";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { MyraaSettings, DEFAULT_SETTINGS, loadSettings, saveSettings } from "./lib/settingsStore";
 import { MyraaWakeWordDetector } from "./lib/wakeWord";
+import { CloudPairingModal, StoredRemoteSession, STORAGE_KEY } from "./components/remote/CloudPairingModal";
 
 export default function App() {
   const [state, setState] = useState<LiveState>("disconnected");
@@ -384,7 +385,55 @@ export default function App() {
     setSettings(next);
   };
 
+  const isRemoteHost =
+    typeof window !== "undefined" &&
+    window.location.hostname !== "localhost" &&
+    window.location.hostname !== "127.0.0.1" &&
+    window.location.hostname !== "::1";
+
+  const [remoteSession, setRemoteSession] = useState<StoredRemoteSession | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const handleUnpairDevice = async () => {
+    if (remoteSession?.deviceId) {
+      try {
+        await fetch(`/api/remote/devices/${remoteSession.deviceId}`, {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${remoteSession.token || remoteSession.accessToken}`,
+          },
+        });
+      } catch {
+        /* best effort */
+      }
+    }
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
+    setRemoteSession(null);
+    if (sessionRef.current) {
+      sessionRef.current.disconnect();
+      sessionRef.current.setToken("");
+    }
+  };
+
   const sessionRef = useRef<MyraAudioSession | null>(null);
+
+  // Sync token to audio session whenever remoteSession changes
+  useEffect(() => {
+    if (sessionRef.current) {
+      sessionRef.current.setToken(remoteSession?.token || remoteSession?.accessToken || "");
+    }
+  }, [remoteSession]);
 
   // Fetch initial recollections from backend database
   useEffect(() => {
@@ -431,6 +480,7 @@ export default function App() {
   // Initialize the audio session handlers once on mount
   useEffect(() => {
     sessionRef.current = new MyraAudioSession({
+      token: remoteSession?.token || remoteSession?.accessToken,
       onStateChange: (newState) => {
         setState(newState);
         if (newState === "disconnected") {
@@ -1243,7 +1293,22 @@ export default function App() {
         settings={settings}
         onChange={handleSettingsChange}
         themeColor={themeColor}
+        remoteSession={remoteSession}
+        onUnpair={handleUnpairDevice}
       />
+
+      {/* Cloud Remote Companion Authentication Modal for non-localhost hosts */}
+      {isRemoteHost && (
+        <CloudPairingModal
+          isOpen={!remoteSession}
+          onPairSuccess={(sess) => {
+            setRemoteSession(sess);
+            if (sessionRef.current) {
+              sessionRef.current.setToken(sess.token || sess.accessToken || "");
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

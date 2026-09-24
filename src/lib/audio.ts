@@ -136,6 +136,10 @@ export class MyraAudioSession {
     return this.currentState;
   }
 
+  public setToken(token: string): void {
+    this.token = token;
+  }
+
   /**
    * Pushes a compressed JPEG base64 screenshot frame directly to the live WebSocket server.
    */
@@ -266,6 +270,33 @@ export class MyraAudioSession {
       this.micWorkletNode.connect(this.inputAudioCtx.destination);
 
       // 3. Establish custom WebSocket server bridge now that audio hardware is ready
+      const isLocalHost =
+        typeof window !== "undefined" &&
+        (window.location.hostname === "localhost" ||
+          window.location.hostname === "127.0.0.1" ||
+          window.location.hostname === "::1");
+
+      if (!isLocalHost && !this.token && typeof localStorage !== "undefined") {
+        try {
+          const raw = localStorage.getItem("sora_remote_session");
+          if (raw) {
+            const sess = JSON.parse(raw);
+            if (sess?.token || sess?.accessToken) {
+              this.token = sess.token || sess.accessToken;
+            }
+          }
+        } catch { /* ignore */ }
+      }
+
+      if (!isLocalHost && !this.token) {
+        const err = "REMOTE_AUTH_REQUIRED: Non-localhost connections must authenticate via /remote-live with a paired device token.";
+        console.warn(`[Myraa Audio] ${err}`);
+        this.onError(err);
+        this._cleanupAudio();
+        this.setState("disconnected");
+        return;
+      }
+
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const endpoint = this.token ? `/remote-live?token=${encodeURIComponent(this.token)}` : "/live";
       this.ws = new WebSocket(`${protocol}//${window.location.host}${endpoint}`);
@@ -355,6 +386,30 @@ export class MyraAudioSession {
 
       // Re-open only the WebSocket — no mic setup (isActivated=false so connect() runs).
       this.isActivated = false;
+
+      const isLocalHost =
+        typeof window !== "undefined" &&
+        (window.location.hostname === "localhost" ||
+          window.location.hostname === "127.0.0.1" ||
+          window.location.hostname === "::1");
+
+      if (!isLocalHost && !this.token && typeof localStorage !== "undefined") {
+        try {
+          const raw = localStorage.getItem("sora_remote_session");
+          if (raw) {
+            const sess = JSON.parse(raw);
+            if (sess?.token || sess?.accessToken) {
+              this.token = sess.token || sess.accessToken;
+            }
+          }
+        } catch { /* ignore */ }
+      }
+
+      if (!isLocalHost && !this.token) {
+        console.warn("[Myraa WS] Cannot reconnect: non-localhost connection has no authenticated device token.");
+        this.setState("disconnected");
+        return;
+      }
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const endpoint = this.token ? `/remote-live?token=${encodeURIComponent(this.token)}` : "/live";
