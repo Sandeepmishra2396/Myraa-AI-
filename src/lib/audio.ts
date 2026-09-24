@@ -84,6 +84,9 @@ export class MyraAudioSession {
   private activeSources: AudioBufferSourceNode[] = [];
   private consecutiveSpeechFrames = 0;
   private audioChunksCount = 0;
+  /** Timestamp (ms) of last VAD barge-in trigger — used for echo cooldown gate. */
+  private _lastBargeInTime = 0;
+
   
   // State Callbacks
   private onStateChange: (state: LiveState) => void;
@@ -267,23 +270,39 @@ export class MyraAudioSession {
         if (this.currentState === "disconnected" || this.currentState === "connecting") return;
         const channelData: Float32Array = e.data.channelData;
 
-        // Local VAD energy check for immediate client-side barge-in
+        // Local VAD energy check for immediate client-side barge-in.
+        // Thresholds are tuned to distinguish real user speech from speaker echo bleed:
+        //   - echoCancellation: true in getUserMedia helps but Web Audio API output bypasses
+        //     Chrome's AEC reference signal, so speaker echo can still reach the mic.
+        //   - RMS 0.15 threshold: real speech is typically 0.15–0.5; speaker room bleed is 0.05–0.12
+        //   - 4 consecutive frames: ~40–80ms of sustained energy (avoids spike false positives)
+        //   - 600ms cooldown: prevents re-triggering on the tail of the same echo burst
         if (this.activeSources.length > 0 || this.currentState === "speaking") {
-          let sumSquares = 0;
-          for (let i = 0; i < channelData.length; i++) {
-            sumSquares += channelData[i] * channelData[i];
-          }
-          const rms = Math.sqrt(sumSquares / channelData.length);
-          if (rms > 0.045) {
-            this.consecutiveSpeechFrames++;
-            if (this.consecutiveSpeechFrames >= 2) {
-              console.log(
-                `[Myraa Audio] Local speech barge-in detected (RMS: ${rms.toFixed(3)}). Flushing active playback queue immediately.`
-              );
-              this.handleInterruption();
+          const now = Date.now();
+          const cooldownMs = 600;
+          const lastInterruptTime: number = this._lastBargeInTime;
+
+          if (now - lastInterruptTime > cooldownMs) {
+            let sumSquares = 0;
+            for (let i = 0; i < channelData.length; i++) {
+              sumSquares += channelData[i] * channelData[i];
+            }
+            const rms = Math.sqrt(sumSquares / channelData.length);
+            if (rms > 0.15) {
+              this.consecutiveSpeechFrames++;
+              if (this.consecutiveSpeechFrames >= 4) {
+                console.log(
+                  `[Myraa Audio] Local speech barge-in detected (RMS: ${rms.toFixed(3)}). Flushing active playback queue immediately.`
+                );
+                this._lastBargeInTime = Date.now();
+                this.handleInterruption();
+                this.consecutiveSpeechFrames = 0;
+              }
+            } else {
               this.consecutiveSpeechFrames = 0;
             }
           } else {
+            // In cooldown window — ignore mic frames to prevent echo re-trigger
             this.consecutiveSpeechFrames = 0;
           }
         } else {
