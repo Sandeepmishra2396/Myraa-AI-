@@ -93,6 +93,12 @@ export function SettingsPanel({
     ram?: string;
   }>({ online: false });
 
+  const isLocalOrigin =
+    typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1" ||
+      window.location.hostname === "::1");
+
   // Cloud Companion Live Role & Secondary Pairing State
   const [liveRole, setLiveRole] = useState<string | null>(remoteSession?.role || null);
   const [isGeneratingPairCode, setIsGeneratingPairCode] = useState(false);
@@ -199,6 +205,7 @@ export function SettingsPanel({
     source?: string;
     masked?: string;
     prefix?: string;
+    isPlaceholder?: boolean;
   }>({ hasApiKey: false });
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
@@ -480,16 +487,26 @@ export function SettingsPanel({
                         />
                         <div>
                           <div className="text-xs font-mono text-white">
-                            {apiKeyMeta.hasApiKey ? "API Key Configured" : "No Valid API Key"}
+                            {apiKeyMeta.hasApiKey
+                              ? !isLocalOrigin
+                                ? "Server Gemini API Key Active"
+                                : "API Key Configured"
+                              : !isLocalOrigin
+                              ? apiKeyMeta.isPlaceholder
+                                ? "Server Key Is Unconfigured Placeholder"
+                                : "No Server Gemini API Key Configured"
+                              : "No Valid API Key"}
                           </div>
                           <div className="text-[10px] font-mono text-slate-400">
                             {apiKeyMeta.hasApiKey
-                              ? `Active: ${apiKeyMeta.masked || "Configured"} (${apiKeyMeta.source || "local"})`
+                              ? `Active: ${apiKeyMeta.masked || "Configured"} (${apiKeyMeta.source || "server"})`
+                              : !isLocalOrigin
+                              ? "Configure GEMINI_API_KEY in Render Dashboard (Environment)"
                               : "Enter your Google Gemini API key below"}
                           </div>
                         </div>
                       </div>
-                      {apiKeyMeta.hasApiKey && (
+                      {apiKeyMeta.hasApiKey && isLocalOrigin && (
                         <button
                           type="button"
                           onClick={handleClearApiKey}
@@ -501,63 +518,86 @@ export function SettingsPanel({
                       )}
                     </div>
 
-                    {/* Input form */}
-                    <form onSubmit={handleSaveApiKey} className="space-y-2">
-                      <div className="relative">
-                        <input
-                          id="gemini-api-key-input"
-                          name="geminiApiKey"
-                          autoComplete="new-password"
-                          aria-label="Gemini API Key"
-                          type={showApiKey ? "text" : "password"}
-                          value={apiKeyInput}
-                          onChange={(e) => setApiKeyInput(e.target.value)}
-                          placeholder={apiKeyMeta.hasApiKey ? "Replace with new API or Auth key" : "Paste API key (AIza… or AQ.…)"}
-                          className="w-full pl-3 pr-10 py-2 rounded-xl border border-white/10 bg-white/5 text-xs text-white font-mono focus:outline-none focus:border-cyan-400/50 transition"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowApiKey(!showApiKey)}
-                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition cursor-pointer"
-                        >
-                          {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
-                        </button>
-                      </div>
-
-                      {keyStatusMsg && (
-                        <div
-                          className={`p-2.5 rounded-xl border text-[10px] font-mono leading-relaxed ${
-                            keyStatusMsg.type === "success"
-                              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-                              : "border-rose-500/30 bg-rose-500/10 text-rose-300"
-                          }`}
-                        >
-                          {keyStatusMsg.text}
+                    {!isLocalOrigin ? (
+                      <div className="p-3.5 rounded-xl border border-indigo-500/20 bg-indigo-500/5 text-xs font-mono space-y-2">
+                        <div className="text-indigo-300 font-semibold flex items-center gap-1.5 text-[11px]">
+                          <Shield size={13} />
+                          <span>Server-Side Cloud Key Management</span>
                         </div>
-                      )}
-
-                      <button
-                        type="submit"
-                        disabled={savingKey || !apiKeyInput.trim()}
-                        className="w-full py-2 rounded-xl bg-gradient-to-r from-indigo-500 to-cyan-500 text-xs font-mono font-semibold text-white hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-1.5 cursor-pointer"
-                      >
-                        {savingKey ? (
-                          <>
-                            <Loader2 size={13} className="animate-spin" />
-                            <span>Validating with Google...</span>
-                          </>
-                        ) : (
-                          <>
-                            <KeyRound size={13} />
-                            <span>Save &amp; Activate Key</span>
-                          </>
+                        <p className="text-[10px] text-slate-400 leading-relaxed">
+                          In Cloud Companion mode, the Gemini API key is configured strictly on the server host (Render Dashboard → Environment) to protect secret credentials from client exposure.
+                        </p>
+                        {(!apiKeyMeta.hasApiKey || apiKeyMeta.isPlaceholder) && (
+                          <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[10px] text-amber-300 space-y-1">
+                            <div className="font-semibold text-amber-200">Action Required in Render Dashboard:</div>
+                            <div>1. Open Render → Your Web Service (<span className="text-white">myraa-ai-q0h3</span>).</div>
+                            <div>2. Go to the <span className="text-white font-semibold">Environment</span> tab.</div>
+                            <div>3. Set <span className="text-white font-semibold">GEMINI_API_KEY</span> to your real Google Gemini API key (starts with <span className="text-white">AIzaSy</span>).</div>
+                            <div>4. Save Changes to trigger automated redeployment.</div>
+                          </div>
                         )}
-                      </button>
-                    </form>
+                      </div>
+                    ) : (
+                      <>
+                        {/* Input form for local desktop Electron / development */}
+                        <form onSubmit={handleSaveApiKey} className="space-y-2">
+                          <div className="relative">
+                            <input
+                              id="gemini-api-key-input"
+                              name="geminiApiKey"
+                              autoComplete="new-password"
+                              aria-label="Gemini API Key"
+                              type={showApiKey ? "text" : "password"}
+                              value={apiKeyInput}
+                              onChange={(e) => setApiKeyInput(e.target.value)}
+                              placeholder={apiKeyMeta.hasApiKey ? "Replace with new API or Auth key" : "Paste API key (AIza… or AQ.…)"}
+                              className="w-full pl-3 pr-10 py-2 rounded-xl border border-white/10 bg-white/5 text-xs text-white font-mono focus:outline-none focus:border-cyan-400/50 transition"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowApiKey(!showApiKey)}
+                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition cursor-pointer"
+                            >
+                              {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                            </button>
+                          </div>
 
-                    <p className="text-[9px] text-slate-500 font-mono leading-relaxed">
-                      Supports Google Gemini API keys (<span className="text-slate-300 font-bold">AIza...</span>) and AI Studio Auth keys (<span className="text-slate-300 font-bold">AQ....</span>). Stored locally and never exposed.
-                    </p>
+                          {keyStatusMsg && (
+                            <div
+                              className={`p-2.5 rounded-xl border text-[10px] font-mono leading-relaxed ${
+                                keyStatusMsg.type === "success"
+                                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                                  : "border-rose-500/30 bg-rose-500/10 text-rose-300"
+                              }`}
+                            >
+                              {keyStatusMsg.text}
+                            </div>
+                          )}
+
+                          <button
+                            type="submit"
+                            disabled={savingKey || !apiKeyInput.trim()}
+                            className="w-full py-2 rounded-xl bg-gradient-to-r from-indigo-500 to-cyan-500 text-xs font-mono font-semibold text-white hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            {savingKey ? (
+                              <>
+                                <Loader2 size={13} className="animate-spin" />
+                                <span>Validating with Google...</span>
+                              </>
+                            ) : (
+                              <>
+                                <KeyRound size={13} />
+                                <span>Save &amp; Activate Key</span>
+                              </>
+                            )}
+                          </button>
+                        </form>
+
+                        <p className="text-[9px] text-slate-500 font-mono leading-relaxed">
+                          Supports Google Gemini API keys (<span className="text-slate-300 font-bold">AIza...</span>) and AI Studio Auth keys (<span className="text-slate-300 font-bold">AQ....</span>). Stored locally and never exposed.
+                        </p>
+                      </>
+                    )}
                   </div>
 
                   {remoteSession && (

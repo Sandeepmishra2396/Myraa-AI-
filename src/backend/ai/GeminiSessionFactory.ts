@@ -2288,8 +2288,11 @@ export class GeminiSessionFactory {
     } = opts;
 
     const ai = new GoogleGenAI({ apiKey });
-    const liveModel =
+    let liveModel =
       process.env.GEMINI_LIVE_MODEL || "gemini-3.1-flash-live-preview";
+    if (liveModel === "gemini-2.5-flash" || liveModel === "gemini-2.0-flash") {
+      liveModel = "gemini-3.1-flash-live-preview";
+    }
 
     // Fresh memories + project context card every session open
     const memories = await loadMemories();
@@ -2553,22 +2556,27 @@ export class GeminiSessionFactory {
           }
 
           let categorizedError: string | null = null;
+          const sanitizedReason = (rawReason || "").replace(/AIza[0-9A-Za-z_-]{33,}/gi, "AIzaSy...[REDACTED]");
           if (
             /API[_ ]?KEY|PERMISSION_DENIED|UNAUTHENTICATED|ACCESS_TOKEN_TYPE_UNSUPPORTED/i.test(
-              rawReason,
+              sanitizedReason,
             )
           ) {
-            categorizedError = `GEMINI_AUTH_FAILED: Authentication failed. Please verify your Gemini API key in Settings. (${rawReason || "invalid credentials"})`;
+            const isProd = process.env.NODE_ENV === "production";
+            const advice = isProd
+              ? "Please verify that the GEMINI_API_KEY environment variable in your Render Dashboard is set to a valid, active Google Gemini API key from Google AI Studio."
+              : "Please verify your Gemini API key in Settings.";
+            categorizedError = `GEMINI_AUTH_FAILED: Authentication failed. ${advice} (${sanitizedReason || "invalid credentials"})`;
           } else if (
-            /not found|not supported for bidiGenerateContent/i.test(rawReason)
+            /not found|not supported for bidiGenerateContent/i.test(sanitizedReason)
           ) {
-            categorizedError = `GEMINI_MODEL_UNSUPPORTED: Model '${liveModel}' is not supported for Live voice. (${rawReason})`;
+            categorizedError = `GEMINI_MODEL_UNSUPPORTED: Model '${liveModel}' is not supported for Live voice. (${sanitizedReason})`;
           } else if (
-            /quota|RESOURCE_EXHAUSTED|rate limit/i.test(rawReason)
+            /quota|RESOURCE_EXHAUSTED|rate limit/i.test(sanitizedReason)
           ) {
-            categorizedError = `GEMINI_QUOTA_EXCEEDED: Gemini quota or rate limit exceeded. (${rawReason})`;
+            categorizedError = `GEMINI_QUOTA_EXCEEDED: Gemini quota or rate limit exceeded. (${sanitizedReason})`;
           } else if (code && code !== 1000 && !isDurationLimit) {
-            categorizedError = `GEMINI_SESSION_CLOSED: Live session closed (code ${code}${rawReason ? `: ${rawReason}` : ""})`;
+            categorizedError = `GEMINI_SESSION_CLOSED: Live session closed (code ${code}${sanitizedReason ? `: ${sanitizedReason}` : ""})`;
           }
 
           if (categorizedError) {
@@ -2576,7 +2584,7 @@ export class GeminiSessionFactory {
               type: "error",
               error: categorizedError,
               code,
-              reason: rawReason,
+              reason: sanitizedReason,
             });
           } else {
             sendToClient({

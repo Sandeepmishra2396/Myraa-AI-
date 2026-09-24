@@ -2618,6 +2618,7 @@ export function createHttpApp(): express.Application {
       source: meta.source,
       masked: meta.masked,
       prefix: meta.prefix,
+      isPlaceholder: Boolean(meta.isPlaceholder),
     });
   });
 

@@ -28,13 +28,20 @@ export class ConversationManager {
     const keyMeta = resolveApiKeyWithMetadata();
 
     if (!keyMeta.isValid || !keyMeta.key) {
+      const isCloud = process.env.NODE_ENV === "production" || keyMeta.source === "GEMINI_API_KEY";
+      const isPlaceholder = Boolean(keyMeta.isPlaceholder || (keyMeta.masked && keyMeta.masked.endsWith("HERE")));
+      const errMsg = isPlaceholder
+        ? "SERVER_API_KEY_PLACEHOLDER: The server environment variable GEMINI_API_KEY on Render contains an unconfigured template placeholder (ends in HERE). Please update GEMINI_API_KEY in the Render Dashboard with a valid Google Gemini API key from Google AI Studio."
+        : isCloud
+        ? "NO_SERVER_API_KEY: Server environment variable GEMINI_API_KEY is missing or invalid. Please configure your Google Gemini API key in the Render Dashboard."
+        : "NO_API_KEY: Please configure a valid Gemini API key (starts with AIzaSy) in Settings to start talking to MYRAA.";
+
       console.warn(
-        `[Gemini Auth] Connection rejected: No valid API key. Primary source was '${keyMeta.source}' (prefix: ${keyMeta.prefix}, length: ${keyMeta.length}).`,
+        `[Gemini Auth] Connection rejected: ${errMsg} (Source: ${keyMeta.source}, Prefix: ${keyMeta.prefix}, Length: ${keyMeta.length})`,
       );
       this._send(clientWs, {
         type: "error",
-        error:
-          "NO_API_KEY: Please configure a valid Gemini API key (starts with AIzaSy) in Settings to start talking to MYRAA.",
+        error: errMsg,
       });
       clientWs.close();
       return;

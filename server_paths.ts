@@ -122,14 +122,45 @@ function readSecrets(): Secrets {
 }
 
 /**
+ * Strips whitespace and optional surrounding quotes (e.g. "..." or '...') from a key string.
+ */
+export function cleanKey(raw: string | undefined | null): string {
+  if (!raw) return "";
+  let k = raw.trim();
+  if ((k.startsWith('"') && k.endsWith('"')) || (k.startsWith("'") && k.endsWith("'"))) {
+    k = k.slice(1, -1).trim();
+  }
+  return k;
+}
+
+/**
+ * Detects unconfigured template placeholder strings from .env example files.
+ */
+export function isPlaceholderKey(key: string | undefined | null): boolean {
+  if (!key) return false;
+  const k = key.trim().toLowerCase();
+  return (
+    k.includes("your_production") ||
+    k.includes("your_local") ||
+    k.includes("your_gemini") ||
+    k.includes("your_api_key") ||
+    k.includes("key_here") ||
+    k.includes("<your_") ||
+    k.includes("changeme") ||
+    k.includes("placeholder")
+  );
+}
+
+/**
  * Validates whether a candidate string is a plausible Google Gemini API key.
  * Accepts both standard API keys (starts with 'AIza...') and Google AI Studio authorization keys (starts with 'AQ....').
- * Only rejects empty, whitespace, or excessively short inputs.
+ * Only rejects empty, whitespace, excessively short inputs, or unconfigured template placeholders.
  */
 export function isValidGeminiApiKey(key: string | undefined | null): boolean {
   if (!key) return false;
-  const trimmed = key.trim();
-  if (trimmed.length < 15) return false;
+  const cleaned = cleanKey(key);
+  if (cleaned.length < 15) return false;
+  if (isPlaceholderKey(cleaned)) return false;
   return true;
 }
 
@@ -140,19 +171,33 @@ export interface KeyMetadata {
   prefix: string;
   masked: string;
   length: number;
+  isPlaceholder?: boolean;
 }
 
-export function inspectKey(key: string | undefined | null): { isValid: boolean; prefix: string; masked: string; length: number } {
-  if (!key || !key.trim()) {
-    return { isValid: false, prefix: "empty", masked: "none", length: 0 };
+export function inspectKey(key: string | undefined | null): {
+  isValid: boolean;
+  prefix: string;
+  masked: string;
+  length: number;
+  isPlaceholder: boolean;
+} {
+  const k = cleanKey(key);
+  if (!k) {
+    return { isValid: false, prefix: "empty", masked: "none", length: 0, isPlaceholder: false };
   }
-  const k = key.trim();
+  const isPlaceholder = isPlaceholderKey(k);
   const isValid = isValidGeminiApiKey(k);
-  const prefix = k.startsWith("AIza") ? "AIza" : k.startsWith("AQ.") ? "AQ." : k.substring(0, Math.min(4, k.length));
+  const prefix = isPlaceholder
+    ? "placeholder"
+    : k.startsWith("AIza")
+    ? "AIza"
+    : k.startsWith("AQ.")
+    ? "AQ."
+    : k.substring(0, Math.min(4, k.length));
   const masked = k.length > 8
     ? `${k.substring(0, Math.min(6, k.length))}...${k.substring(Math.max(0, k.length - 4))}`
     : "***";
-  return { isValid, prefix, masked, length: k.length };
+  return { isValid, prefix, masked, length: k.length, isPlaceholder };
 }
 
 /**
@@ -168,27 +213,32 @@ export function resolveApiKeyWithMetadata(): KeyMetadata {
   // In production, server environment variables take absolute precedence to ensure
   // secrets are loaded strictly from the server environment, never client/local files.
   if (process.env.NODE_ENV === "production") {
-    const envGemini = process.env.GEMINI_API_KEY?.trim();
+    const envGemini = cleanKey(process.env.GEMINI_API_KEY);
     const envGeminiInfo = inspectKey(envGemini);
     if (envGeminiInfo.isValid) {
       return { key: envGemini, source: "GEMINI_API_KEY", ...envGeminiInfo };
     }
 
-    const envGoogle = process.env.GOOGLE_API_KEY?.trim();
+    const envGoogle = cleanKey(process.env.GOOGLE_API_KEY);
     const envGoogleInfo = inspectKey(envGoogle);
     if (envGoogleInfo.isValid) {
       return { key: envGoogle, source: "GOOGLE_API_KEY", ...envGoogleInfo };
     }
 
-    const envGenAi = process.env.GOOGLE_GENAI_API_KEY?.trim();
+    const envGenAi = cleanKey(process.env.GOOGLE_GENAI_API_KEY);
     const envGenAiInfo = inspectKey(envGenAi);
     if (envGenAiInfo.isValid) {
       return { key: envGenAi, source: "GOOGLE_GENAI_API_KEY", ...envGenAiInfo };
     }
+
+    if (envGemini) return { key: undefined, source: "GEMINI_API_KEY", ...envGeminiInfo };
+    if (envGoogle) return { key: undefined, source: "GOOGLE_API_KEY", ...envGoogleInfo };
+    if (envGenAi) return { key: undefined, source: "GOOGLE_GENAI_API_KEY", ...envGenAiInfo };
+    return { key: undefined, source: "none", isValid: false, prefix: "none", masked: "none", length: 0, isPlaceholder: false };
   }
 
   // 1. Data dir secrets.json
-  const stored = readSecretsFromFile(SECRETS_FILE).geminiApiKey?.trim();
+  const stored = cleanKey(readSecretsFromFile(SECRETS_FILE).geminiApiKey);
   const storedInfo = inspectKey(stored);
   if (storedInfo.isValid) {
     return { key: stored, source: "secrets.json", ...storedInfo };
@@ -197,7 +247,7 @@ export function resolveApiKeyWithMetadata(): KeyMetadata {
   // 2. Roaming AppData secrets.json
   const appDataFile = getAppDataSecretsFile();
   if (appDataFile && appDataFile !== SECRETS_FILE) {
-    const appDataKey = readSecretsFromFile(appDataFile).geminiApiKey?.trim();
+    const appDataKey = cleanKey(readSecretsFromFile(appDataFile).geminiApiKey);
     const appDataInfo = inspectKey(appDataKey);
     if (appDataInfo.isValid) {
       return { key: appDataKey, source: "appdata_secrets.json", ...appDataInfo };
@@ -205,21 +255,21 @@ export function resolveApiKeyWithMetadata(): KeyMetadata {
   }
 
   // 3. GEMINI_API_KEY in environment
-  const envGemini = process.env.GEMINI_API_KEY?.trim();
+  const envGemini = cleanKey(process.env.GEMINI_API_KEY);
   const envGeminiInfo = inspectKey(envGemini);
   if (envGeminiInfo.isValid) {
     return { key: envGemini, source: "GEMINI_API_KEY", ...envGeminiInfo };
   }
 
   // 4. GOOGLE_API_KEY in environment
-  const envGoogle = process.env.GOOGLE_API_KEY?.trim();
+  const envGoogle = cleanKey(process.env.GOOGLE_API_KEY);
   const envGoogleInfo = inspectKey(envGoogle);
   if (envGoogleInfo.isValid) {
     return { key: envGoogle, source: "GOOGLE_API_KEY", ...envGoogleInfo };
   }
 
   // 5. GOOGLE_GENAI_API_KEY in environment
-  const envGenAi = process.env.GOOGLE_GENAI_API_KEY?.trim();
+  const envGenAi = cleanKey(process.env.GOOGLE_GENAI_API_KEY);
   const envGenAiInfo = inspectKey(envGenAi);
   if (envGenAiInfo.isValid) {
     return { key: envGenAi, source: "GOOGLE_GENAI_API_KEY", ...envGenAiInfo };
@@ -230,7 +280,7 @@ export function resolveApiKeyWithMetadata(): KeyMetadata {
   if (envGemini) return { key: undefined, source: "GEMINI_API_KEY", ...envGeminiInfo };
   if (envGoogle) return { key: undefined, source: "GOOGLE_API_KEY", ...envGoogleInfo };
 
-  return { key: undefined, source: "none", isValid: false, prefix: "none", masked: "none", length: 0 };
+  return { key: undefined, source: "none", isValid: false, prefix: "none", masked: "none", length: 0, isPlaceholder: false };
 }
 
 /**
@@ -260,11 +310,12 @@ export function hasGeminiApiKey(): boolean {
 
 /** Persist a user-supplied key to the per-user secrets file (and sync AppData). */
 export function setGeminiApiKey(key: string): void {
-  const trimmed = (key || "").trim();
-  if (!trimmed) throw new Error("API key must not be empty.");
-  if (trimmed.length < 15) throw new Error("API key is too short. Please provide a valid Gemini API key or authorization key.");
+  const cleaned = cleanKey(key);
+  if (!cleaned) throw new Error("API key must not be empty.");
+  if (cleaned.length < 15) throw new Error("API key is too short. Please provide a valid Gemini API key or authorization key.");
+  if (isPlaceholderKey(cleaned)) throw new Error("API key appears to be a template placeholder. Please provide a valid Gemini API key.");
   const current = readSecrets();
-  current.geminiApiKey = trimmed;
+  current.geminiApiKey = cleaned;
   fs.writeFileSync(SECRETS_FILE, JSON.stringify(current, null, 2), "utf-8");
 
   // Keep Roaming AppData synchronized
