@@ -941,30 +941,76 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  // Rotate session tokens with strict replay attack detection (Phase 17)
+  // Rotate session tokens with strict replay attack detection (Phase 17) & durable device token fallback
   app.post("/api/remote/token/refresh", async (req, res) => {
     try {
-      const { refreshToken } = req.body || {};
-      if (!refreshToken) {
-        return res.status(400).json({ error: "Missing required 'refreshToken' parameter." });
+      const { refreshToken, deviceToken } = req.body || {};
+      const forwardedIp = req.headers["x-forwarded-for"];
+      const clientIp = forwardedIp
+        ? String(forwardedIp).split(",")[0].trim()
+        : req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || "unknown";
+
+      if (!refreshToken && !deviceToken) {
+        return res.status(400).json({ error: "Missing required 'refreshToken' or 'deviceToken' parameter." });
       }
+
       const { remoteSecurityCoordinator } = await import("../security/RemoteSecurityCoordinator.ts");
-      const result = await remoteSecurityCoordinator.rotateSessionToken(
-        refreshToken,
-        req.ip || req.socket?.remoteAddress || "unknown"
-      );
-      res.json({
-        success: true,
-        accessToken: result.tokens.accessToken,
-        refreshToken: result.tokens.refreshToken,
-        expiresInSeconds: result.tokens.expiresInSeconds,
-        tokenType: result.tokens.tokenType,
-      });
+
+      // 1. Refresh token flow (Primary rotating path)
+      if (refreshToken) {
+        try {
+          const result = await remoteSecurityCoordinator.rotateSessionToken(refreshToken, clientIp);
+          return res.json({
+            success: true,
+            accessToken: result.tokens.accessToken,
+            refreshToken: result.tokens.refreshToken,
+            expiresInSeconds: result.tokens.expiresInSeconds,
+            tokenType: result.tokens.tokenType,
+          });
+        } catch (err: any) {
+          const msg = sanitizeError(err?.message || err);
+          const isReplay = msg.includes("REPLAY") || msg.includes("TOKEN_FAMILY_REVOKED");
+          // Replay attacks MUST be rejected immediately with 403 and never fall through
+          if (isReplay) {
+            return res.status(403).json({ error: msg });
+          }
+          // If session or family not found (e.g. server restart) but deviceToken is present, fall through
+          if (!deviceToken) {
+            return res.status(401).json({ error: msg });
+          }
+        }
+      }
+
+      // 2. Durable device token flow (Fallback re-establishment or direct device token exchange)
+      if (deviceToken) {
+        const auth = await remoteSecurityCoordinator.authenticateRemoteCredential(
+          deviceToken,
+          clientIp,
+          req.headers["user-agent"]
+        );
+        if (!auth.authenticated || !auth.device) {
+          return res.status(401).json({ error: auth.error || "Device token invalid or revoked." });
+        }
+        const sessionResult = remoteSecurityCoordinator.createDeviceSession(
+          auth.device,
+          clientIp,
+          req.headers["user-agent"]
+        );
+        return res.json({
+          success: true,
+          accessToken: sessionResult.tokens.accessToken,
+          refreshToken: sessionResult.tokens.refreshToken,
+          expiresInSeconds: sessionResult.tokens.expiresInSeconds,
+          tokenType: sessionResult.tokens.tokenType,
+        });
+      }
+
+      return res.status(400).json({ error: "Unable to refresh session." });
     } catch (e: any) {
       const msg = sanitizeError(e?.message || e);
       const isReplay = msg.includes("REPLAY") || msg.includes("TOKEN_FAMILY_REVOKED");
       const status = isReplay ? 403 : 401;
-      res.status(status).json({ error: msg });
+      return res.status(status).json({ error: msg });
     }
   });
 

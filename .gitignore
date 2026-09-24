@@ -45,3 +45,5 @@ Thumbs.db
 !.env.example
 !.env.production.example
 secrets.json
+remote_secret.key
+*.key

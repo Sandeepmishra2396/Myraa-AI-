@@ -26,11 +26,9 @@ import {
   AUTH_LOCKOUT_MS,
 } from "./SecurityTypes.ts";
 import { securityAuditLogger } from "./SecurityAuditLogger.ts";
+import { getPersistentServerSecret } from "../../../server_paths.ts";
 
-const SIGNING_SECRET =
-  process.env.MYRAA_SECURITY_SECRET ||
-  process.env.SORA_REMOTE_SECRET ||
-  crypto.randomBytes(32).toString("hex");
+const SIGNING_SECRET = getPersistentServerSecret();
 
 interface StepUpChallenge {
   sessionId: string;

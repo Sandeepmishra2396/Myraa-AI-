@@ -52,8 +52,29 @@ export class RemoteSessionManager {
       return null;
     }
 
-    const device = await remoteStore.getDevice(verification.deviceId);
-    if (!device || device.revoked) {
+    let device = await remoteStore.getDevice(verification.deviceId);
+    if (!device) {
+      // If the token was authentically signed by this server's persistent HMAC secret,
+      // recover the device registration so ephemeral server restarts don't lock out legitimate devices.
+      const existingDevices = await remoteStore.listDevices();
+      const isSoleDevice = existingDevices.length === 0;
+      const restoredDevice: PairedDevice = {
+        id: verification.deviceId,
+        name: userAgent?.includes("Android") ? "Android Companion" : "Paired Companion",
+        deviceType: userAgent?.includes("Android") ? "mobile" : "browser",
+        role: isSoleDevice ? "admin" : "standard",
+        tokenHash: pairingManager.hashToken(cleanToken),
+        pairedAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+        lastIp: ipAddress,
+        userAgent,
+        revoked: false,
+      };
+      await remoteStore.saveDevice(restoredDevice);
+      device = restoredDevice;
+    }
+
+    if (device.revoked) {
       return null;
     }
 

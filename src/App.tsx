@@ -34,6 +34,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { MyraaSettings, DEFAULT_SETTINGS, loadSettings, saveSettings } from "./lib/settingsStore";
 import { MyraaWakeWordDetector } from "./lib/wakeWord";
 import { CloudPairingModal, StoredRemoteSession, STORAGE_KEY } from "./components/remote/CloudPairingModal";
+import { authenticatedRemoteFetch } from "./lib/remoteAuth";
 
 export default function App() {
   const [state, setState] = useState<LiveState>("disconnected");
@@ -438,13 +439,15 @@ export default function App() {
   // Synchronize remoteSession role with live server authoritative state (GET /api/remote/session)
   useEffect(() => {
     if (!remoteSession?.token && !remoteSession?.accessToken) return;
-    const bearer = remoteSession.token || remoteSession.accessToken;
     let cancelled = false;
 
-    fetch("/api/remote/session", {
-      headers: { Authorization: `Bearer ${bearer}` },
-    })
-      .then(async (res) => {
+    authenticatedRemoteFetch(
+      "/api/remote/session",
+      { method: "GET" },
+      remoteSession,
+      (updated) => setRemoteSession(updated),
+    )
+      .then(async ({ response: res }) => {
         if (res.ok && !cancelled) {
           const data = await res.json();
           const fetchedRole = data.device?.role || data.role;

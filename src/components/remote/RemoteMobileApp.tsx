@@ -22,6 +22,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { MyraAudioSession, LiveState } from "../../lib/audio";
+import { authenticatedRemoteFetch } from "../../lib/remoteAuth";
 
 interface StoredRemoteSession {
   deviceId: string;
@@ -29,6 +30,8 @@ interface StoredRemoteSession {
   deviceName: string;
   role: "read_only" | "standard" | "admin";
   pairedAt: number;
+  accessToken?: string;
+  refreshToken?: string;
 }
 
 interface ChatMessage {
@@ -116,12 +119,15 @@ export const RemoteMobileApp: React.FC = () => {
 
   // Synchronize local session role with server authoritative role (e.g. admin promotion)
   useEffect(() => {
-    if (!session?.token) return;
+    if (!session?.token && !session?.accessToken) return;
     const syncSessionRole = async () => {
       try {
-        const res = await fetch("/api/remote/session", {
-          headers: { Authorization: `Bearer ${session.token}` },
-        });
+        const { response: res } = await authenticatedRemoteFetch(
+          "/api/remote/session",
+          { method: "GET" },
+          session as any,
+          (updated) => setSession(updated),
+        );
         if (res.ok) {
           const data = await res.json();
           if (data.device?.role && data.device.role !== session.role) {
@@ -135,21 +141,24 @@ export const RemoteMobileApp: React.FC = () => {
       }
     };
     syncSessionRole();
-  }, [session?.token]);
+  }, [session?.token, session?.accessToken]);
 
   const handleGeneratePairCode = async () => {
+    if (!session) return;
     setIsGeneratingPairCode(true);
     setPairCodeError(null);
     setCopiedCode(false);
     setShowPairModal(true);
     try {
-      const res = await fetch("/api/remote/pair-code", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session?.token}`,
+      const { response: res } = await authenticatedRemoteFetch(
+        "/api/remote/pair-code",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
         },
-      });
+        session as any,
+        (updated) => setSession(updated),
+      );
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || "Failed to generate pairing PIN.");
@@ -354,6 +363,8 @@ export const RemoteMobileApp: React.FC = () => {
         deviceName: data.device.name,
         role: data.device.role,
         pairedAt: Date.now(),
+        accessToken: data.accessToken,
+        refreshToken: data.refreshToken,
       };
 
       localStorage.setItem(STORAGE_KEY, JSON.stringify(newSession));

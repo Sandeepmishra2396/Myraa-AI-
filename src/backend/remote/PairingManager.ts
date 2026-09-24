@@ -25,9 +25,10 @@ import {
   DEFAULT_DEVICE_ROLE,
 } from "./RemoteTypes.ts";
 import { remoteStore } from "./RemoteStore.ts";
+import { getPersistentServerSecret } from "../../../server_paths.ts";
 
-/** Server-side HMAC signing secret (generated per server lifecycle or persistent) */
-const SERVER_HMAC_SECRET = process.env.SORA_REMOTE_SECRET || crypto.randomBytes(32).toString("hex");
+/** Server-side HMAC signing secret (persistent across restarts and deployments) */
+const SERVER_HMAC_SECRET = getPersistentServerSecret();
 
 export class PairingManager {
   private _activeSession: PairingSession | null = null;

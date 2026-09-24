@@ -15,6 +15,7 @@
 
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 
 /** Writable per-user data directory. Falls back to cwd in development. */
 export const DATA_DIR: string = process.env.SORA_DATA_DIR || process.cwd();
@@ -28,6 +29,55 @@ try {
 /** Absolute path to a file inside the writable data directory. */
 export function dataFile(name: string): string {
   return path.join(DATA_DIR, name);
+}
+
+let _cachedServerSecret: string | null = null;
+
+/**
+ * Resolves a persistent server-side HMAC signing secret.
+ * Used for signing and verifying device tokens and session tokens across server restarts.
+ * Priority:
+ *   1. SORA_REMOTE_SECRET in environment
+ *   2. MYRAA_SECURITY_SECRET in environment
+ *   3. Deterministic secret derived from RENDER_SERVICE_ID (stable across deployments on Render)
+ *   4. Persisted key in DATA_DIR/remote_secret.key
+ *   5. Cryptographically secure 256-bit random key persisted to DATA_DIR/remote_secret.key
+ */
+export function getPersistentServerSecret(): string {
+  if (process.env.SORA_REMOTE_SECRET?.trim()) {
+    return process.env.SORA_REMOTE_SECRET.trim();
+  }
+  if (process.env.MYRAA_SECURITY_SECRET?.trim()) {
+    return process.env.MYRAA_SECURITY_SECRET.trim();
+  }
+  if (process.env.RENDER_SERVICE_ID?.trim()) {
+    return crypto.createHash("sha256").update(`myraa-render-secret:${process.env.RENDER_SERVICE_ID.trim()}`).digest("hex");
+  }
+  if (_cachedServerSecret) {
+    return _cachedServerSecret;
+  }
+
+  const keyFile = dataFile("remote_secret.key");
+  try {
+    if (fs.existsSync(keyFile)) {
+      const stored = fs.readFileSync(keyFile, "utf-8").trim();
+      if (stored.length >= 32) {
+        _cachedServerSecret = stored;
+        return stored;
+      }
+    }
+  } catch {
+    /* fallback */
+  }
+
+  const generated = crypto.randomBytes(32).toString("hex");
+  try {
+    fs.writeFileSync(keyFile, generated, "utf-8");
+  } catch {
+    /* best-effort write */
+  }
+  _cachedServerSecret = generated;
+  return generated;
 }
 
 // ---------------------------------------------------------------------------

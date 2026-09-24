@@ -21,6 +21,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { MyraaSettings, DEFAULT_SETTINGS, loadSettings, saveSettings } from "../lib/settingsStore";
 import { StoredRemoteSession, STORAGE_KEY } from "./remote/CloudPairingModal";
+import { authenticatedRemoteFetch } from "../lib/remoteAuth";
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -110,14 +111,16 @@ export function SettingsPanel({
       setLiveRole(null);
       return;
     }
-    const token = remoteSession.token || remoteSession.accessToken;
     let cancelled = false;
 
     const syncSession = async () => {
       try {
-        const res = await fetch("/api/remote/session", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const { response: res } = await authenticatedRemoteFetch(
+          "/api/remote/session",
+          { method: "GET" },
+          remoteSession,
+          (updated) => onSessionUpdate?.(updated),
+        );
         if (res.ok && !cancelled) {
           const data = await res.json();
           const fetchedRole = data.device?.role || data.role;
@@ -165,14 +168,17 @@ export function SettingsPanel({
     setPairCodeError(null);
     setCopiedCode(false);
     try {
-      const token = remoteSession.token || remoteSession.accessToken;
-      const res = await fetch("/api/remote/pair-code", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      const { response: res } = await authenticatedRemoteFetch(
+        "/api/remote/pair-code",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
         },
-      });
+        remoteSession,
+        (updated) => {
+          onSessionUpdate?.(updated);
+        },
+      );
       if (res.ok) {
         const data = await res.json();
         setGeneratedPairCode(data);
