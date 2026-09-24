@@ -701,14 +701,32 @@ export default function App() {
               callback({ error: err?.message || `Desktop execution failed for ${name}` });
             });
           } else if (isRemoteHost) {
-            // Running in the Render-hosted web client — cannot reach localhost:8765 from here.
-            // The Windows Desktop Companion app (paired device) must be running and connected
-            // for desktop tools to work. Route via server when companion is paired.
-            console.warn(`[App] Desktop tool '${name}' requested but browser is on remote host — desktop agent unreachable via browser. Requires Desktop Companion app.`);
-            callback({
-              ok: false,
-              error: `Desktop tool '${name}' is not available in the web browser. Please open the MYRAA Desktop Companion app on your Windows PC to enable desktop control features.`,
-            });
+            // Running in the Render-hosted web client — localhost:8765 is unreachable
+            // due to Chrome's Private Network Access policy.
+            //
+            // DEDUP: Track which desktop tools have already returned UNAVAILABLE so we
+            // do not feed Gemini a new error on every retry — that causes a 20+ call loop.
+            // On the first call: send a strongly-worded stop-retry instruction.
+            // On subsequent calls (within 60s): return a silent minimal error.
+            const failKey = `__myraaDesktopUnavailable_${name}`;
+            const alreadyNotified = !!(window as any)[failKey];
+            if (!alreadyNotified) {
+              (window as any)[failKey] = true;
+              setTimeout(() => { delete (window as any)[failKey]; }, 60000);
+              console.warn(`[App] Desktop tool '${name}' requires Desktop Companion — first call, notifying Gemini to stop retrying.`);
+              callback({
+                ok: false,
+                error: `PERMANENT_UNAVAILABLE: The MYRAA Desktop Companion is not running on the user's Windows PC. `
+                  + `You MUST NOT call '${name}' or any other desktop tool (readScreen, takeScreenshot, openInVsCode, openFileManager, etc.) again this session. `
+                  + `Instead, tell the user clearly: "To control your Windows PC I need the Desktop Companion app running. `
+                  + `Please open Chrome on your PC and go to ${typeof window !== "undefined" ? window.location.hostname : "the MYRAA URL"}, `
+                  + `or run the Desktop Companion app on your PC." Then wait for the user to respond.`,
+              });
+            } else {
+              // Gemini is retrying despite the stop instruction — absorb silently to break the loop.
+              console.warn(`[App] Desktop tool '${name}' called again on remote host — absorbing duplicate (loop prevention).`);
+              callback({ ok: false, error: `Desktop Companion not available. Do not retry.` });
+            }
           } else if (isDesktopEnv) {
             fetch("http://127.0.0.1:8765/execute", {
               method: "POST",
