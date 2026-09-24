@@ -289,6 +289,28 @@ export async function callDesktopAgent(
   tool: string,
   args: Record<string, unknown>,
 ): Promise<{ ok: boolean; result?: unknown; error?: string }> {
+  const isCloud = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER);
+  if (isCloud) {
+    // Cloud Render environment: localhost desktop agent does NOT exist on the container.
+    // Cloud Render MUST NEVER directly access localhost.
+    // Secure path: route exclusively to the authenticated Windows desktop companion.
+    try {
+      const { remoteSessionManager } = await import("../remote/RemoteSessionManager.ts");
+      const desktopCompanion = remoteSessionManager.getActiveDesktopCompanion();
+      if (!desktopCompanion) {
+        const errorMsg = "Windows desktop companion is not currently connected. Please ensure MYRAA is running on your PC.";
+        _logError(`AGENT_OFFLINE ${tool}: ${errorMsg}`);
+        _logJson("error", "desktop_companion_offline", { tool, error: errorMsg });
+        return { ok: false, error: errorMsg };
+      }
+      return await remoteSessionManager.executeOnDesktopCompanion(tool, args);
+    } catch (routeErr: any) {
+      const errorMsg = `Desktop companion routing failed: ${routeErr?.message || routeErr}`;
+      _logError(`AGENT_ERROR ${tool}: ${errorMsg}`);
+      return { ok: false, error: errorMsg };
+    }
+  }
+
   if (!desktopAgentVerified) {
     await ensureDesktopAgent();
   }
@@ -329,9 +351,27 @@ export async function callDesktopAgent(
     return result;
   } catch (err: any) {
     desktopAgentVerified = false; // mark stale so next call retries the spawn
+
+    // If local agent is unreachable on this server (e.g. Render Cloud), check for a connected Windows desktop companion
+    try {
+      const { remoteSessionManager } = await import("../remote/RemoteSessionManager.ts");
+      const desktopCompanion = remoteSessionManager.getActiveDesktopCompanion();
+      if (desktopCompanion) {
+        console.log(
+          `[TaskManager] Local agent unreachable on server. Forwarding desktop tool '${tool}' to connected Windows desktop companion (${desktopCompanion.session.deviceName})...`
+        );
+        return await remoteSessionManager.executeOnDesktopCompanion(tool, args);
+      }
+    } catch (_compErr) {
+      /* ignore and return formatted error */
+    }
+
+    const isCloud = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER);
     const msg =
       err?.name === "AbortError"
         ? "Desktop agent timed out or aborted by emergency stop."
+        : isCloud
+        ? "Windows desktop companion is not currently connected. Please ensure MYRAA is running on your PC."
         : "Desktop agent is not running. Start it with: uvicorn desktop_agent.main:app --port 8765";
     _logError(`AGENT_UNREACHABLE ${tool}: ${msg}`);
     _logJson("error", "tool_unreachable", { tool, error: msg });

@@ -109,6 +109,20 @@ export function MemoryDashboard({
     },
   };
 
+  const DEFAULT_CATEGORY_CONFIG = {
+    label: "General Memory",
+    icon: Brain,
+    color: "text-indigo-400 border-indigo-500/25",
+    bg: "bg-indigo-500/5 hover:bg-indigo-500/10",
+  };
+
+  const normalizeCategory = (cat?: string): MemoryCategory => {
+    if (!cat) return "fact";
+    const lower = String(cat).toLowerCase().trim();
+    if (lower === "user_preference" || lower === "preferences") return "preference";
+    if (lower in categoryConfig) return lower as MemoryCategory;
+    return "fact";
+  };
 
   const getThemeBadgeGlow = () => {
     switch (themeColor) {
@@ -124,9 +138,13 @@ export function MemoryDashboard({
     }
   };
 
+  const safeMemories = Array.isArray(memories)
+    ? memories.filter((m) => m && typeof m === "object" && typeof m.text === "string")
+    : [];
+
   const filteredMemories = activeTab === "all" 
-    ? memories 
-    : memories.filter(m => m.category === activeTab);
+    ? safeMemories 
+    : safeMemories.filter(m => normalizeCategory(m.category) === activeTab);
 
   const handleManualAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -334,13 +352,14 @@ export function MemoryDashboard({
                     <p className="text-xs max-w-xs mt-1.5 leading-relaxed font-mono">
                       {activeTab === "all" 
                         ? "Start talking aloud with Myraa! Her background consolidator analyzes transcript slices and builds a life context naturally."
-                        : `No persistent recollections saved in Category "${categoryConfig[activeTab as MemoryCategory]?.label}". Add one or speak with Myraa.`}
+                        : `No persistent recollections saved in Category "${categoryConfig[activeTab as MemoryCategory]?.label || "Selected Category"}". Add one or speak with Myraa.`}
                     </p>
                   </motion.div>
                 ) : (
                   filteredMemories.map((m) => {
-                    const cfg = categoryConfig[m.category];
-                    const Icon = cfg.icon;
+                    const normalized = normalizeCategory(m.category);
+                    const cfg = categoryConfig[normalized] || DEFAULT_CATEGORY_CONFIG;
+                    const Icon = cfg.icon || Brain;
 
                     return (
                       <motion.div
@@ -348,10 +367,10 @@ export function MemoryDashboard({
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.95 }}
-                        className={`flex items-start justify-between gap-4 p-4 rounded-xl border border-white/5 backdrop-blur-md bg-white/[0.02] ${cfg.bg} transition-colors group relative`}
+                        className={`flex items-start justify-between gap-4 p-4 rounded-xl border border-white/5 backdrop-blur-md bg-white/[0.02] ${cfg.bg || ""} transition-colors group relative`}
                       >
                         <div className="flex gap-3.5 overflow-hidden">
-                          <div className={`p-2 rounded-lg border mt-0.5 shrink-0 bg-black/40 ${cfg.color}`}>
+                          <div className={`p-2 rounded-lg border mt-0.5 shrink-0 bg-black/40 ${cfg.color || ""}`}>
                             <Icon size={14} />
                           </div>
                           <div className="overflow-hidden">

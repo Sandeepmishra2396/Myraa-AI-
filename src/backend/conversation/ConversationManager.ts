@@ -15,6 +15,7 @@
 
 import { resolveApiKeyWithMetadata } from "../../../server_paths.ts";
 import { GeminiSessionFactory } from "../ai/GeminiSessionFactory.ts";
+import { remoteSessionManager } from "../remote/RemoteSessionManager.ts";
 
 export class ConversationManager {
   private factory = new GeminiSessionFactory();
@@ -133,16 +134,23 @@ export class ConversationManager {
           } else if (typeof session?.sendRealtimeInput === "function") {
             session.sendRealtimeInput({ text: String(msg.text) });
           }
+        } else if (msg.type === "desktop_tool_response") {
+          const clientSessionId = (clientWs as any)?.remoteSession?.sessionId || (clientWs as any)?.remoteSessionId;
+          remoteSessionManager.handleDesktopToolResponse(msg, clientSessionId);
         } else if (msg.type === "toolResponse") {
-          session?.sendToolResponse?.({
-            functionResponses: [
-              {
-                name: msg.name,
-                response: { output: msg.output },
-                id: msg.id,
-              },
-            ],
-          });
+          const clientSessionId = (clientWs as any)?.remoteSession?.sessionId || (clientWs as any)?.remoteSessionId;
+          const handled = remoteSessionManager.handleDesktopToolResponse(msg, clientSessionId);
+          if (!handled) {
+            session?.sendToolResponse?.({
+              functionResponses: [
+                {
+                  name: msg.name,
+                  response: { output: msg.output },
+                  id: msg.id,
+                },
+              ],
+            });
+          }
         }
       } catch (e) {
         console.error("Error editing/forwarding client frame message:", e);

@@ -1,4 +1,4 @@
-﻿"""
+"""
 MYRAA Desktop Control Agent — FastAPI entrypoint.
 
 Single dispatch endpoint POST /execute { tool, args } -> { result } | { error }.
@@ -60,19 +60,57 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Same-origin Node bridge is the only caller; restrict to localhost origins.
+import re
+
+# Strict explicit origin allowlist — NEVER wildcard '*' and NEVER loose wildcard regexes
+ALLOWED_ORIGINS = {
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8765",
+    "http://127.0.0.1:8765",
+    "https://myraa-ai-q0h3.onrender.com",
+}
+
+extra_env_origins = os.environ.get("MYRAA_ALLOWED_ORIGINS") or os.environ.get("SORA_ALLOWED_ORIGINS")
+if extra_env_origins:
+    for o in extra_env_origins.split(","):
+        stripped = o.strip()
+        if stripped:
+            ALLOWED_ORIGINS.add(stripped)
+
+LOCAL_ORIGIN_REGEX = re.compile(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$")
+
+
+def is_allowed_origin(origin: str | None) -> bool:
+    if not origin:
+        return False
+    if origin in ALLOWED_ORIGINS:
+        return True
+    return bool(LOCAL_ORIGIN_REGEX.match(origin))
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:8765",
-        "http://127.0.0.1:8765",
-    ],
+    allow_origins=sorted(ALLOWED_ORIGINS),
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With"],
 )
+
+
+@app.middleware("http")
+async def add_private_network_access_header(request, call_next):
+    response = await call_next(request)
+    if request.headers.get("access-control-request-private-network") == "true":
+        origin = request.headers.get("origin")
+        if is_allowed_origin(origin):
+            response.headers["Access-Control-Allow-Private-Network"] = "true"
+        else:
+            log.warning("Blocked PNA preflight header for unauthorized origin: %s", origin)
+    return response
 
 
 class ExecuteRequest(BaseModel):

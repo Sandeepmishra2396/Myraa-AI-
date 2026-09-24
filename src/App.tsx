@@ -31,6 +31,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Memory, MemoryCategory } from "./lib/memoryTypes";
 import { MemoryDashboard } from "./components/MemoryDashboard";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MyraaSettings, DEFAULT_SETTINGS, loadSettings, saveSettings } from "./lib/settingsStore";
 import { MyraaWakeWordDetector } from "./lib/wakeWord";
 import { CloudPairingModal, StoredRemoteSession, STORAGE_KEY } from "./components/remote/CloudPairingModal";
@@ -614,7 +615,33 @@ export default function App() {
             callback({ error: `Unsupported color '${colorName}'. Supported themes are: ${validColors.join(", ")}` });
           }
         } else {
-          callback({ error: `Tool ${name} is not implemented.` });
+          // If running in Electron companion or on desktop, dispatch to local agent
+          const isDesktopEnv = typeof window !== "undefined" && !/android|iphone|ipad|mobile/i.test(navigator.userAgent);
+          if ((window as any).myraa?.executeDesktopTool) {
+            (window as any).myraa.executeDesktopTool(name, args).then(callback).catch((err: any) => {
+              callback({ error: err?.message || `Desktop execution failed for ${name}` });
+            });
+          } else if (isDesktopEnv) {
+            fetch("http://127.0.0.1:8765/execute", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ tool: name, args }),
+            })
+              .then(async (res) => {
+                if (!res.ok) {
+                  const txt = await res.text().catch(() => "");
+                  callback({ ok: false, error: `Desktop agent error ${res.status}: ${txt}` });
+                } else {
+                  const json = await res.json();
+                  callback(json);
+                }
+              })
+              .catch(() => {
+                callback({ error: `Desktop agent is not reachable on your PC. Please run: uvicorn desktop_agent.main:app --port 8765` });
+              });
+          } else {
+            callback({ error: `Tool ${name} is not implemented.` });
+          }
         }
       },
       onError: (err) => {
@@ -924,59 +951,6 @@ export default function App() {
 
         {/* Space Spacer to avoid head area */}
         <div className="h-10 sm:h-20" />
-
-        {/* Cinematic dialogue layer overlay - Smooth, delicate text transitions with soft focus blur */}
-        <div id="cinematic-subtitles" className="w-full max-w-3xl flex flex-col items-center justify-center text-center px-6 relative z-25 mt-auto mb-6 pointer-events-none min-h-[6rem]">
-          <AnimatePresence mode="wait">
-            {(() => {
-              const textType = modelCaption 
-                ? "model" 
-                : userCaption 
-                  ? "user" 
-                  : "status";
-
-              const activeText = modelCaption 
-                ? modelCaption 
-                : userCaption 
-                  ? userCaption 
-                  : state === "listening" 
-                    ? "I am listening. Speak freely..." 
-                    : state === "connecting" 
-                      ? "Materializing presence links..." 
-                      : "Connect memory core to awaken my voice.";
-
-              return (
-                <motion.div
-                  key={textType}
-                  initial={{ opacity: 0, y: 15, filter: "blur(6px)" }}
-                  animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-                  exit={{ opacity: 0, y: -15, filter: "blur(6px)" }}
-                  transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-                  className="flex flex-col items-center justify-center w-full"
-                >
-                  {textType === "model" && (
-                    <h2 className="text-xl sm:text-2xl font-light text-white leading-relaxed tracking-wide font-display max-w-2xl drop-shadow-[0_2px_20px_rgba(0,0,0,0.9)]">
-                      {activeText}
-                    </h2>
-                  )}
-
-                  {textType === "user" && (
-                    <p className="text-cyan-300 font-mono text-sm sm:text-base tracking-wider flex items-center justify-center gap-2 drop-shadow-[0_1px_10px_rgba(0,0,0,0.85)] font-medium">
-                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                      <span>&ldquo;{activeText}&rdquo;</span>
-                    </p>
-                  )}
-
-                  {textType === "status" && (
-                    <span className="text-xs sm:text-sm uppercase tracking-[0.3em] font-medium text-white/30 font-sans tracking-widest drop-shadow-[0_1px_4px_rgba(0, 0, 0, 0.5)]">
-                      {activeText}
-                    </span>
-                  )}
-                </motion.div>
-              );
-            })()}
-          </AnimatePresence>
-        </div>
 
         {/* Interactive suggestions prompt guide */}
         <AnimatePresence>
@@ -1310,26 +1284,30 @@ export default function App() {
       </AnimatePresence>
 
       {/* Recollections sliding core panel */}
-      <MemoryDashboard
-        isOpen={showMemoryDashboard}
-        onClose={() => setShowMemoryDashboard(false)}
-        memories={memories}
-        onAddMemory={handleAddManualMemory}
-        onDeleteMemory={handleDeleteMemory}
-        themeColor={themeColor}
-      />
+      <ErrorBoundary fallbackTitle="Recollections Database Recovered">
+        <MemoryDashboard
+          isOpen={showMemoryDashboard}
+          onClose={() => setShowMemoryDashboard(false)}
+          memories={memories}
+          onAddMemory={handleAddManualMemory}
+          onDeleteMemory={handleDeleteMemory}
+          themeColor={themeColor}
+        />
+      </ErrorBoundary>
 
       {/* V2: Settings sliding core panel */}
-      <SettingsPanel
-        isOpen={showSettings}
-        onClose={() => setShowSettings(false)}
-        settings={settings}
-        onChange={handleSettingsChange}
-        themeColor={themeColor}
-        remoteSession={remoteSession}
-        onUnpair={handleUnpairDevice}
-        onSessionUpdate={(updated) => setRemoteSession(updated)}
-      />
+      <ErrorBoundary fallbackTitle="Settings Panel Recovered">
+        <SettingsPanel
+          isOpen={showSettings}
+          onClose={() => setShowSettings(false)}
+          settings={settings}
+          onChange={handleSettingsChange}
+          themeColor={themeColor}
+          remoteSession={remoteSession}
+          onUnpair={handleUnpairDevice}
+          onSessionUpdate={(updated) => setRemoteSession(updated)}
+        />
+      </ErrorBoundary>
 
       {/* Cloud Remote Companion Authentication Modal for non-localhost hosts */}
       {isRemoteHost && (

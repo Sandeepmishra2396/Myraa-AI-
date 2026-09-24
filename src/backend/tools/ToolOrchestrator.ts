@@ -343,7 +343,19 @@ export class ToolOrchestrator {
       }
       // If this is a remote companion session and the tool maps to a mobile capability, forward to client
       if (!secContext.isLocal) {
-        const mobileMapped = [
+        const appName = String(fc.args?.app_name || fc.args?.appName || fc.args?.name || "").toLowerCase().trim();
+        const isDesktopAppTarget =
+          fc.name === "openApplication" &&
+          ([
+            "vscode", "vs code", "code", "visual studio code",
+            "cursor", "cursor editor", "cursor ai",
+            "notepad", "wordpad", "calc", "calculator",
+            "file explorer", "explorer", "file manager", "files",
+            "task manager", "taskmgr", "command prompt", "cmd", "powershell",
+            "terminal", "paint", "snipping tool", "chrome", "edge"
+          ].includes(appName) || /code|explorer|terminal|notepad|studio|taskmgr|cmd/i.test(appName));
+
+        const mobileMapped = !isDesktopAppTarget && [
           "openApplication",
           "openWebsite",
           "setVolume",

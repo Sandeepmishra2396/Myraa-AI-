@@ -82,6 +82,8 @@ export class MyraAudioSession {
   // Buffering / Playback details
   private nextStartTime = 0;
   private activeSources: AudioBufferSourceNode[] = [];
+  private consecutiveSpeechFrames = 0;
+  private audioChunksCount = 0;
   
   // State Callbacks
   private onStateChange: (state: LiveState) => void;
@@ -221,6 +223,7 @@ export class MyraAudioSession {
         return;
       }
 
+      this._cleanupAudio();
       this.inputAudioCtx = new AudioContextClass({ sampleRate: 16000 });
       this.outputAudioCtx = new AudioContextClass({ sampleRate: 24000 });
 
@@ -258,6 +261,30 @@ export class MyraAudioSession {
       this.micWorkletNode.port.onmessage = (e: MessageEvent) => {
         if (this.currentState === "disconnected" || this.currentState === "connecting") return;
         const channelData: Float32Array = e.data.channelData;
+
+        // Local VAD energy check for immediate client-side barge-in
+        if (this.activeSources.length > 0 || this.currentState === "speaking") {
+          let sumSquares = 0;
+          for (let i = 0; i < channelData.length; i++) {
+            sumSquares += channelData[i] * channelData[i];
+          }
+          const rms = Math.sqrt(sumSquares / channelData.length);
+          if (rms > 0.045) {
+            this.consecutiveSpeechFrames++;
+            if (this.consecutiveSpeechFrames >= 2) {
+              console.log(
+                `[Myraa Audio] Local speech barge-in detected (RMS: ${rms.toFixed(3)}). Flushing active playback queue immediately.`
+              );
+              this.handleInterruption();
+              this.consecutiveSpeechFrames = 0;
+            }
+          } else {
+            this.consecutiveSpeechFrames = 0;
+          }
+        } else {
+          this.consecutiveSpeechFrames = 0;
+        }
+
         const pcmBuffer = floatTo16BitPCM(channelData);
         const base64 = base64ArrayBuffer(pcmBuffer);
 
@@ -505,7 +532,9 @@ export class MyraAudioSession {
 
   // Interruption triggers: stops all active audio players immediately
   private handleInterruption() {
-    console.log("[Audio] Interruption signal received; flushing play logs.");
+    if (this.activeSources.length > 0) {
+      console.log(`[Myraa Audio] Interruption signal received; flushing ${this.activeSources.length} active playback sources.`);
+    }
     
     // Stop all playing nodes
     this.activeSources.forEach((source) => {
@@ -517,12 +546,13 @@ export class MyraAudioSession {
     });
     this.activeSources = [];
     this.nextStartTime = 0;
+    this.consecutiveSpeechFrames = 0;
     
     // Set state back to user listening
     this.setState("listening");
   }
 
-  // Direct raw PCM chunk scheduled playback at 24kHz
+  // Direct raw PCM chunk scheduled playback at 24kHz with runaway queue bounding
   private playAudioPCMChunk(base64Audio: string) {
     if (!this.outputAudioCtx || !this.outputGainNode) return;
 
@@ -547,14 +577,36 @@ export class MyraAudioSession {
       source.connect(this.outputGainNode);
 
       const currentTime = this.outputAudioCtx.currentTime;
-      
-      // Gapless scheduler sync
+      const queueAhead = this.nextStartTime - currentTime;
+
+      // Gapless scheduler sync & runaway queue prevention
       if (this.activeSources.length === 0) {
         // Initial burst: 25ms lead time so subsequent packets queue seamlessly
         this.nextStartTime = currentTime + 0.025;
       } else if (this.nextStartTime < currentTime) {
         // Network catch-up: resume immediately at currentTime with zero inserted silence gap
         this.nextStartTime = currentTime;
+      } else if (queueAhead > 1.5) {
+        // Audio queue has built up more than 1.5s ahead of real-time hardware clock.
+        // Resync nextStartTime to prevent 40-70s runaway sequential delay.
+        console.warn(
+          `[Myraa Audio] Audio queue drift exceeded 1.5s (${queueAhead.toFixed(2)}s ahead, ${this.activeSources.length} active nodes). Clamping playback cursor.`
+        );
+        if (queueAhead > 3.5) {
+          // Severe backlog: stop lingering unstarted nodes to instantly recover
+          this.activeSources.forEach((s) => {
+            try { s.stop(); } catch {}
+          });
+          this.activeSources = [];
+        }
+        this.nextStartTime = currentTime + 0.03;
+      }
+
+      this.audioChunksCount++;
+      if (this.audioChunksCount === 1 || this.audioChunksCount % 50 === 0) {
+        console.log(
+          `[Myraa Audio Latency Diag] Chunk #${this.audioChunksCount}: Active nodes: ${this.activeSources.length}, Queue ahead: ${Math.max(0, this.nextStartTime - currentTime).toFixed(2)}s, Hardware clock: ${currentTime.toFixed(2)}s`
+        );
       }
 
       source.start(this.nextStartTime);
@@ -720,6 +772,7 @@ export class MyraAudioSession {
         setTimeout(() => {
           if (this.activeSources.length === 0 && this.currentState === "speaking") {
             this.setState("listening");
+            this.nextStartTime = 0;
           }
         }, 100);
       }
@@ -727,6 +780,10 @@ export class MyraAudioSession {
       // Handle live captions transcription
       if (data.type === "transcription") {
         this.onTranscription(data.role, data.text);
+        if (data.role === "user" && this.activeSources.length > 0) {
+          console.log("[Myraa Audio] User speech recognized by model; clearing lingering playback sources.");
+          this.handleInterruption();
+        }
       }
 
       // Handle memory synchronization
@@ -754,6 +811,24 @@ export class MyraAudioSession {
               id: callId,
               name: name,
               output: result
+            }));
+          }
+        });
+      }
+
+      // Handle Cross-Device Desktop Tool Call (dispatched from remote/mobile companion)
+      if (data.type === "desktop_tool_call") {
+        const { callId, name, args } = data;
+        console.log(`[Myraa Audio] Received desktop tool call via bridge: ${name}`, args);
+        this.onToolCall(name, args, (result) => {
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({
+              type: "desktop_tool_response",
+              id: callId,
+              name: name,
+              ok: result?.ok !== false && !result?.error,
+              result: result?.result ?? result,
+              error: result?.error,
             }));
           }
         });

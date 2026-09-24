@@ -1,4 +1,4 @@
-﻿import React, { useMemo, useState, useRef, useEffect } from "react";
+import React, { useMemo, useState, useRef, useEffect } from "react";
 import { MyraaEmotion } from "./MyraaCoreVisualizer";
 import { Avatar3DRenderer } from "./avatar3d/Avatar3DRenderer";
 import { VRMCapabilities } from "./avatar3d/VRMLoader";
@@ -177,8 +177,12 @@ export const AvatarRenderer: React.FC<AvatarRendererProps> = ({
         videoEl.currentTime = 0;
         const playPromise = videoEl.play();
         if (playPromise !== undefined) {
-          playPromise.catch((error) => {
-            console.warn("[AvatarRenderer] Autoplay retry muted:", error);
+          playPromise.catch((error: any) => {
+            // AbortError occurs naturally when pause() interrupts play() during fast state switches
+            if (error?.name === "AbortError") {
+              return;
+            }
+            console.warn("[AvatarRenderer] Video play failed:", error);
           });
         }
       } catch (err) {}
@@ -187,7 +191,9 @@ export const AvatarRenderer: React.FC<AvatarRendererProps> = ({
     const pauseVideo = (videoEl: HTMLVideoElement | null) => {
       if (!videoEl) return;
       try {
-        videoEl.pause();
+        if (!videoEl.paused) {
+          videoEl.pause();
+        }
       } catch (err) {}
     };
 

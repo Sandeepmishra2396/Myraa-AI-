@@ -23,6 +23,7 @@ import { extractAndApply } from "../memory/MemoryExtractor.ts";
 import { memoryStore } from "../memory/MemoryStore.ts";
 import { buildSystemInstructions, buildCompleteSystemInstructions } from "../projects/ContextManager.ts";
 import { ToolOrchestrator } from "../tools/ToolOrchestrator.ts";
+import type { SecurityContext } from "../security/index.ts";
 
 
 // Logger placeholders — injected at startup via initGeminiLoggers()
@@ -2447,6 +2448,17 @@ export class GeminiSessionFactory {
 
           // Function Calls
           if (message.toolCall?.functionCalls) {
+            const remoteDev = (clientWs as any)?.remoteDevice;
+            const callerSecContext: SecurityContext | undefined = remoteDev
+              ? {
+                  identityId: remoteDev.id,
+                  role: remoteDev.role || "standard",
+                  deviceId: remoteDev.id,
+                  ipAddress: remoteDev.lastIp || "127.0.0.1",
+                  isLocal: false,
+                }
+              : undefined;
+
             for (const fc of message.toolCall.functionCalls) {
               this.orchestrator
                 .dispatch(
@@ -2458,6 +2470,7 @@ export class GeminiSessionFactory {
                   getSession(),
                   sendToClient,
                   apiKey,
+                  callerSecContext,
                 )
                 .catch((err) =>
                   console.error(`[ToolOrchestrator] Unhandled error:`, err),

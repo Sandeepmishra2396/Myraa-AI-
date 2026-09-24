@@ -94,6 +94,10 @@ def _resolve_app(key: str) -> Dict[str, str]:
         "calc": "calculator",
         "settings app": "settings",
         "file explorer": "file explorer",
+        "file manager": "file explorer",
+        "filemanager": "file explorer",
+        "explorer": "file explorer",
+        "files": "file explorer",
         "windows explorer": "file explorer",
     }
     if norm in aliases and aliases[norm] in APP_COMMANDS:

@@ -22,6 +22,9 @@ import {
 import { remoteStore } from "./RemoteStore.ts";
 import { pairingManager } from "./PairingManager.ts";
 import { MODIFYING_TOOLS } from "../planner/PlannerTypes.ts";
+import { emergencyStopCoordinator } from "./EmergencyStopCoordinator.ts";
+import { securityPolicyEngine } from "../security/SecurityPolicyEngine.ts";
+import { securityAuditLogger } from "../security/SecurityAuditLogger.ts";
 
 export interface ActiveRemoteClient {
   session: RemoteSession;
@@ -30,6 +33,13 @@ export interface ActiveRemoteClient {
 
 export class RemoteSessionManager {
   private _activeClients = new Map<string, ActiveRemoteClient>(); // sessionId -> client
+  private _pendingDesktopCalls = new Map<string, {
+    targetSessionId: string;
+    targetDeviceId: string;
+    tool: string;
+    resolve: (res: { ok: boolean; result?: unknown; error?: string }) => void;
+    timer: NodeJS.Timeout;
+  }>();
 
   // ---------------------------------------------------------------------------
   // Authentication & Validation
@@ -195,6 +205,208 @@ export class RemoteSessionManager {
       }
     }
     return sent;
+  }
+
+  /**
+   * Find an active connected Windows / Desktop companion client.
+   * Matches Windows OS user-agent, desktop device types, or non-mobile companions.
+   */
+  getActiveDesktopCompanion(): ActiveRemoteClient | null {
+    for (const client of this._activeClients.values()) {
+      if (client.ws && client.ws.readyState === 1) {
+        const ua = (client.session.userAgent || "").toLowerCase();
+        const name = (client.session.deviceName || "").toLowerCase();
+        const isMobile = ua.includes("android") || ua.includes("iphone") || ua.includes("ipad") || ua.includes("mobile");
+        const isDesktop =
+          ua.includes("windows") ||
+          ua.includes("win64") ||
+          ua.includes("win32") ||
+          ua.includes("electron") ||
+          ua.includes("macintosh") ||
+          ua.includes("x11") ||
+          name.includes("pc") ||
+          name.includes("desktop") ||
+          name.includes("windows");
+        if (isDesktop && !isMobile) {
+          return client;
+        }
+      }
+    }
+    // Fallback: any active client that is not explicitly mobile
+    for (const client of this._activeClients.values()) {
+      if (client.ws && client.ws.readyState === 1) {
+        const ua = (client.session.userAgent || "").toLowerCase();
+        const isMobile = ua.includes("android") || ua.includes("iphone") || ua.includes("ipad") || ua.includes("mobile");
+        if (!isMobile) {
+          return client;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Forward a desktop tool execution request to an authenticated Windows desktop companion.
+   * Waits for the desktop companion to execute locally and return the result over WebSocket.
+   */
+  async executeOnDesktopCompanion(
+    tool: string,
+    args: Record<string, unknown>,
+    timeoutMs = 15000
+  ): Promise<{ ok: boolean; result?: unknown; error?: string }> {
+    // 1. Emergency Stop Check
+    if (emergencyStopCoordinator.isActive()) {
+      return {
+        ok: false,
+        error: "EMERGENCY_STOP_ACTIVE: Desktop RPC blocked — killswitch is active.",
+      };
+    }
+
+    // 2. Security Lockdown Check
+    if (securityPolicyEngine.getMode() === "LOCKDOWN") {
+      return {
+        ok: false,
+        error: "SECURITY_LOCKDOWN: Desktop RPC suspended due to active security lockdown.",
+      };
+    }
+
+    const desktopClient = this.getActiveDesktopCompanion();
+    if (!desktopClient) {
+      return {
+        ok: false,
+        error: "Windows desktop companion is not currently connected. Please ensure MYRAA is running on your PC.",
+      };
+    }
+
+    // 3. Verify target device registration & non-revocation
+    const device = await remoteStore.getDevice(desktopClient.session.deviceId);
+    if (!device || device.revoked) {
+      return {
+        ok: false,
+        error: "DEVICE_REVOKED: Target desktop companion is revoked or no longer authorized.",
+      };
+    }
+
+    const callId = `dtc_${crypto.randomUUID()}`;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this._pendingDesktopCalls.delete(callId);
+        resolve({
+          ok: false,
+          error: `Desktop tool '${tool}' timed out after ${Math.round(timeoutMs / 1000)}s on Windows companion.`,
+        });
+      }, timeoutMs);
+
+      this._pendingDesktopCalls.set(callId, {
+        targetSessionId: desktopClient.session.sessionId,
+        targetDeviceId: desktopClient.session.deviceId,
+        tool,
+        resolve,
+        timer,
+      });
+
+      // Audit dispatch
+      try {
+        securityAuditLogger.logEvent({
+          eventType: "TOOL_ALLOW",
+          actor: {
+            identityId: desktopClient.session.deviceId,
+            role: desktopClient.session.role,
+            sessionId: desktopClient.session.sessionId,
+            deviceId: desktopClient.session.deviceId,
+            ipAddress: desktopClient.session.ipAddress,
+            isLocal: false,
+          },
+          target: {
+            toolName: tool,
+            resource: `desktop_agent:${tool}`,
+          },
+          decision: "ALLOW",
+          reason: `Cross-device desktop RPC call '${tool}' dispatched to Windows companion.`,
+          riskLevel: "LOW",
+          metadata: {
+            callId,
+            tool,
+            deviceName: desktopClient.session.deviceName,
+          },
+        });
+      } catch {}
+
+      try {
+        desktopClient.ws.send(
+          JSON.stringify({
+            type: "desktop_tool_call",
+            callId,
+            name: tool,
+            args,
+          })
+        );
+      } catch (err: any) {
+        clearTimeout(timer);
+        this._pendingDesktopCalls.delete(callId);
+        resolve({
+          ok: false,
+          error: `Failed to transmit command to Windows desktop companion: ${err?.message || err}`,
+        });
+      }
+    });
+  }
+
+  /**
+   * Process incoming desktop tool execution responses from a desktop companion client.
+   */
+  handleDesktopToolResponse(msg: any, fromSessionId?: string): boolean {
+    const callId = msg.id || msg.callId;
+    if (!callId) return false;
+    const pending = this._pendingDesktopCalls.get(callId);
+    if (pending) {
+      // Validate response arrives from the designated recipient session
+      if (fromSessionId && pending.targetSessionId && fromSessionId !== pending.targetSessionId) {
+        console.warn(
+          `[RemoteSessionManager] Rejecting desktop tool response: sessionId mismatch (${fromSessionId} !== ${pending.targetSessionId})`
+        );
+        return false;
+      }
+
+      clearTimeout(pending.timer);
+      this._pendingDesktopCalls.delete(callId);
+
+      const isOk = msg.ok !== false && !msg.error;
+      pending.resolve({
+        ok: isOk,
+        result: msg.result ?? msg.output,
+        error: msg.error,
+      });
+
+      try {
+        securityAuditLogger.logEvent({
+          eventType: isOk ? "TOOL_ALLOW" : "TOOL_BLOCKED",
+          actor: {
+            identityId: pending.targetDeviceId,
+            role: "standard",
+            sessionId: pending.targetSessionId,
+            deviceId: pending.targetDeviceId,
+            ipAddress: "127.0.0.1",
+            isLocal: false,
+          },
+          target: {
+            toolName: pending.tool,
+            resource: `desktop_agent:${pending.tool}`,
+          },
+          decision: isOk ? "ALLOW" : "BLOCK",
+          reason: isOk ? "Desktop RPC completed successfully." : `Desktop RPC returned error: ${msg.error}`,
+          riskLevel: "LOW",
+          metadata: {
+            callId,
+            tool: pending.tool,
+            ok: isOk,
+          },
+        });
+      } catch {}
+
+      return true;
+    }
+    return false;
   }
 
   /**

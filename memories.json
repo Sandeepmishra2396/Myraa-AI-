@@ -105,9 +105,10 @@
   },
   {
     "id": "hwpnzpc33",
+    "category": "fact",
     "text": "Phase 26 regression test memory item",
     "createdAt": "2026-09-23T11:04:25.603Z",
-    "updatedAt": "2026-09-23T11:06:55.676Z",
+    "updatedAt": "2026-09-24T16:09:07.990Z",
     "key": "test_mem_phase26",
     "importance": "medium",
     "confidence": "medium",
@@ -115,8 +116,8 @@
     "status": "active",
     "deviceId": "device_android_test_1",
     "deviceType": "android",
-    "version": 4,
-    "lastSyncedAt": "2026-09-23T11:06:55.676Z"
+    "version": 6,
+    "lastSyncedAt": "2026-09-24T16:09:07.990Z"
   },
   {
     "id": "mnhcpg2lf",
@@ -152,7 +153,7 @@
     "category": "project",
     "text": "MYRAA utilizes a decoupled agent-planner architecture with zero-trust tool firewalls.",
     "createdAt": "2026-09-23T13:03:36.394Z",
-    "updatedAt": "2026-09-23T13:42:31.368Z",
+    "updatedAt": "2026-09-24T16:08:30.459Z",
     "key": "project_architecture",
     "importance": "high",
     "confidence": "medium",
@@ -160,15 +161,15 @@
     "status": "active",
     "deviceId": "desktop_master_console",
     "deviceType": "desktop",
-    "version": 5,
-    "lastSyncedAt": "2026-09-23T13:42:31.368Z"
+    "version": 7,
+    "lastSyncedAt": "2026-09-24T16:08:30.459Z"
   },
   {
     "id": "201fmx85d",
     "category": "preference",
     "text": "User plans to visit Tokyo in October 2026.",
     "createdAt": "2026-09-23T13:03:39.119Z",
-    "updatedAt": "2026-09-23T13:42:33.967Z",
+    "updatedAt": "2026-09-24T16:08:33.654Z",
     "key": "vacation_plan",
     "importance": "medium",
     "confidence": "medium",
@@ -176,15 +177,15 @@
     "status": "active",
     "deviceId": "desktop_master_console",
     "deviceType": "desktop",
-    "version": 5,
-    "lastSyncedAt": "2026-09-23T13:42:33.967Z"
+    "version": 7,
+    "lastSyncedAt": "2026-09-24T16:08:33.654Z"
   },
   {
     "id": "dkyaauaah",
     "category": "project",
     "text": "Launch rescheduled to Nov 15 after QA review.",
     "createdAt": "2026-09-23T13:03:39.134Z",
-    "updatedAt": "2026-09-23T13:42:33.976Z",
+    "updatedAt": "2026-09-24T16:08:33.667Z",
     "key": "project_deadline",
     "importance": "medium",
     "confidence": "medium",
@@ -192,7 +193,7 @@
     "status": "needs_revalidation",
     "deviceId": "android_pixel_e2e_device",
     "deviceType": "android",
-    "version": 6,
+    "version": 8,
     "lastSyncedAt": "2026-09-23T13:03:39.136Z"
   },
   {
@@ -245,7 +246,7 @@
   },
   {
     "id": "wrdgnu6pb",
-    "category": "user_preference",
+    "category": "preference",
     "text": "Prefers concise production logs and dark theme.",
     "createdAt": "2026-09-23T13:35:56.888Z",
     "updatedAt": "2026-09-23T13:43:02.373Z",
