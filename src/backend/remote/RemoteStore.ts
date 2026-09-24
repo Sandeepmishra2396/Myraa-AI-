@@ -85,7 +85,69 @@ export class RemoteStore {
   // ── Devices ──────────────────────────────────────────────────────────────
   async listDevices(): Promise<PairedDevice[]> {
     const arr = await safeReadFile<PairedDevice[]>(DEVICES_FILE, []);
-    return Array.isArray(arr) ? arr : [];
+    const devices = Array.isArray(arr) ? arr : [];
+
+    // Auto-recover sole device if exactly 1 device exists with no admin and active
+    if (devices.length === 1 && devices[0].role !== "admin" && !devices[0].revoked) {
+      await this.recoverSoleAdminDevice();
+      const updated = await safeReadFile<PairedDevice[]>(DEVICES_FILE, []);
+      return Array.isArray(updated) ? updated : devices;
+    }
+
+    return devices;
+  }
+
+  /**
+   * Deterministic, idempotent, server-authoritative recovery for the initial device:
+   * If exactly one device exists, no device holds the 'admin' role, and that sole device
+   * is active (not revoked), promote it to 'admin'.
+   * Safe across restarts and audited in the security audit ledger.
+   */
+  async recoverSoleAdminDevice(): Promise<{ recovered: boolean; deviceId?: string }> {
+    const arr = await safeReadFile<PairedDevice[]>(DEVICES_FILE, []);
+    const devices = Array.isArray(arr) ? arr : [];
+    if (devices.length !== 1) {
+      return { recovered: false };
+    }
+
+    const soleDevice = devices[0];
+    if (soleDevice.role === "admin") {
+      return { recovered: false };
+    }
+    if (soleDevice.revoked) {
+      return { recovered: false };
+    }
+
+    soleDevice.role = "admin";
+    soleDevice.lastSeenAt = new Date().toISOString();
+    await safeWriteFile(DEVICES_FILE, [soleDevice]);
+
+    try {
+      const { securityAuditLogger } = await import("../security/SecurityAuditLogger.ts");
+      securityAuditLogger.logEvent({
+        eventType: "ADMIN_RECOVERY",
+        actor: {
+          identityId: soleDevice.id,
+          role: "admin",
+          ipAddress: soleDevice.lastIp || "127.0.0.1",
+          deviceId: soleDevice.id,
+        },
+        target: {
+          resource: `device:${soleDevice.id}`,
+        },
+        decision: "ALLOW",
+        reason: "Sole active device promoted to admin",
+        metadata: {
+          deviceName: soleDevice.name,
+          deviceId: soleDevice.id,
+        },
+      });
+    } catch {
+      /* audit logging best-effort */
+    }
+
+    console.log(`[RemoteStore] Sole device '${soleDevice.name}' (ID: ${soleDevice.id}) safely promoted to admin.`);
+    return { recovered: true, deviceId: soleDevice.id };
   }
 
   async getDevice(id: string): Promise<PairedDevice | undefined> {
@@ -94,7 +156,8 @@ export class RemoteStore {
   }
 
   async saveDevice(device: PairedDevice): Promise<void> {
-    const devices = await this.listDevices();
+    const raw = await safeReadFile<PairedDevice[]>(DEVICES_FILE, []);
+    const devices = Array.isArray(raw) ? raw : [];
     const index = devices.findIndex((d) => d.id === device.id);
     const now = new Date().toISOString();
     const entry: PairedDevice = { ...device, lastSeenAt: now };
@@ -110,7 +173,8 @@ export class RemoteStore {
   }
 
   async deleteDevice(id: string): Promise<boolean> {
-    const devices = await this.listDevices();
+    const raw = await safeReadFile<PairedDevice[]>(DEVICES_FILE, []);
+    const devices = Array.isArray(raw) ? raw : [];
     const filtered = devices.filter((d) => d.id !== id);
     if (filtered.length !== devices.length) {
       await safeWriteFile(DEVICES_FILE, filtered);

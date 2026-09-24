@@ -87,7 +87,8 @@ export type AuditEventType =
   | "EMERGENCY_STOP_TRIGGERED"
   | "LOST_DEVICE_ENABLED"
   | "LOST_DEVICE_RECOVERED"
-  | "LOGOUT_ALL_DEVICES";
+  | "LOGOUT_ALL_DEVICES"
+  | "ADMIN_RECOVERY";
 
 export type MonitoringEventType =
   | "LOGIN_FAILED"

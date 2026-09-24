@@ -255,6 +255,11 @@ async function startServer() {
     emergencyStopCoordinator.init().catch((e) =>
       console.warn(`[EmergencyStop] Init error: ${e?.message || e}`),
     );
+    import("./src/backend/remote/RemoteStore.ts").then(({ remoteStore }) => {
+      remoteStore.recoverSoleAdminDevice().catch((e) =>
+        console.warn(`[RemoteStore] Sole admin recovery error: ${e?.message || e}`),
+      );
+    });
   });
 
   let isShuttingDown = false;

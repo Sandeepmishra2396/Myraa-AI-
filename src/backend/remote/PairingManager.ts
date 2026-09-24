@@ -171,6 +171,9 @@ export class PairingManager {
     }
 
     const codeInfo = this.generatePairCode(clientIp);
+    if (this._activeSession) {
+      this._activeSession.isBootstrap = true;
+    }
     return { ...codeInfo, isBootstrap: true };
   }
 
@@ -192,6 +195,8 @@ export class PairingManager {
   /**
    * Pair a remote device using the ephemeral PIN.
    * Enforces brute-force lockout, single-use PIN, and issues signed device token.
+   * If redeeming an initial bootstrap code or this is the very first registered device,
+   * it is granted 'admin' role. Subsequent devices default to 'standard'.
    */
   async pairDevice(opts: {
     code: string;
@@ -224,6 +229,16 @@ export class PairingManager {
       throw new Error("INVALID_PAIR_CODE: Incorrect pairing PIN entered.");
     }
 
+    // Determine role: initial bootstrap device or zero-device first claim MUST be admin
+    const existingDevices = await remoteStore.listDevices();
+    const isFirstDevice = existingDevices.length === 0;
+    const isBootstrapClaim = Boolean(this._activeSession.isBootstrap);
+
+    let assignedRole: DeviceRole = opts.role || DEFAULT_DEVICE_ROLE;
+    if (isFirstDevice || isBootstrapClaim) {
+      assignedRole = "admin";
+    }
+
     // Success: consume the code immediately (single-use)
     const deviceId = crypto.randomUUID();
     this._activeSession.consumed = true;
@@ -237,7 +252,7 @@ export class PairingManager {
       id: deviceId,
       name: opts.deviceName?.trim() || `Remote Device ${deviceId.slice(0, 6)}`,
       deviceType: opts.deviceType || "mobile",
-      role: opts.role || DEFAULT_DEVICE_ROLE,
+      role: assignedRole,
       tokenHash,
       pairedAt: new Date().toISOString(),
       lastSeenAt: new Date().toISOString(),

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MYRAA — RemoteTypes (Phase 7)
  *
  * Core type definitions for Remote Voice Companion:
@@ -35,6 +35,7 @@ export interface PairingSession {
   consumed: boolean;
   consumedByDeviceId?: string;
   createdByIp: string;
+  isBootstrap?: boolean;
 }
 
 export interface PairingAttemptRecord {

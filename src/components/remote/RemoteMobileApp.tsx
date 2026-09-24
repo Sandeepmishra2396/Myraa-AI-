@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Mic,
   MicOff,
@@ -17,6 +17,9 @@ import {
   KeyRound,
   X,
   Laptop,
+  Copy,
+  Check,
+  Loader2,
 } from "lucide-react";
 import { MyraAudioSession, LiveState } from "../../lib/audio";
 
@@ -99,6 +102,74 @@ export const RemoteMobileApp: React.FC = () => {
     category: string;
     isShielded?: boolean;
   } | null>(null);
+
+  // Authenticated Admin "Pair Another Device" State
+  const [showPairModal, setShowPairModal] = useState<boolean>(false);
+  const [isGeneratingPairCode, setIsGeneratingPairCode] = useState<boolean>(false);
+  const [generatedPairCode, setGeneratedPairCode] = useState<{
+    code: string;
+    expiresAt: string;
+    ttlSeconds: number;
+  } | null>(null);
+  const [pairCodeError, setPairCodeError] = useState<string | null>(null);
+  const [copiedCode, setCopiedCode] = useState<boolean>(false);
+
+  // Synchronize local session role with server authoritative role (e.g. admin promotion)
+  useEffect(() => {
+    if (!session?.token) return;
+    const syncSessionRole = async () => {
+      try {
+        const res = await fetch("/api/remote/session", {
+          headers: { Authorization: `Bearer ${session.token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.device?.role && data.device.role !== session.role) {
+            const updated = { ...session, role: data.device.role };
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+            setSession(updated);
+          }
+        }
+      } catch {
+        /* best effort */
+      }
+    };
+    syncSessionRole();
+  }, [session?.token]);
+
+  const handleGeneratePairCode = async () => {
+    setIsGeneratingPairCode(true);
+    setPairCodeError(null);
+    setCopiedCode(false);
+    setShowPairModal(true);
+    try {
+      const res = await fetch("/api/remote/pair-code", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session?.token}`,
+        },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to generate pairing PIN.");
+      }
+      setGeneratedPairCode(data);
+    } catch (err: any) {
+      setPairCodeError(err.message || "Failed to generate pairing PIN.");
+    } finally {
+      setIsGeneratingPairCode(false);
+    }
+  };
+
+  const handleCopyPairCode = () => {
+    if (!generatedPairCode?.code) return;
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      navigator.clipboard.writeText(generatedPairCode.code);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
+    }
+  };
 
   // Fetch Laptop Foreground Window Status
   useEffect(() => {
@@ -558,6 +629,19 @@ export const RemoteMobileApp: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Authenticated Admin "Pair Another Device" Action */}
+          {session.role === "admin" && (
+            <button
+              onClick={handleGeneratePairCode}
+              className="px-2.5 py-1.5 rounded-xl bg-indigo-600/30 hover:bg-indigo-600/50 border border-indigo-500/40 text-indigo-200 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Pair Another Companion Device"
+            >
+              <KeyRound className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="hidden sm:inline">Pair Device</span>
+              <span className="sm:hidden text-[11px]">Pair</span>
+            </button>
+          )}
+
           {/* Notifications Drawer Toggle */}
           <button
             onClick={() => setShowNotifications(!showNotifications)}
@@ -899,6 +983,86 @@ export const RemoteMobileApp: React.FC = () => {
               >
                 {emergencyActionLoading ? "Halting..." : "Yes, STOP ALL"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Pair Another Device Modal */}
+      {showPairModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+          <div className="relative w-full max-w-sm rounded-3xl border border-white/10 bg-slate-900 p-6 shadow-2xl">
+            <button
+              onClick={() => setShowPairModal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
+              title="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex flex-col items-center text-center mb-5">
+              <div className="w-12 h-12 rounded-2xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center mb-3 text-indigo-400">
+                <Laptop className="w-6 h-6" />
+              </div>
+              <h2 className="text-base font-bold text-white tracking-tight">Pair Companion Device</h2>
+              <p className="text-xs text-slate-400 mt-1">
+                Enter this single-use 6-character PIN on your PC or secondary device to pair.
+              </p>
+            </div>
+
+            {pairCodeError && (
+              <div className="mb-4 rounded-xl border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-300">
+                {pairCodeError}
+              </div>
+            )}
+
+            {isGeneratingPairCode ? (
+              <div className="py-8 flex flex-col items-center justify-center gap-2 text-indigo-300 text-xs">
+                <Loader2 className="w-6 h-6 animate-spin text-indigo-400" />
+                <span>Generating secure pairing code...</span>
+              </div>
+            ) : generatedPairCode ? (
+              <div className="space-y-4">
+                <div className="p-4 rounded-2xl bg-slate-950/80 border border-indigo-500/30 flex flex-col items-center justify-center">
+                  <span className="text-[10px] uppercase font-mono tracking-widest text-slate-400 mb-1">
+                    Pairing PIN (Valid 5 Mins)
+                  </span>
+                  <span className="text-3xl font-mono font-bold tracking-[0.25em] text-white">
+                    {generatedPairCode.code}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleCopyPairCode}
+                    className="flex-1 py-2.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                  >
+                    {copiedCode ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Copied to Clipboard!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Copy PIN</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={handleGeneratePairCode}
+                    className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
+                    title="Generate New Code"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="mt-5 pt-3 border-t border-slate-800/80 text-[11px] text-slate-500 text-center">
+              Single-use PIN. Automatically invalidates once redeemed.
             </div>
           </div>
         </div>

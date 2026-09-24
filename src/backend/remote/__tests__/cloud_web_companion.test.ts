@@ -19,9 +19,7 @@ import { pairingManager } from "../PairingManager.ts";
 import { remoteStore } from "../RemoteStore.ts";
 import { remoteSecurityCoordinator } from "../../security/RemoteSecurityCoordinator.ts";
 import { LIVE_TOOLS } from "../../ai/GeminiSessionFactory.ts";
-import express from "express";
-import http from "http";
-import { createHttpGateway } from "../../gateway/HttpGateway.ts";
+import { createHttpApp } from "../../gateway/HttpGateway.ts";
 
 describe("Cloud Web Companion Mode & Security Refinements", () => {
   let createdDeviceIds: string[] = [];
@@ -166,7 +164,7 @@ describe("Cloud Web Companion Mode & Security Refinements", () => {
         code,
         deviceName: "Cloud Web Companion",
         ipAddress: "127.0.0.1",
-        deviceType: "web",
+        deviceType: "browser",
       });
       createdDeviceIds.push(paired.device.id);
 
@@ -182,7 +180,7 @@ describe("Cloud Web Companion Mode & Security Refinements", () => {
         code,
         deviceName: "Cloud Web Companion",
         ipAddress: "127.0.0.1",
-        deviceType: "web",
+        deviceType: "browser",
       });
       createdDeviceIds.push(paired.device.id);
 
