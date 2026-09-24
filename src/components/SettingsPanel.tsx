@@ -19,13 +19,8 @@ import {
   Shield,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import {
-  MyraaSettings,
-  DEFAULT_SETTINGS,
-  loadSettings,
-  saveSettings,
-} from "../lib/settingsStore";
-import type { StoredRemoteSession } from "./remote/CloudPairingModal";
+import { MyraaSettings, DEFAULT_SETTINGS, loadSettings, saveSettings } from "../lib/settingsStore";
+import { StoredRemoteSession, STORAGE_KEY } from "./remote/CloudPairingModal";
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -37,6 +32,7 @@ interface SettingsPanelProps {
   themeColor: string;
   remoteSession?: StoredRemoteSession | null;
   onUnpair?: () => void;
+  onSessionUpdate?: (session: StoredRemoteSession) => void;
 }
 
 type SettingsTab = "general" | "voice" | "system" | "about";
@@ -85,6 +81,7 @@ export function SettingsPanel({
   themeColor,
   remoteSession,
   onUnpair,
+  onSessionUpdate,
 }: SettingsPanelProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
@@ -94,6 +91,102 @@ export function SettingsPanel({
     cpu?: string;
     ram?: string;
   }>({ online: false });
+
+  // Cloud Companion Live Role & Secondary Pairing State
+  const [liveRole, setLiveRole] = useState<string | null>(remoteSession?.role || null);
+  const [isGeneratingPairCode, setIsGeneratingPairCode] = useState(false);
+  const [generatedPairCode, setGeneratedPairCode] = useState<{
+    code: string;
+    expiresAt: string;
+    ttlSeconds: number;
+  } | null>(null);
+  const [countdownSeconds, setCountdownSeconds] = useState(300);
+  const [pairCodeError, setPairCodeError] = useState<string | null>(null);
+  const [copiedCode, setCopiedCode] = useState(false);
+
+  // Synchronize remote session role with live server endpoint (GET /api/remote/session)
+  useEffect(() => {
+    if (!remoteSession?.token && !remoteSession?.accessToken) {
+      setLiveRole(null);
+      return;
+    }
+    const token = remoteSession.token || remoteSession.accessToken;
+    let cancelled = false;
+
+    const syncSession = async () => {
+      try {
+        const res = await fetch("/api/remote/session", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          const fetchedRole = data.device?.role || data.role;
+          if (fetchedRole) {
+            setLiveRole(fetchedRole);
+            if (fetchedRole !== remoteSession.role) {
+              const updated: StoredRemoteSession = { ...remoteSession, role: fetchedRole };
+              try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+              } catch {}
+              onSessionUpdate?.(updated);
+            }
+          }
+        }
+      } catch {
+        /* best effort */
+      }
+    };
+
+    syncSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [remoteSession?.token, remoteSession?.accessToken, isOpen]);
+
+  // Countdown timer for active pairing PIN
+  useEffect(() => {
+    if (!generatedPairCode) return;
+    const interval = setInterval(() => {
+      setCountdownSeconds((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          setGeneratedPairCode(null);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [generatedPairCode]);
+
+  const handleGeneratePairCode = async () => {
+    if (!remoteSession) return;
+    setIsGeneratingPairCode(true);
+    setPairCodeError(null);
+    setCopiedCode(false);
+    try {
+      const token = remoteSession.token || remoteSession.accessToken;
+      const res = await fetch("/api/remote/pair-code", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setGeneratedPairCode(data);
+        setCountdownSeconds(data.ttlSeconds || 300);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setPairCodeError(err.error || `Failed to generate pairing PIN (HTTP ${res.status})`);
+      }
+    } catch (e: any) {
+      setPairCodeError(e.message || "Network error generating pairing PIN.");
+    } finally {
+      setIsGeneratingPairCode(false);
+    }
+  };
 
   const [apiKeyMeta, setApiKeyMeta] = useState<{
     hasApiKey: boolean;
@@ -470,13 +563,88 @@ export function SettingsPanel({
                         </div>
                         <div className="flex justify-between">
                           <span>ROLE</span>
-                          <span className="text-indigo-300 uppercase">{remoteSession.role}</span>
+                          <span className="text-indigo-300 uppercase font-bold">{liveRole || remoteSession.role}</span>
                         </div>
                         <div className="flex justify-between">
                           <span>DEVICE ID</span>
                           <span className="text-slate-300 font-mono">{remoteSession.deviceId.slice(0, 10)}...</span>
                         </div>
                       </div>
+
+                      {/* Admin-Only Secondary Device Pairing Button */}
+                      {(liveRole || remoteSession.role) === "admin" && (
+                        <div className="pt-2 border-t border-indigo-500/20 space-y-2.5">
+                          <button
+                            onClick={handleGeneratePairCode}
+                            disabled={isGeneratingPairCode}
+                            type="button"
+                            className="w-full py-2 px-3 rounded-lg border border-cyan-500/40 bg-cyan-500/15 hover:bg-cyan-500/25 text-xs font-mono text-cyan-200 font-semibold flex items-center justify-center gap-2 transition cursor-pointer shadow-sm shadow-cyan-500/10"
+                          >
+                            {isGeneratingPairCode ? (
+                              <>
+                                <Loader2 size={13} className="animate-spin text-cyan-400" />
+                                <span>Generating Pairing PIN...</span>
+                              </>
+                            ) : (
+                              <>
+                                <KeyRound size={13} className="text-cyan-400" />
+                                <span>Pair Another Device</span>
+                              </>
+                            )}
+                          </button>
+
+                          {/* Active Generated Pairing PIN Display */}
+                          {generatedPairCode && (
+                            <div className="p-3 rounded-xl border border-cyan-500/30 bg-cyan-950/40 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-mono font-bold text-cyan-300 uppercase tracking-wider">
+                                  Secondary Device PIN
+                                </span>
+                                <span className="text-[10px] font-mono text-cyan-400 font-semibold bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
+                                  {Math.floor(countdownSeconds / 60)}:{(countdownSeconds % 60).toString().padStart(2, "0")}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-center py-2 bg-black/40 rounded-lg border border-cyan-500/20">
+                                <span className="text-2xl font-mono font-bold tracking-[0.3em] text-white select-all">
+                                  {generatedPairCode.code}
+                                </span>
+                              </div>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard?.writeText(generatedPairCode.code);
+                                    setCopiedCode(true);
+                                    setTimeout(() => setCopiedCode(false), 2000);
+                                  }}
+                                  className="flex-1 py-1.5 px-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20 text-[11px] font-mono text-cyan-300 flex items-center justify-center gap-1.5 transition cursor-pointer"
+                                >
+                                  {copiedCode ? <Check size={12} className="text-emerald-400" /> : <Sparkles size={12} />}
+                                  <span>{copiedCode ? "Copied!" : "Copy PIN"}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setGeneratedPairCode(null)}
+                                  className="py-1.5 px-3 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-[11px] font-mono text-slate-400 hover:text-white transition cursor-pointer"
+                                >
+                                  Dismiss
+                                </button>
+                              </div>
+                              <p className="text-[9px] font-mono text-slate-400 text-center leading-tight">
+                                Enter this 6-character PIN on your PC to pair as a standard companion device. Single-use PIN.
+                              </p>
+                            </div>
+                          )}
+
+                          {pairCodeError && (
+                            <div className="p-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 text-[10px] font-mono text-rose-300 flex items-center gap-1.5">
+                              <AlertTriangle size={12} className="shrink-0 text-rose-400" />
+                              <span>{pairCodeError}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {onUnpair && (
                         <button
                           onClick={onUnpair}

@@ -526,6 +526,217 @@ describe("First-Device Admin Recovery & Multi-Device Pairing", () => {
     }
   });
 
+  // ── 21. Live GET /api/remote/session & POST /api/remote/pair-code HTTP Tests ──────
+  describe("Admin Live Session Role & Secondary PIN Generation HTTP Endpoints", () => {
+    let server: any;
+    let baseUrl: string;
+
+    beforeEach(async () => {
+      const { createHttpApp } = await import("../../gateway/HttpGateway.ts");
+      const http = await import("http");
+      const app = createHttpApp();
+      server = http.createServer(app);
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const port = (server.address() as any).port;
+      baseUrl = `http://127.0.0.1:${port}`;
+    });
+
+    afterEach(async () => {
+      if (server) {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    });
+
+    it("21. GET /api/remote/session returns role admin for authenticated admin device", async () => {
+      const adminToken = pairingManager.signDeviceToken("admin-phone-test");
+      const adminDev: PairedDevice = {
+        id: "admin-phone-test",
+        name: "Android Companion",
+        deviceType: "mobile",
+        role: "admin",
+        tokenHash: pairingManager.hashToken(adminToken),
+        pairedAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+        revoked: false,
+      };
+      await remoteStore.saveDevice(adminDev);
+      createdDeviceIds.push(adminDev.id);
+
+      const res = await fetch(`${baseUrl}/api/remote/session`, {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.type).toBe("remote_device");
+      expect(data.device).toBeDefined();
+      expect(data.device.role).toBe("admin");
+      expect(data.device.name).toBe("Android Companion");
+    });
+
+    it("22. GET /api/remote/session returns role standard for authenticated standard device", async () => {
+      const adminDev: PairedDevice = {
+        id: "admin-for-22",
+        name: "Android Admin",
+        deviceType: "mobile",
+        role: "admin",
+        tokenHash: "admin-hash-22",
+        pairedAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+        revoked: false,
+      };
+      const stdToken = pairingManager.signDeviceToken("std-phone-test");
+      const stdDev: PairedDevice = {
+        id: "std-phone-test",
+        name: "Secondary Device",
+        deviceType: "browser",
+        role: "standard",
+        tokenHash: pairingManager.hashToken(stdToken),
+        pairedAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+        revoked: false,
+      };
+      await remoteStore.saveDevice(adminDev);
+      await remoteStore.saveDevice(stdDev);
+      createdDeviceIds.push(adminDev.id, stdDev.id);
+
+      const res = await fetch(`${baseUrl}/api/remote/session`, {
+        headers: { Authorization: `Bearer ${stdToken}` },
+      });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.type).toBe("remote_device");
+      expect(data.device).toBeDefined();
+      expect(data.device.role).toBe("standard");
+    });
+
+    it("23. POST /api/remote/pair-code generates 6-character PIN when called by authenticated admin", async () => {
+      const adminToken = pairingManager.signDeviceToken("admin-caller-test");
+      const adminDev: PairedDevice = {
+        id: "admin-caller-test",
+        name: "Admin Mobile",
+        deviceType: "mobile",
+        role: "admin",
+        tokenHash: pairingManager.hashToken(adminToken),
+        pairedAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+        revoked: false,
+      };
+      await remoteStore.saveDevice(adminDev);
+      createdDeviceIds.push(adminDev.id);
+
+      const res = await fetch(`${baseUrl}/api/remote/pair-code`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+      });
+      expect(res.status).toBe(201);
+      const data = await res.json();
+      expect(data.code).toHaveLength(6);
+      expect(data.code).toMatch(/^[A-Z0-9]{6}$/);
+      expect(data.ttlSeconds).toBe(300);
+      expect(data.expiresAt).toBeDefined();
+    });
+
+    it("24. POST /api/remote/pair-code returns 403 Forbidden when called by a standard device", async () => {
+      const adminDev: PairedDevice = {
+        id: "admin-for-24",
+        name: "Android Admin",
+        deviceType: "mobile",
+        role: "admin",
+        tokenHash: "admin-hash-24",
+        pairedAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+        revoked: false,
+      };
+      const stdToken = pairingManager.signDeviceToken("std-caller-test");
+      const stdDev: PairedDevice = {
+        id: "std-caller-test",
+        name: "Standard Client",
+        deviceType: "browser",
+        role: "standard",
+        tokenHash: pairingManager.hashToken(stdToken),
+        pairedAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+        revoked: false,
+      };
+      await remoteStore.saveDevice(adminDev);
+      await remoteStore.saveDevice(stdDev);
+      createdDeviceIds.push(adminDev.id, stdDev.id);
+
+      const res = await fetch(`${baseUrl}/api/remote/pair-code`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${stdToken}`,
+        },
+      });
+      expect(res.status).toBe(403);
+      const data = await res.json();
+      expect(data.error).toMatch(/Forbidden: Only admins can generate device pairing codes/);
+    });
+
+    it("25. verifies full secondary device pairing flow: Android admin remains active while PC pairs as standard", async () => {
+      // 1. Android Admin device exists
+      const androidToken = pairingManager.signDeviceToken("android-persistent-admin");
+      const androidDev: PairedDevice = {
+        id: "android-persistent-admin",
+        name: "Android Admin Device",
+        deviceType: "mobile",
+        role: "admin",
+        tokenHash: pairingManager.hashToken(androidToken),
+        pairedAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+        revoked: false,
+      };
+      await remoteStore.saveDevice(androidDev);
+      createdDeviceIds.push(androidDev.id);
+
+      // 2. Android Admin generates PIN via HTTP
+      const pinRes = await fetch(`${baseUrl}/api/remote/pair-code`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${androidToken}`,
+        },
+      });
+      expect(pinRes.status).toBe(201);
+      const { code } = await pinRes.json();
+
+      // 3. PC calls POST /api/remote/pair using the PIN
+      const pairRes = await fetch(`${baseUrl}/api/remote/pair`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code,
+          deviceName: "PC Chrome Companion",
+          deviceType: "browser",
+        }),
+      });
+      expect(pairRes.status).toBe(201);
+      const pcData = await pairRes.json();
+      expect(pcData.device).toBeDefined();
+      expect(pcData.device.id).not.toBe(androidDev.id);
+      expect(pcData.device.role).toBe("standard");
+      expect(pcData.deviceRole).toBe("standard");
+      expect(pcData.token).toMatch(/^sora_dev_/);
+      createdDeviceIds.push(pcData.device.id);
+
+      // 4. Verify Android Admin session remains completely untouched
+      const androidCheck = await remoteStore.getDevice(androidDev.id);
+      expect(androidCheck).toBeDefined();
+      expect(androidCheck?.role).toBe("admin");
+      expect(androidCheck?.revoked).toBe(false);
+
+      // 5. Verify PC device is registered as standard
+      const pcCheck = await remoteStore.getDevice(pcData.device.id);
+      expect(pcCheck).toBeDefined();
+      expect(pcCheck?.role).toBe("standard");
+      expect(pcCheck?.revoked).toBe(false);
+    });
+  });
+
   // ── Tool Count Invariant ─────────────────────────────────────────────────
   it("strictly preserves exactly 126 Gemini Live tools in LIVE_TOOLS", () => {
     expect(LIVE_TOOLS).toBeDefined();

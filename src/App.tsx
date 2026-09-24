@@ -435,6 +435,35 @@ export default function App() {
     }
   }, [remoteSession]);
 
+  // Synchronize remoteSession role with live server authoritative state (GET /api/remote/session)
+  useEffect(() => {
+    if (!remoteSession?.token && !remoteSession?.accessToken) return;
+    const bearer = remoteSession.token || remoteSession.accessToken;
+    let cancelled = false;
+
+    fetch("/api/remote/session", {
+      headers: { Authorization: `Bearer ${bearer}` },
+    })
+      .then(async (res) => {
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          const fetchedRole = data.device?.role || data.role;
+          if (fetchedRole && fetchedRole !== remoteSession.role) {
+            const updated: StoredRemoteSession = { ...remoteSession, role: fetchedRole };
+            setRemoteSession(updated);
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+            } catch {}
+          }
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [remoteSession?.token, remoteSession?.accessToken]);
+
   // Fetch initial recollections from backend database
   useEffect(() => {
     fetch("/api/memories")
@@ -1295,6 +1324,7 @@ export default function App() {
         themeColor={themeColor}
         remoteSession={remoteSession}
         onUnpair={handleUnpairDevice}
+        onSessionUpdate={(updated) => setRemoteSession(updated)}
       />
 
       {/* Cloud Remote Companion Authentication Modal for non-localhost hosts */}
