@@ -1,0 +1,533 @@
+{
+  "activeProjectId": "8xwxc5k1j",
+  "projects": [
+    {
+      "id": "txxq3rxcb",
+      "name": "myraa",
+      "rootPath": "D:\\MYRAA AI\\Myraa AI",
+      "type": "polyglot",
+      "primaryLanguage": "TypeScript",
+      "frameworks": [
+        "React",
+        "Vite",
+        "Express",
+        "Electron",
+        "TailwindCSS",
+        "Google GenAI",
+        "Three.js"
+      ],
+      "summary": "Project **myraa** is a **polyglot** application (TypeScript) on branch 'main'.\nFrameworks/Tools: React, Vite, Express, Electron, TailwindCSS, Google GenAI, Three.js.\nScale: 285 files across 71 directories.\nKey Layers: Frontend UI & Interaction; Backend Gateway & Core Engine; Cognitive Memory & Project Intelligence; Desktop Control Agent.\nEntry Points: server.ts, src/main.tsx, src/app.tsx, index.html, desktop_agent/main.py, electron/main.cjs.",
+      "manifest": {
+        "name": "myraa",
+        "version": "1.0.0",
+        "dependencies": {
+          "@google/genai": "^2.4.0",
+          "@pixiv/three-vrm": "^3.5.5",
+          "@tailwindcss/vite": "^4.1.14",
+          "@types/three": "^0.186.0",
+          "@vitejs/plugin-react": "^5.0.4",
+          "dotenv": "^17.2.3",
+          "express": "^4.21.2",
+          "lucide-react": "^0.546.0",
+          "motion": "^12.23.24",
+          "react": "^19.0.1",
+          "react-dom": "^19.0.1",
+          "three": "^0.186.0",
+          "vite": "^6.2.3",
+          "ws": "^8.21.0"
+        },
+        "devDependencies": {
+          "@types/express": "^4.17.21",
+          "@types/node": "^22.14.0",
+          "@types/ws": "^8.18.1",
+          "autoprefixer": "^10.4.21",
+          "electron": "^43.1.0",
+          "electron-builder": "^26.15.3",
+          "esbuild": "^0.25.0",
+          "tailwindcss": "^4.1.14",
+          "tsx": "^4.21.0",
+          "typescript": "~5.8.2",
+          "vite": "^6.2.3",
+          "vitest": "^5.0.1"
+        },
+        "scripts": {
+          "dev": "tsx server.ts",
+          "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+          "start": "node dist/server.cjs",
+          "preview": "vite preview",
+          "clean": "rm -rf dist server.js",
+          "lint": "tsc --noEmit",
+          "test": "vitest run",
+          "electron": "electron .",
+          "app": "npm run build && electron .",
+          "dist": "npm run build && electron-builder --win nsis portable"
+        }
+      },
+      "architectureMap": {
+        "layers": [
+          {
+            "name": "Frontend UI & Interaction",
+            "description": "Interactive visual interfaces, HUDs, and components.",
+            "paths": [
+              "src/App.tsx",
+              "src/components/ApiKeyGate.tsx",
+              "src/components/avatar3d/Avatar3DRenderer.tsx",
+              "src/components/avatar3d/VRMAnimationController.ts",
+              "src/components/avatar3d/VRMLipSyncController.ts",
+              "src/components/avatar3d/VRMLoader.ts",
+              "src/components/avatar3d/VRMLookAtController.ts",
+              "src/components/AvatarRenderer.tsx"
+            ]
+          },
+          {
+            "name": "Backend Gateway & Core Engine",
+            "description": "Express HTTP gateway, live WebSocket channels, session management, and routing.",
+            "paths": [
+              "src/backend/ai/GeminiSessionFactory.ts",
+              "src/backend/conversation/ConversationManager.ts",
+              "src/backend/gateway/HttpGateway.ts"
+            ]
+          },
+          {
+            "name": "Cognitive Memory & Project Intelligence",
+            "description": "Structured memory store, context retrieval, and workspace intelligence.",
+            "paths": [
+              "src/backend/memory/MemoryDeduplicator.ts",
+              "src/backend/memory/MemoryExtractor.ts",
+              "src/backend/memory/MemoryManager.ts",
+              "src/backend/memory/MemorySearch.ts",
+              "src/backend/memory/MemoryStore.ts",
+              "src/backend/memory/MemoryTypes.ts",
+              "src/backend/memory/__tests__/memory.test.ts",
+              "src/backend/projects/ContextManager.ts"
+            ]
+          },
+          {
+            "name": "Desktop Control Agent",
+            "description": "FastAPI / Python automation engine for OS and application control.",
+            "paths": [
+              "desktop_agent/main.py",
+              "desktop_agent/README.md",
+              "desktop_agent/registry.py",
+              "desktop_agent/requirements.txt",
+              "desktop_agent/tools_applications.py",
+              "desktop_agent/tools_browser.py",
+              "desktop_agent/tools_clipboard.py",
+              "desktop_agent/tools_coding.py"
+            ]
+          }
+        ],
+        "entryPoints": [
+          "server.ts",
+          "src/main.tsx",
+          "src/app.tsx",
+          "index.html",
+          "desktop_agent/main.py",
+          "electron/main.cjs"
+        ],
+        "keyComponents": [
+          {
+            "name": "Server Entry",
+            "path": "server.ts",
+            "purpose": "Application bootstrapping and server lifecycle"
+          },
+          {
+            "name": "HttpGateway",
+            "path": "src/backend/gateway/HttpGateway.ts",
+            "purpose": "REST API endpoints and logging"
+          },
+          {
+            "name": "ToolOrchestrator",
+            "path": "src/backend/tools/ToolOrchestrator.ts",
+            "purpose": "Dispatches tool calls to in-process handlers or desktop agent"
+          },
+          {
+            "name": "MemoryManager",
+            "path": "src/backend/memory/MemoryManager.ts",
+            "purpose": "Structured persistent memory and context ranking"
+          },
+          {
+            "name": "Desktop Agent",
+            "path": "desktop_agent/main.py",
+            "purpose": "Python automation server for Windows controls"
+          }
+        ]
+      },
+      "git": {
+        "isGitRepo": true,
+        "branch": "main",
+        "uncommittedChanges": 85,
+        "recentCommits": [
+          {
+            "hash": "98edfd5",
+            "author": "Sandeepmishra2396",
+            "date": "5 days ago",
+            "message": "CHECKPOINT: Before Goal C - 3D VRM Avatar implementation"
+          }
+        ],
+        "diffSummary": ".claude/settings.local.json                        |    4 +-\n Desktop/Myraa.txt                                  |    2 +-\n Desktop/MyraaNotes.txt                             |    4 +-\n Desktop/MyraaPuzzles.txt                           |    2 +-\n Desktop/MyraaPuzzles2.txt                          |    2 +-\n Desktop/notes.txt                                  |    2 +-\n Downloads/message.txt                              |    2 +-\n desktop_agent.spec                                 |    8 +-\n desktop_agent/README.md                            |   18 +-\n desktop_agent/__init__.py                          |    4 +-\n desktop_agent/__pycache__/__init__.cpython-314.pyc |  Bin 529 -> 464 bytes\n desktop_agent/__pycache__/main.cpython-314.pyc     |  Bin 8092 -> 8145 bytes\n desktop_agent/__pycache__/registry.cpython-314.pyc |  Bin 6574 -> 6510 bytes\n .../__pycache__/tools_coding.cpython-314.pyc       |  Bin 11703 -> 11575 bytes\n .../__pycache__/tools_confirmation.cpython-314.pyc |  Bin 5023 -> 4958 bytes\n .../__pycache__/tools_files.cpython-314.pyc        |  Bin 15697 -> 16665 bytes\n .../__pycache__/tools_screenshot.cpython-314.pyc   |  Bin 11281 -> 11217 bytes\n .../__pycache__/tools_startup.cpython-314.pyc      |  Bin 9809 -> 9737 bytes\n desktop_agent/main.py                              |   33 +-\n desktop_agent/registry.py                          |    6 +-\n desktop_agent/requirements.txt                     |    2 +-\n desktop_agent/tools_coding.py                      |    1 -\n desktop_agent/tools_confirmation.py                |    8 +-\n desktop_agent/tools_files.py                       |   17 +-\n desktop_agent/tools_screenshot.py                  |    4 +-\n desktop_agent/tools_startup.py                     |   20 +-\n electron-builder.yml                               |   10 +-\n electron/main.cjs                                  |  238 ++-\n electron/preload.cjs                               |   45 +-\n electron/splash.html                               |    4 +-\n index.html                                         |    4 +-\n local-agent.js                                     |   30 +-\n memories.json                                      |   31 +-\n metadata.json                                      |    6 +-\n package-lock.json                                  |  492 +++++-\n package.json                                       |   16 +-\n public/mic-processor.worklet.js                    |    8 +-\n release/builder-debug.yml                          |    4 +-\n .../win-unpacked/resources/app/electron/main.cjs   |   32 +-\n .../resources/app/electron/preload.cjs             |    4 +-\n .../resources/app/electron/splash.html             |    4 +-\n release/win-unpacked/resources/app/package.json    |    6 +-\n run_agent.py                                       |   24 +-\n server.ts                                          | 1727 ++------------------\n server_memory.ts                                   |  128 +-\n server_paths.ts                                    |   14 +-\n settings.json                                      |    4 +-\n src/App.tsx                                        |  134 +-\n src/components/ApiKeyGate.tsx                      |   10 +-\n src/components/AvatarRenderer.tsx                  |  358 +++-\n src/components/BrowserAgent.tsx                    |   22 +-\n src/components/HolographicProjector.tsx            |    4 +-\n src/components/MemoryDashboard.tsx                 |   35 +-\n src/components/MyraaCoreVisualizer.tsx             |  290 ----\n src/components/SettingsPanel.tsx                   |   32 +-\n src/lib/audio.ts                                   |  571 ++++---\n src/lib/memoryTypes.ts                             |   21 +-\n src/lib/settingsStore.ts                           |   32 +-\n src/lib/wakeWord.ts                                |   18 +-\n src/main.tsx                                       |   22 +-\n start-myraa-silent.bat                             |   56 -\n start-myraa.bat                                    |   69 -\n vite.config.ts                                     |   16 +-\n 63 files changed, 2114 insertions(+), 2546 deletions(-)"
+      },
+      "tasks": [
+        {
+          "id": "i0b4ua7j",
+          "title": "Phase 3 Verification",
+          "description": "Verify all project intelligence endpoints and tools",
+          "status": "done",
+          "createdAt": "2026-09-17T04:46:03.780Z",
+          "updatedAt": "2026-09-17T04:46:03.787Z"
+        }
+      ],
+      "lastAnalyzedAt": "2026-09-17T14:19:37.415Z"
+    },
+    {
+      "id": "7hybrzfrn",
+      "name": "rk-digital-media",
+      "rootPath": "D:\\RK DIGITAL MEDIA",
+      "type": "node_typescript",
+      "primaryLanguage": "TypeScript",
+      "frameworks": [
+        "React",
+        "Vite",
+        "TailwindCSS"
+      ],
+      "summary": "Project **rk-digital-media** is a **node_typescript** application (TypeScript) on branch 'main'.\nFrameworks/Tools: React, Vite, TailwindCSS.\nScale: 56 files across 9 directories.\nKey Layers: Frontend UI & Interaction.\nEntry Points: index.html.",
+      "manifest": {
+        "name": "rk-digital-media",
+        "version": "1.0.0",
+        "dependencies": {
+          "react": "^18.2.0",
+          "react-dom": "^18.2.0",
+          "react-router-dom": "^6.22.0",
+          "framer-motion": "^11.0.0",
+          "lucide-react": "^0.344.0",
+          "react-icons": "^5.0.1"
+        },
+        "devDependencies": {
+          "@vitejs/plugin-react": "^4.2.1",
+          "autoprefixer": "^10.4.18",
+          "postcss": "^8.4.35",
+          "tailwindcss": "^3.4.1",
+          "vite": "^5.1.4"
+        },
+        "scripts": {
+          "dev": "vite",
+          "build": "vite build",
+          "preview": "vite preview"
+        }
+      },
+      "architectureMap": {
+        "layers": [
+          {
+            "name": "Frontend UI & Interaction",
+            "description": "Interactive visual interfaces, HUDs, and components.",
+            "paths": [
+              "src/App.jsx",
+              "src/components/About.jsx",
+              "src/components/AuthModal.jsx",
+              "src/components/Contact.jsx",
+              "src/components/CTA.jsx",
+              "src/components/DashboardModal.jsx",
+              "src/components/Distribution.jsx",
+              "src/components/FAQ.jsx"
+            ]
+          }
+        ],
+        "entryPoints": [
+          "index.html"
+        ],
+        "keyComponents": []
+      },
+      "git": {
+        "isGitRepo": true,
+        "branch": "main",
+        "uncommittedChanges": 0,
+        "recentCommits": [
+          {
+            "hash": "e4b47f0",
+            "author": "Sandeepmishra2396",
+            "date": "6 hours ago",
+            "message": "fix(ux): resolve usability heuristics issues (casing, card interactivity, network density & ctas)"
+          },
+          {
+            "hash": "7b9922a",
+            "author": "Sandeepmishra2396",
+            "date": "6 hours ago",
+            "message": "fix(ux): resolve 16 usability issues across typography, consistency, spacing, and accessibility"
+          },
+          {
+            "hash": "9dce8eb",
+            "author": "Sandeepmishra2396",
+            "date": "3 days ago",
+            "message": "feat: complete modern website with auth, 71 channels network, platform directory, and artist dashboard"
+          }
+        ]
+      },
+      "tasks": [],
+      "lastAnalyzedAt": "2026-09-19T01:31:10.277Z"
+    },
+    {
+      "id": "9ud7cdrh0",
+      "name": "QYROX",
+      "rootPath": "D:\\SORA AI\\Sora AI\\QYROX",
+      "type": "unknown",
+      "primaryLanguage": "unknown",
+      "frameworks": [],
+      "summary": "Project **QYROX** is a **unknown** application (unknown) .\nFrameworks/Tools: None detected.\nScale: 0 files across 0 directories.\nKey Layers: Standard layout.\nEntry Points: None found.",
+      "architectureMap": {
+        "layers": [],
+        "entryPoints": [],
+        "keyComponents": []
+      },
+      "git": {
+        "isGitRepo": false
+      },
+      "tasks": [],
+      "lastAnalyzedAt": "2026-09-19T01:34:04.007Z"
+    },
+    {
+      "id": "jh2rw4c0e",
+      "name": "qyrox",
+      "rootPath": "D:\\QYROX\\qyrox",
+      "type": "polyglot",
+      "primaryLanguage": "JavaScript",
+      "frameworks": [
+        "TailwindCSS"
+      ],
+      "summary": "Project **qyrox** is a **polyglot** application (JavaScript) on branch 'main'.\nFrameworks/Tools: TailwindCSS.\nScale: 118 files across 14 directories.\nKey Layers: Standard layout.\nEntry Points: app.py.",
+      "manifest": {
+        "dependencies": {
+          "socket.io-client": "^4.8.3"
+        },
+        "devDependencies": {
+          "@tailwindcss/cli": "^4.3.2",
+          "tailwindcss": "^4.3.2"
+        }
+      },
+      "architectureMap": {
+        "layers": [],
+        "entryPoints": [
+          "app.py"
+        ],
+        "keyComponents": []
+      },
+      "git": {
+        "isGitRepo": true,
+        "branch": "main",
+        "uncommittedChanges": 8,
+        "recentCommits": [
+          {
+            "hash": "b3f7b7b",
+            "author": "Sandeepmishra2396",
+            "date": "5 days ago",
+            "message": "feat(ui): implement premium collapsible sidebar navigation, feature colors, and profile routing"
+          },
+          {
+            "hash": "08251ed",
+            "author": "Sandeepmishra2396",
+            "date": "6 days ago",
+            "message": "docs(README): complete rewrite reflecting v3.0 current state"
+          },
+          {
+            "hash": "6b858e9",
+            "author": "Sandeepmishra2396",
+            "date": "6 days ago",
+            "message": "fix: resolve circular import on startup + project cleanup"
+          },
+          {
+            "hash": "e3930d5",
+            "author": "Sandeepmishra2396",
+            "date": "4 weeks ago",
+            "message": "fix(community): harden battle room lifecycle and memory cleanup"
+          },
+          {
+            "hash": "d85d56b",
+            "author": "Sandeepmishra2396",
+            "date": "4 weeks ago",
+            "message": "fix(battle): harden community battle integrity"
+          }
+        ],
+        "diffSummary": "app.py                     |  23 ++-\n routes/growth_routes.py    |  30 +---\n routes/stream_routes.py    |   5 +-\n static/css/core.css        | 175 ++++++++++++++++++++++\n static/js/core.js          |  74 ++++++----\n static/js/solve.js         |  17 +--\n templates/index_fixed.html | 353 ++++++++++++++++++++++++++++++++++-----------\n 7 files changed, 517 insertions(+), 160 deletions(-)"
+      },
+      "tasks": [],
+      "lastAnalyzedAt": "2026-09-19T01:45:08.022Z"
+    },
+    {
+      "id": "8xwxc5k1j",
+      "name": "myraa",
+      "rootPath": "D:\\SORA AI\\Sora AI",
+      "type": "polyglot",
+      "primaryLanguage": "TypeScript",
+      "frameworks": [
+        "React",
+        "Vite",
+        "Express",
+        "Electron",
+        "TailwindCSS",
+        "Google GenAI",
+        "Three.js"
+      ],
+      "summary": "Project **myraa** is a **polyglot** application (TypeScript) on branch 'main'.\nFrameworks/Tools: React, Vite, Express, Electron, TailwindCSS, Google GenAI, Three.js.\nScale: 386 files across 95 directories.\nKey Layers: Frontend UI & Interaction; Backend Gateway & Core Engine; Cognitive Memory & Project Intelligence; Desktop Control Agent.\nEntry Points: server.ts, src/main.tsx, src/app.tsx, index.html, desktop_agent/main.py, electron/main.cjs.",
+      "manifest": {
+        "name": "myraa",
+        "version": "1.0.0",
+        "dependencies": {
+          "@google/genai": "^2.4.0",
+          "@pixiv/three-vrm": "^3.5.5",
+          "@tailwindcss/vite": "^4.1.14",
+          "@types/three": "^0.186.0",
+          "@vitejs/plugin-react": "^5.0.4",
+          "dotenv": "^17.2.3",
+          "express": "^4.21.2",
+          "lucide-react": "^0.546.0",
+          "motion": "^12.23.24",
+          "react": "^19.0.1",
+          "react-dom": "^19.0.1",
+          "three": "^0.186.0",
+          "vite": "^6.2.3",
+          "ws": "^8.21.0"
+        },
+        "devDependencies": {
+          "@types/express": "^4.17.21",
+          "@types/node": "^22.14.0",
+          "@types/ws": "^8.18.1",
+          "autoprefixer": "^10.4.21",
+          "electron": "^43.1.0",
+          "electron-builder": "^26.15.3",
+          "esbuild": "^0.25.0",
+          "tailwindcss": "^4.1.14",
+          "tsx": "^4.21.0",
+          "typescript": "~5.8.2",
+          "vite": "^6.2.3",
+          "vitest": "^5.0.1"
+        },
+        "scripts": {
+          "dev": "tsx server.ts",
+          "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+          "start": "node dist/server.cjs",
+          "preview": "vite preview",
+          "clean": "rm -rf dist server.js",
+          "lint": "tsc --noEmit",
+          "test": "vitest run --fileParallelism=false",
+          "electron": "electron .",
+          "app": "npm run build && electron .",
+          "dist": "npm run build && electron-builder --win nsis portable"
+        }
+      },
+      "architectureMap": {
+        "layers": [
+          {
+            "name": "Frontend UI & Interaction",
+            "description": "Interactive visual interfaces, HUDs, and components.",
+            "paths": [
+              "src/App.tsx",
+              "src/components/ApiKeyGate.tsx",
+              "src/components/avatar3d/Avatar3DRenderer.tsx",
+              "src/components/avatar3d/VRMAnimationController.ts",
+              "src/components/avatar3d/VRMLipSyncController.ts",
+              "src/components/avatar3d/VRMLoader.ts",
+              "src/components/avatar3d/VRMLookAtController.ts",
+              "src/components/AvatarRenderer.tsx"
+            ]
+          },
+          {
+            "name": "Backend Gateway & Core Engine",
+            "description": "Express HTTP gateway, live WebSocket channels, session management, and routing.",
+            "paths": [
+              "src/backend/ai/GeminiSessionFactory.ts",
+              "src/backend/conversation/ConversationManager.ts",
+              "src/backend/gateway/HttpGateway.ts"
+            ]
+          },
+          {
+            "name": "Cognitive Memory & Project Intelligence",
+            "description": "Structured memory store, context retrieval, and workspace intelligence.",
+            "paths": [
+              "src/backend/memory/index.ts",
+              "src/backend/memory/MemoryDeduplicator.ts",
+              "src/backend/memory/MemoryExtractor.ts",
+              "src/backend/memory/MemoryManager.ts",
+              "src/backend/memory/MemorySearch.ts",
+              "src/backend/memory/MemoryStore.ts",
+              "src/backend/memory/MemoryTypes.ts",
+              "src/backend/memory/SharedMemoryManager.ts"
+            ]
+          },
+          {
+            "name": "Desktop Control Agent",
+            "description": "FastAPI / Python automation engine for OS and application control.",
+            "paths": [
+              "desktop_agent/main.py",
+              "desktop_agent/README.md",
+              "desktop_agent/registry.py",
+              "desktop_agent/requirements.txt",
+              "desktop_agent/tools_applications.py",
+              "desktop_agent/tools_browser.py",
+              "desktop_agent/tools_clipboard.py",
+              "desktop_agent/tools_coding.py"
+            ]
+          }
+        ],
+        "entryPoints": [
+          "server.ts",
+          "src/main.tsx",
+          "src/app.tsx",
+          "index.html",
+          "desktop_agent/main.py",
+          "electron/main.cjs"
+        ],
+        "keyComponents": [
+          {
+            "name": "Server Entry",
+            "path": "server.ts",
+            "purpose": "Application bootstrapping and server lifecycle"
+          },
+          {
+            "name": "HttpGateway",
+            "path": "src/backend/gateway/HttpGateway.ts",
+            "purpose": "REST API endpoints and logging"
+          },
+          {
+            "name": "ToolOrchestrator",
+            "path": "src/backend/tools/ToolOrchestrator.ts",
+            "purpose": "Dispatches tool calls to in-process handlers or desktop agent"
+          },
+          {
+            "name": "MemoryManager",
+            "path": "src/backend/memory/MemoryManager.ts",
+            "purpose": "Structured persistent memory and context ranking"
+          },
+          {
+            "name": "Desktop Agent",
+            "path": "desktop_agent/main.py",
+            "purpose": "Python automation server for Windows controls"
+          }
+        ]
+      },
+      "git": {
+        "isGitRepo": true,
+        "branch": "main",
+        "uncommittedChanges": 108,
+        "recentCommits": [
+          {
+            "hash": "98edfd5",
+            "author": "Sandeepmishra2396",
+            "date": "11 days ago",
+            "message": "CHECKPOINT: Before Goal C - 3D VRM Avatar implementation"
+          }
+        ],
+        "diffSummary": ".claude/settings.local.json                        |     2 +-\n .gitignore                                         |     7 +\n Desktop/Myraa.txt                                  |     2 +-\n Desktop/MyraaNotes.txt                             |     4 +-\n Desktop/MyraaPuzzles.txt                           |     2 +-\n Desktop/MyraaPuzzles2.txt                          |     2 +-\n Desktop/notes.txt                                  |     2 +-\n Downloads/message.txt                              |     2 +-\n ShepamNotes.txt                                    |     1 -\n agent_build/desktop_agent/Analysis-00.toc          |  8985 ---\n agent_build/desktop_agent/COLLECT-00.toc           |  2143 -\n agent_build/desktop_agent/EXE-00.toc               |    86 -\n agent_build/desktop_agent/PKG-00.toc               |    64 -\n agent_build/desktop_agent/PYZ-00.pyz               |   Bin 13903805 -> 0 bytes\n agent_build/desktop_agent/PYZ-00.toc               |  6209 --\n agent_build/desktop_agent/base_library.zip         |   Bin 1443565 -> 0 bytes\n .../desktop_agent/localpycs/pyimod01_archive.pyc   |   Bin 5437 -> 0 bytes\n .../desktop_agent/localpycs/pyimod02_importers.pyc |   Bin 34019 -> 0 bytes\n .../desktop_agent/localpycs/pyimod03_ctypes.pyc    |   Bin 7032 -> 0 bytes\n .../desktop_agent/localpycs/pyimod04_pywin32.pyc   |   Bin 1939 -> 0 bytes\n agent_build/desktop_agent/localpycs/struct.pyc     |   Bin 360 -> 0 bytes\n agent_build/desktop_agent/myraa-agent.exe          |   Bin 14280014 -> 0 bytes\n agent_build/desktop_agent/myraa-agent.pkg          |   Bin 13937486 -> 0 bytes\n agent_build/desktop_agent/warn-desktop_agent.txt   |   171 -\n agent_build/desktop_agent/xref-desktop_agent.html  | 67853 -------------------\n desktop_agent.spec                                 |     8 +-\n desktop_agent/README.md                            |     4 +-\n desktop_agent/__init__.py                          |     2 +-\n desktop_agent/__pycache__/__init__.cpython-314.pyc |   Bin 529 -> 466 bytes\n desktop_agent/__pycache__/main.cpython-314.pyc     |   Bin 8092 -> 8152 bytes\n desktop_agent/__pycache__/registry.cpython-314.pyc |   Bin 6574 -> 6630 bytes\n .../__pycache__/tools_applications.cpython-314.pyc |   Bin 7301 -> 12565 bytes\n .../__pycache__/tools_coding.cpython-314.pyc       |   Bin 11703 -> 14279 bytes\n .../__pycache__/tools_confirmation.cpython-314.pyc |   Bin 5023 -> 4960 bytes\n .../__pycache__/tools_files.cpython-314.pyc        |   Bin 15697 -> 28779 bytes\n .../__pycache__/tools_screenshot.cpython-314.pyc   |   Bin 11281 -> 11217 bytes\n .../__pycache__/tools_startup.cpython-314.pyc      |   Bin 9809 -> 9746 bytes\n desktop_agent/main.py                              |    19 +-\n desktop_agent/registry.py                          |     4 +\n desktop_agent/requirements.txt                     |     2 +-\n desktop_agent/tools_applications.py                |    96 +-\n desktop_agent/tools_coding.py                      |    99 +-\n desktop_agent/tools_confirmation.py                |     2 +-\n desktop_agent/tools_files.py                       |   277 +-\n desktop_agent/tools_screenshot.py                  |     4 +-\n desktop_agent/tools_startup.py                     |     2 +-\n electron-builder.yml                               |     4 +-\n electron/main.cjs                                  |   224 +-\n electron/preload.cjs                               |    43 +-\n electron/splash.html                               |     2 +-\n index.html                                         |     2 +-\n local-agent.js                                     |    26 +-\n memories.json                                      |   279 +-\n package-lock.json                                  |   488 +-\n package.json                                       |    12 +-\n public/mic-processor.worklet.js                    |    21 +-\n release/builder-debug.yml                          |     4 +-\n .../win-unpacked/resources/app/electron/main.cjs   |    32 +-\n .../resources/app/electron/preload.cjs             |     4 +-\n .../resources/app/electron/splash.html             |     4 +-\n release/win-unpacked/resources/app/package.json    |     6 +-\n run_agent.py                                       |    14 +-\n secrets.json                                       |     2 +-\n server.ts                                          |  1787 +-\n server_memory.ts                                   |   118 +-\n server_paths.ts                                    |     6 +-\n settings.json                                      |     6 +-\n src/App.tsx                                        |   261 +-\n src/components/ApiKeyGate.tsx                      |     2 +-\n src/components/AvatarRenderer.tsx                  |   354 +-\n src/components/BrowserAgent.tsx                    |   160 +-\n src/components/HolographicProjector.tsx            |     2 +-\n src/components/MemoryDashboard.tsx                 |    29 +-\n src/components/MyraaCoreVisualizer.tsx             |    12 +-\n src/components/SettingsPanel.tsx                   |    24 +-\n src/lib/audio.ts                                   |   591 +-\n src/lib/memoryTypes.ts                             |    21 +-\n src/lib/settingsStore.ts                           |     2 +-\n src/lib/wakeWord.ts                                |     2 +-\n src/main.tsx                                       |    22 +-\n start-myraa-silent.bat                             |     2 +-\n start-myraa.bat                                    |     2 +-\n vite.config.ts                                     |    16 +-\n 83 files changed, 3072 insertions(+), 87568 deletions(-)"
+      },
+      "tasks": [
+        {
+          "id": "03fgxacq",
+          "title": "DevTools QA Project Task Test",
+          "description": "Testing project task flow",
+          "status": "completed",
+          "createdAt": "2026-09-20T14:21:22.232Z",
+          "updatedAt": "2026-09-20T14:21:22.266Z"
+        }
+      ],
+      "lastAnalyzedAt": "2026-09-23T13:42:37.703Z"
+    }
+  ]
+}

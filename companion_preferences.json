@@ -1,0 +1,23 @@
+{
+  "enabled": true,
+  "voiceNotificationsEnabled": true,
+  "soundEnabled": true,
+  "minVoiceLevel": "info",
+  "quietHours": {
+    "enabled": false,
+    "start": "22:00",
+    "end": "08:00"
+  },
+  "pollIntervals": {
+    "gitPollIntervalMs": 15000,
+    "buildPollIntervalMs": 30000,
+    "deploymentPollIntervalMs": 20000
+  },
+  "approvedDeploymentUrls": [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3000/api/agent-health"
+  ],
+  "maxNotificationQueueSize": 200,
+  "updatedAt": "2026-09-23T13:42:48.155Z"
+}

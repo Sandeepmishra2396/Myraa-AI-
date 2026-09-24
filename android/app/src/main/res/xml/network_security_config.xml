@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MYRAA Android Companion — Network Security Configuration
+  Phase 15
+
+  SECURITY POLICY DESIGN
+  ═══════════════════════════════════════════════════════════════════════════════
+  MYRAA Desktop Core enforces WSS/HTTPS for all non-localhost connections via
+  DataProtectionService.validateTransport() (Phase 10B). This Android config
+  mirrors that policy:
+
+    • base-config: cleartext PROHIBITED globally (production TLS enforced).
+    • domain-config: cleartext PERMITTED ONLY for explicitly listed local
+      development targets (localhost + LAN RFC-1918 ranges used during dev).
+
+  For production deployment, configure TLS on the desktop side:
+    1. Generate a self-signed cert or use a local CA.
+    2. Set MYRAA_TLS_CERT env variable on the desktop.
+    3. Add the CA cert to android:trustAnchors or use a custom CA bundle here.
+
+  PRODUCTION CHECKLIST
+  ═══════════════════════════════════════════════════════════════════════════════
+  [ ] Replace domain-config entries with your actual local CA trust anchor.
+  [ ] Set cleartextTrafficPermitted="false" once TLS is configured on desktop.
+  [ ] Remove all LAN IP domain entries from production builds.
+  [ ] Use Android Build Variants to swap debug vs. release network_security_config.
+
+  DEVELOPMENT NOTE
+  ═══════════════════════════════════════════════════════════════════════════════
+  The domain-config entries below allow ws:// (cleartext WebSocket) only to:
+    - localhost / 127.0.0.1
+    - 10.x.x.x (RFC-1918 Class A — home/office LAN)
+    - 192.168.x.x (RFC-1918 Class C — most home routers)
+    - 172.16.x.x – 172.31.x.x (RFC-1918 Class B)
+
+  These ranges cover typical developer setups where MYRAA Desktop runs on the
+  same Wi-Fi network as the Android device. Add your specific desktop LAN IP
+  to the domain-config if auto-discovery via mDNS is not yet implemented.
+-->
+<network-security-config>
+
+    <!--
+      BASE CONFIG: No cleartext traffic allowed by default.
+      Enforces HTTPS/WSS for all public internet connections.
+      Trusts only the system CA store (no user-installed CAs for production).
+    -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!--
+      DEVELOPMENT DOMAIN CONFIG: Cleartext allowed ONLY for local LAN.
+      These domains/IPs are used during development when the MYRAA Desktop
+      does not yet have a TLS certificate configured.
+
+      IMPORTANT: This config DOES NOT weaken security for any public internet
+      destination. It only relaxes cleartext for private RFC-1918 address space.
+    -->
+    <domain-config cleartextTrafficPermitted="true">
+
+        <!-- Loopback — development on emulator connecting to host via ADB forward -->
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+
+        <!--
+          LAN IP ranges: Android network-security-config does not support
+          IP range wildcards in <domain> elements. Developers must add the
+          specific IP of their MYRAA Desktop machine here during development.
+
+          Example — add your desktop IP:
+          <domain includeSubdomains="false">192.168.1.105</domain>
+
+          mDNS hostname (if Bonjour/ZeroConf is configured on desktop):
+          <domain includeSubdomains="true">local</domain>
+        -->
+
+        <!-- mDNS .local domain for ZeroConf desktop discovery (Phase 16) -->
+        <domain includeSubdomains="true">local</domain>
+
+        <!-- Trust system CAs for local development too -->
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+
+</network-security-config>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MYRAA</string>
+    <string name="channel_live_audio">MYRAA Live Audio</string>
+    <string name="channel_live_audio_desc">Active bidirectional voice session with MYRAA</string>
+    <string name="channel_emergency">MYRAA Safety Alerts</string>
+    <string name="channel_emergency_desc">High-priority Emergency Stop notifications</string>
+</resources>

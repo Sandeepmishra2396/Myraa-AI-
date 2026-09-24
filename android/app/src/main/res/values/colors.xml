@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#090A0F</color>
+    <color name="myraa_cyan">#00E5FF</color>
+    <color name="myraa_purple">#7C4DFF</color>
+    <color name="myraa_bg">#090A0F</color>
+    <color name="myraa_surface">#141724</color>
+    <color name="emergency_red">#FF1744</color>
+</resources>

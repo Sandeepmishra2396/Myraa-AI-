@@ -1,0 +1,29 @@
+{
+  "attempts": [
+    {
+      "id": "att-1f7f00aa",
+      "questionId": "q-k-1",
+      "topic": "Quantum Mechanics",
+      "studentAnswer": "",
+      "isCorrect": false,
+      "scoreAwarded": 0,
+      "maxMarks": 5,
+      "attemptedAt": 1790170981292,
+      "mode": "exam"
+    },
+    {
+      "id": "att-2bbc9f0e",
+      "questionId": "q-k-2",
+      "topic": "Quantum Mechanics",
+      "studentAnswer": "",
+      "isCorrect": false,
+      "scoreAwarded": 0,
+      "maxMarks": 5,
+      "attemptedAt": 1790170981292,
+      "mode": "exam"
+    }
+  ],
+  "completedExamSessions": 1,
+  "completedVivaSessions": 0,
+  "lastUpdated": 1790170981292
+}

@@ -1,0 +1,92 @@
+{
+  "profile": {
+    "courseName": "General Academic Studies",
+    "currentSemester": 6,
+    "subjects": [
+      {
+        "id": "cs601",
+        "name": "Distributed Systems"
+      }
+    ],
+    "createdAt": 1789914752229,
+    "lastUpdated": 1789914777688,
+    "studentName": "Tester",
+    "targetGpa": 3.9,
+    "degree": "B.Tech Computer Science",
+    "targetExamDate": "2026-11-15"
+  },
+  "syllabi": {
+    "cs601": {
+      "subjectId": "cs601",
+      "subjectName": "Distributed Systems",
+      "chapters": [
+        {
+          "id": "ch1",
+          "chapterNumber": 1,
+          "title": "Consensus & Raft",
+          "topics": [
+            {
+              "id": "t1",
+              "title": "Leader Election",
+              "status": "completed",
+              "estimatedHours": 2,
+              "weightage": 1,
+              "mappedDocIds": []
+            },
+            {
+              "id": "t2",
+              "title": "Log Replication",
+              "status": "not_started",
+              "estimatedHours": 2,
+              "weightage": 1,
+              "mappedDocIds": []
+            }
+          ]
+        }
+      ],
+      "totalTopics": 2,
+      "completedTopics": 1,
+      "completionPercentage": 50
+    }
+  },
+  "studyPlan": {
+    "id": "plan-639529b8",
+    "planName": "Fall 2026 Sprint",
+    "generatedAt": 1789914777777,
+    "targetExamDate": "2026-11-15",
+    "dailyAvailableHours": 3,
+    "milestones": [
+      {
+        "id": "ms-c84412a7",
+        "targetDate": "2026-09-20",
+        "subjectId": "cs601",
+        "subjectName": "Distributed Systems",
+        "topicId": "t2",
+        "topicTitle": "Log Replication",
+        "estimatedMinutes": 120,
+        "isPriorityWeakTopic": false,
+        "completed": false
+      }
+    ],
+    "overallProgressPercentage": 0
+  },
+  "dailySessions": {
+    "2026-09-20": {
+      "date": "2026-09-20",
+      "targets": [
+        {
+          "id": "tgt-ms-c84412a7",
+          "subjectName": "Distributed Systems",
+          "topicTitle": "Log Replication",
+          "goal": "Review Log Replication and solve practice problems",
+          "durationMinutes": 120,
+          "completed": false
+        }
+      ],
+      "totalPlannedMinutes": 120,
+      "completedMinutes": 0,
+      "status": "planned"
+    }
+  },
+  "lastUpdated": 1789914777785
+}
