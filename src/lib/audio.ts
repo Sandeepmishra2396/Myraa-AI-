@@ -591,18 +591,37 @@ export class MyraAudioSession {
       } else if (this.nextStartTime < currentTime) {
         // Network catch-up: resume immediately at currentTime with zero inserted silence gap
         this.nextStartTime = currentTime;
-      } else if (queueAhead > 1.0) {
-        // Audio queue has built up more than 1.0s ahead of real-time hardware clock.
-        // Stop all future-scheduled nodes and resync the cursor to prevent runaway delay.
+      } else if (queueAhead > 3.5) {
+        // Safety valve: audio queue is severely ahead (>3.5s) — likely a stuck or runaway response.
+        // Flush all future-scheduled nodes and resync the cursor to prevent runaway delay.
+        // NOTE: Normal streaming will build 1–2s of queue ahead — that is correct and expected.
+        // Only barge-in (handleInterruption) should flush nodes during active speech.
         console.warn(
-          `[Myraa Audio] Audio queue drift exceeded 1.0s (${queueAhead.toFixed(2)}s ahead, ${this.activeSources.length} active nodes). Flushing queue and clamping cursor.`
+          `[Myraa Audio] Audio queue severely drifted (${queueAhead.toFixed(2)}s ahead, ${this.activeSources.length} active nodes). Flushing queue and clamping cursor.`
         );
-        // Flush all scheduled-but-not-yet-started nodes immediately
         this.activeSources.forEach((s) => {
           try { s.stop(); } catch {}
         });
         this.activeSources = [];
-        this.nextStartTime = currentTime + 0.03;
+        this.nextStartTime = currentTime + 0.05;
+      } else if (queueAhead > 1.5) {
+        // Mild drift: trim future-scheduled-but-not-yet-playing nodes, keep current playback.
+        // Reset cursor so next chunk queues tightly after what's already playing.
+        // This prevents double-voice overlap when cursor is reset mid-stream.
+        const kept: AudioBufferSourceNode[] = [];
+        this.activeSources.forEach((s) => {
+          // Keep only the first (currently-playing) node; stop all future-queued ones.
+          if (kept.length === 0) {
+            kept.push(s);
+          } else {
+            try { s.stop(); } catch {}
+          }
+        });
+        this.activeSources = kept;
+        // Schedule next chunk tightly after current playback
+        this.nextStartTime = kept.length > 0
+          ? currentTime + 0.1
+          : currentTime + 0.025;
       }
 
       this.audioChunksCount++;
