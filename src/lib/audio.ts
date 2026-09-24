@@ -613,8 +613,11 @@ export class MyraAudioSession {
       } else if (this.nextStartTime < currentTime) {
         // Network catch-up — cursor fell behind hardware clock, start immediately
         this.nextStartTime = currentTime;
-      } else if (queueAhead > 3.5) {
-        // Severe safety flush only — >3.5s means something is genuinely stuck
+      } else if (queueAhead > 10) {
+        // Severe safety flush only — >10s queue means something is genuinely stuck.
+        // NOTE: Gemini sends audio at ~1.4× real-time, so the queue naturally grows
+        // ~3-4s ahead during a normal response. This is expected and correct — do NOT
+        // flush at low thresholds (3-4s) or it cuts the middle of every response.
         console.warn(`[Myraa Audio] Queue severely drifted (${queueAhead.toFixed(2)}s, ${this.activeSources.length} nodes). Flushing.`);
         this.activeSources.forEach((s) => { try { s.stop(); } catch {} });
         this.activeSources = [];
