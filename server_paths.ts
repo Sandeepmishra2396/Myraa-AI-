@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MYRAA — path & secret resolution.
  *
  * Separates read-only *code/asset* locations (shipped with the app) from the
@@ -115,6 +115,28 @@ export function inspectKey(key: string | undefined | null): { isValid: boolean; 
  *   5. GOOGLE_GENAI_API_KEY in environment (.env)
  */
 export function resolveApiKeyWithMetadata(): KeyMetadata {
+  // In production, server environment variables take absolute precedence to ensure
+  // secrets are loaded strictly from the server environment, never client/local files.
+  if (process.env.NODE_ENV === "production") {
+    const envGemini = process.env.GEMINI_API_KEY?.trim();
+    const envGeminiInfo = inspectKey(envGemini);
+    if (envGeminiInfo.isValid) {
+      return { key: envGemini, source: "GEMINI_API_KEY", ...envGeminiInfo };
+    }
+
+    const envGoogle = process.env.GOOGLE_API_KEY?.trim();
+    const envGoogleInfo = inspectKey(envGoogle);
+    if (envGoogleInfo.isValid) {
+      return { key: envGoogle, source: "GOOGLE_API_KEY", ...envGoogleInfo };
+    }
+
+    const envGenAi = process.env.GOOGLE_GENAI_API_KEY?.trim();
+    const envGenAiInfo = inspectKey(envGenAi);
+    if (envGenAiInfo.isValid) {
+      return { key: envGenAi, source: "GOOGLE_GENAI_API_KEY", ...envGenAiInfo };
+    }
+  }
+
   // 1. Data dir secrets.json
   const stored = readSecretsFromFile(SECRETS_FILE).geminiApiKey?.trim();
   const storedInfo = inspectKey(stored);

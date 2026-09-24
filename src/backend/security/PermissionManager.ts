@@ -16,9 +16,12 @@
 // Security: Localhost-only guard for sensitive endpoints.
 // ---------------------------------------------------------------------------
 export function requireLocalhost(req: any, res: any, next: () => void): void {
-  const ip = req.socket?.remoteAddress || req.connection?.remoteAddress || "";
+  const forwardedIp = req.headers?.["x-forwarded-for"];
+  const ip = forwardedIp
+    ? String(forwardedIp).split(",")[0].trim()
+    : req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || "";
   const isLocal =
-    ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+    ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1" || ip === "localhost";
   if (!isLocal) {
     res
       .status(403)
@@ -34,10 +37,9 @@ export function requireLocalhost(req: any, res: any, next: () => void): void {
 // Security: Sanitizer to prevent any API key leakage into logs / error responses.
 // ---------------------------------------------------------------------------
 export function sanitizeError(msg: unknown): string {
-  return String(msg || "").replace(
-    /AIza[0-9A-Za-z\-_]{35}/g,
-    "AIzaSy...[REDACTED]",
-  );
+  return String(msg || "")
+    .replace(/AIza[0-9A-Za-z\-_]{35}/g, "AIzaSy...[REDACTED]")
+    .replace(/AQ\.[0-9A-Za-z\-_]{30,}/g, "AQ...[REDACTED]");
 }
 
 // ---------------------------------------------------------------------------

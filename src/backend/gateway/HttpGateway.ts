@@ -32,6 +32,7 @@ import {
   DATA_DIR,
   dataFile,
   resolveApiKeyWithMetadata,
+  hasGeminiApiKey,
   setGeminiApiKey,
   clearGeminiApiKey,
 } from "../../../server_paths.ts";
@@ -59,7 +60,8 @@ try {
 
 export function appendLog(fileName: string, message: string): void {
   try {
-    const line = `[${new Date().toISOString()}] ${message}\n`;
+    const sanitized = sanitizeError(message);
+    const line = `[${new Date().toISOString()}] ${sanitized}\n`;
     fs.appendFile(path.join(LOGS_DIR, fileName), line, () => {});
   } catch {
     /* logging is best-effort */
@@ -79,11 +81,19 @@ export function logJson(
   data: Record<string, unknown> = {},
 ): void {
   try {
+    const sanitizedData: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (typeof v === "string") {
+        sanitizedData[k] = sanitizeError(v);
+      } else {
+        sanitizedData[k] = v;
+      }
+    }
     const entry = JSON.stringify({
       timestamp: new Date().toISOString(),
       level,
-      event,
-      ...data,
+      event: sanitizeError(event),
+      ...sanitizedData,
     });
     fs.appendFile(
       path.join(LOGS_DIR, "app.log.json"),
@@ -120,7 +130,15 @@ function saveSettingsFile(data: Record<string, unknown>): void {
 // ---------------------------------------------------------------------------
 export function createHttpApp(): express.Application {
   const app = express();
+
+  // Trust first proxy hop in production (Nginx, Caddy, Cloudflare, ALB, K8s Ingress)
+  if (process.env.NODE_ENV === "production") {
+    app.set("trust proxy", 1);
+  }
+
+  // 10MB payload limit enforcement
   app.use(express.json({ limit: "10mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
   // ── Environment-Aware Security Headers Middleware ─────────────────────────
   app.use((req, res, next) => {
@@ -778,8 +796,11 @@ export function createHttpApp(): express.Application {
   // ── Remote Voice Companion REST API (Phase 7) ───────────────────────────
 
   const requireLocalhostOrPairedDevice = async (req: any, res: any, next: () => void) => {
-    const ip = req.socket?.remoteAddress || req.connection?.remoteAddress || "";
-    const isLocal = ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+    const forwardedIp = req.headers["x-forwarded-for"];
+    const ip = forwardedIp
+      ? String(forwardedIp).split(",")[0].trim()
+      : req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || "";
+    const isLocal = !forwardedIp && (ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1" || ip === "localhost");
 
     const authHeader = req.headers.authorization || "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : authHeader.trim();
@@ -2514,6 +2535,11 @@ export function createHttpApp(): express.Application {
   });
 
   app.post("/api/config/apikey", requireLocalhost, async (req, res) => {
+    if (process.env.NODE_ENV === "production") {
+      return res.status(403).json({
+        error: "Forbidden: API key mutation via HTTP is disabled in production. Secrets must be configured strictly in the server environment.",
+      });
+    }
     try {
       const key: string = (req.body?.apiKey ?? "").toString().trim();
       if (!key) {
@@ -2565,6 +2591,11 @@ export function createHttpApp(): express.Application {
   });
 
   app.delete("/api/config/apikey", requireLocalhost, (_req, res) => {
+    if (process.env.NODE_ENV === "production") {
+      return res.status(403).json({
+        error: "Forbidden: API key mutation via HTTP is disabled in production. Secrets must be configured strictly in the server environment.",
+      });
+    }
     clearGeminiApiKey();
     delete process.env.GEMINI_API_KEY;
     delete process.env.GOOGLE_API_KEY;
@@ -2573,6 +2604,35 @@ export function createHttpApp(): express.Application {
     logJson("info", "apikey_cleared", {});
     res.json({ ok: true, hasApiKey: false });
   });
+
+  // ── Production Health & Readiness Endpoints ──────────────────────────────
+  const healthHandler = async (_req: express.Request, res: express.Response) => {
+    try {
+      const { securityPolicyEngine } = await import("../security/SecurityPolicyEngine.ts");
+      const { emergencyStopCoordinator } = await import("../remote/EmergencyStopCoordinator.ts");
+      const isLockedDown = securityPolicyEngine.getMode() === "LOCKDOWN";
+      const isEmergencyStopped = emergencyStopCoordinator.isActive();
+      const hasKey = hasGeminiApiKey();
+
+      const status = isEmergencyStopped || isLockedDown ? "degraded" : "ok";
+      res.json({
+        status,
+        service: "myraa-backend",
+        version: "2.0.0",
+        uptime: Math.floor(process.uptime()),
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || "development",
+        hasApiKey: hasKey,
+        emergencyStop: isEmergencyStopped,
+        securityLockdown: isLockedDown,
+      });
+    } catch (e: any) {
+      res.status(500).json({ status: "error", error: sanitizeError(e?.message || e) });
+    }
+  };
+
+  app.get("/health", healthHandler);
+  app.get("/api/health", healthHandler);
 
   // ── Agent health proxy ─────────────────────────────────────────────────
   app.get("/api/agent-health", async (_req, res) => {

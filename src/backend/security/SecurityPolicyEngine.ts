@@ -29,6 +29,7 @@ import { contentSanitizer } from "./ContentSanitizer.ts";
 
 const WORKSPACE = process.env.SORA_WORKSPACE_DIR || process.cwd();
 export const POLICY_SIGNING_SECRET =
+  process.env.POLICY_SIGNING_SECRET ||
   process.env.MYRAA_POLICY_SECRET ||
   process.env.MYRAA_SECURITY_SECRET ||
   crypto.randomBytes(32).toString("hex");

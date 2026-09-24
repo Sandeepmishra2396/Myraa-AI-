@@ -16,6 +16,7 @@
 
 import http from "http";
 import path from "path";
+import fs from "fs";
 import { WebSocketServer } from "ws";
 import dotenv from "dotenv";
 
@@ -45,9 +46,26 @@ initGeminiLoggers(logStartup, logError, logJson);
 
 async function startServer() {
   const app = createHttpApp();
-  const PORT = 3000;
+  const PORT = parseInt(process.env.PORT || "3000", 10);
+  const HOST = process.env.HOST || "0.0.0.0";
 
-  const server = http.createServer(app);
+  let server: http.Server | import("https").Server;
+  const tlsCertPath = process.env.MYRAA_TLS_CERT;
+  const tlsKeyPath = process.env.MYRAA_TLS_KEY;
+
+  if (tlsCertPath && tlsKeyPath && fs.existsSync(tlsCertPath) && fs.existsSync(tlsKeyPath)) {
+    const https = await import("https");
+    server = https.createServer(
+      {
+        cert: fs.readFileSync(tlsCertPath),
+        key: fs.readFileSync(tlsKeyPath),
+      },
+      app,
+    );
+    console.log("[Server] Production native HTTPS/TLS enabled via certificate files.");
+  } else {
+    server = http.createServer(app);
+  }
 
   // WebSocket server — upgrades /live and /remote-live connections
   const wss = new WebSocketServer({ noServer: true });
@@ -60,8 +78,11 @@ async function startServer() {
       );
       const pathname = url.pathname;
       if (pathname === "/live" || pathname === "/remote-live") {
-        const ip = (socket as any).remoteAddress || request.socket?.remoteAddress || "";
-        const isLocal = ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+        const forwardedFor = request.headers["x-forwarded-for"];
+        const ip = typeof forwardedFor === "string"
+          ? forwardedFor.split(",")[0].trim()
+          : (socket as any).remoteAddress || request.socket?.remoteAddress || "";
+        const isLocal = !forwardedFor && (ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1");
 
         // Validate Transport Security: Non-localhost WebSocket connections must use WSS
         if (!isLocal) {
@@ -220,9 +241,11 @@ async function startServer() {
     });
   }
 
-  server.listen(PORT, "0.0.0.0", () => {
-    logStartup(`MYRAA V2 server started on http://localhost:${PORT}`);
-    console.log(`[Server] Running on http://localhost:${PORT}`);
+  server.listen(PORT, HOST, () => {
+    const isTls = Boolean(tlsCertPath && tlsKeyPath && fs.existsSync(tlsCertPath) && fs.existsSync(tlsKeyPath));
+    const protocol = isTls ? "https" : "http";
+    logStartup(`MYRAA V2 server started on ${protocol}://${HOST}:${PORT}`);
+    console.log(`[Server] Running on ${protocol}://${HOST}:${PORT}`);
     ensureDesktopAgent().catch((e) =>
       console.warn(`[Desktop Agent] Boot probe failed: ${e?.message || e}`),
     );
