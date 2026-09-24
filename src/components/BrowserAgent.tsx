@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   X, 
   ExternalLink, 
@@ -235,19 +235,45 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
     if (!showLocalConsole) return;
     let isMounted = true;
     const fetchStatus = async () => {
-      try {
-        const res = await fetch("http://127.0.0.1:8765/health", { cache: "no-store" });
-        if (res.ok && isMounted) {
-          const data = await res.json();
-          setIsLocalConnected(true);
-          if (data.tools && Array.isArray(data.tools)) {
-            setLocalLogs([`Desktop Agent connected on port 8765. ${data.tools.length || 57} tools active.`]);
+      const isLocalOrigin =
+        typeof window !== "undefined" &&
+        (window.location.hostname === "localhost" ||
+          window.location.hostname === "127.0.0.1" ||
+          window.location.hostname === "::1");
+
+      if (isLocalOrigin) {
+        try {
+          const res = await fetch("http://127.0.0.1:8765/health", { cache: "no-store" });
+          if (res.ok && isMounted) {
+            const data = await res.json();
+            setIsLocalConnected(true);
+            if (data.tools && Array.isArray(data.tools)) {
+              setLocalLogs([`Desktop Agent connected on port 8765. ${data.tools.length || 57} tools active.`]);
+            }
+            return;
           }
+        } catch {
+          // fall through to proxy
+        }
+      }
+
+      // Remote / Cloud host: use server-side agent health proxy
+      try {
+        const res2 = await fetch("/api/agent-health", { cache: "no-store" });
+        if (res2.ok && isMounted) {
+          const d = await res2.json();
+          setIsLocalConnected(Boolean(d.online));
+          if (d.online) {
+            setLocalLogs([`Desktop Agent connected via proxy. ${d.tool_count || 57} tools active.`]);
+          }
+          return;
         }
       } catch {
-        if (isMounted) {
-          setIsLocalConnected(false);
-        }
+        /* ignore */
+      }
+
+      if (isMounted) {
+        setIsLocalConnected(false);
       }
     };
 

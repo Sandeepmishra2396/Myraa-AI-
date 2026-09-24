@@ -230,7 +230,7 @@ export const RemoteMobileApp: React.FC = () => {
 
   // Setup MyraAudioSession when authenticated
   useEffect(() => {
-    if (!session?.token) {
+    if (!session?.token && !session?.accessToken) {
       if (audioSessionRef.current) {
         audioSessionRef.current.disconnect();
         audioSessionRef.current = null;
@@ -239,7 +239,8 @@ export const RemoteMobileApp: React.FC = () => {
     }
 
     const audioSession = new MyraAudioSession({
-      token: session.token,
+      token: session.accessToken || session.token,
+      onSessionUpdate: (updated) => setSession(updated),
       onStateChange: (state) => {
         setLiveState(state);
         if (state === "disconnected") {

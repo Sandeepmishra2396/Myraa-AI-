@@ -68,7 +68,16 @@ async function startServer() {
   }
 
   // WebSocket server — upgrades /live and /remote-live connections
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({
+    noServer: true,
+    handleProtocols: (protocols) => {
+      if (protocols.has("myraa-auth")) {
+        return "myraa-auth";
+      }
+      // Fail closed: reject any unknown or arbitrary protocols
+      return false;
+    },
+  });
 
   server.on("upgrade", async (request, socket, head) => {
     try {
@@ -87,20 +96,24 @@ async function startServer() {
         // Validate Transport Security: Non-localhost WebSocket connections must use WSS
         if (!isLocal) {
           const { dataProtectionService } = await import("./src/backend/security/DataProtectionService.ts");
-          const proto = request.headers["x-forwarded-proto"] || ((socket as any).encrypted ? "wss" : "ws");
+          const protoHeader = request.headers["x-forwarded-proto"];
+          const protoFirst = typeof protoHeader === "string" ? protoHeader.split(",")[0].trim() : protoHeader;
+          const isSslOn = request.headers["x-forwarded-ssl"] === "on" || request.headers["front-end-https"] === "on";
+          const proto = protoFirst || (isSslOn ? "wss" : ((socket as any).encrypted ? "wss" : "ws"));
           const transportCheck = dataProtectionService.validateTransport({
             protocol: String(proto),
             ipAddress: ip,
             targetName: pathname,
           });
           if (!transportCheck.secure) {
+            console.warn(`[WebSocket Upgrade] Insecure transport rejected for ${ip} (proto=${proto}): ${transportCheck.error}`);
             socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
             socket.destroy();
             return;
           }
         }
 
-        // Extract token from Sec-WebSocket-Protocol or query parameter
+        // Extract token from Sec-WebSocket-Protocol
         let token: string | null = null;
         const protocols = request.headers["sec-websocket-protocol"];
         if (protocols) {
@@ -110,14 +123,25 @@ async function startServer() {
             token = parts[authIdx + 1];
           }
         }
-        if (!token && url.searchParams.has("token")) {
-          token = url.searchParams.get("token");
+
+        // Reject token parameter in URL query on remote non-localhost connections to eliminate credential leakage
+        if (url.searchParams.has("token")) {
+          if (!isLocal) {
+            console.warn(`[WebSocket Upgrade] Insecure query-parameter authentication rejected for remote client ${ip}. Use Sec-WebSocket-Protocol.`);
+            socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+            socket.destroy();
+            return;
+          }
+          if (!token) {
+            token = url.searchParams.get("token");
+          }
         }
 
         // Non-localhost connections MUST present an authenticated device token
         let remoteDevice = null;
         if (!isLocal || token) {
           if (!token) {
+            console.warn(`[WebSocket Upgrade] Missing authentication token for remote client from ${ip}`);
             socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
             socket.destroy();
             return;
@@ -125,6 +149,7 @@ async function startServer() {
           const { remoteSecurityCoordinator } = await import("./src/backend/security/RemoteSecurityCoordinator.ts");
           const auth = await remoteSecurityCoordinator.authenticateRemoteCredential(token, ip, request.headers["user-agent"]);
           if (!auth.authenticated || !auth.device) {
+            console.warn(`[WebSocket Upgrade] Authentication failed for remote client ${ip}: ${auth.error || "Invalid credential"}`);
             socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
             socket.destroy();
             return;
@@ -135,6 +160,7 @@ async function startServer() {
         // Reject new connections if Security Lockdown is active
         const { securityPolicyEngine } = await import("./src/backend/security/SecurityPolicyEngine.ts");
         if (securityPolicyEngine.getMode() === "LOCKDOWN") {
+          console.warn("[WebSocket Upgrade] Connection rejected: Security Lockdown active");
           socket.write("HTTP/1.1 423 Locked\r\n\r\n");
           socket.destroy();
           return;
@@ -143,6 +169,7 @@ async function startServer() {
         // Reject new connections if Emergency Stop is currently active
         const { emergencyStopCoordinator } = await import("./src/backend/remote/EmergencyStopCoordinator.ts");
         if (emergencyStopCoordinator.isActive()) {
+          console.warn("[WebSocket Upgrade] Connection rejected: Emergency Stop active");
           socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
           socket.destroy();
           return;
@@ -155,7 +182,8 @@ async function startServer() {
       } else {
         socket.destroy();
       }
-    } catch {
+    } catch (err: any) {
+      console.error("[WebSocket Upgrade Error]:", err?.message || err);
       socket.destroy();
     }
   });

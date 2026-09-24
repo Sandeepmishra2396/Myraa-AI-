@@ -9,6 +9,8 @@
  * - Input & Output AnalyserNodes for real-time waveform visuals.
  */
 
+import { getValidRemoteWsToken, StoredRemoteSession } from "./remoteAuth";
+
 export type LiveState = "disconnected" | "connecting" | "listening" | "speaking";
 
 // PCM Conversion Helper: converts Float32Array [-1.0, 1.0] to signed Int16 Raw PCM Little Endian
@@ -107,6 +109,7 @@ export class MyraAudioSession {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   private onNotification?: (notification: any) => void;
+  private onSessionUpdate?: (updated: StoredRemoteSession) => void;
   private token?: string;
 
   constructor(handlers: {
@@ -116,6 +119,7 @@ export class MyraAudioSession {
     onError: (error: string) => void;
     onMemorySync?: (memories: any[]) => void;
     onNotification?: (notification: any) => void;
+    onSessionUpdate?: (updated: StoredRemoteSession) => void;
     token?: string;
   }) {
     this.onStateChange = handlers.onStateChange;
@@ -124,6 +128,7 @@ export class MyraAudioSession {
     this.onError = handlers.onError;
     this.onMemorySync = handlers.onMemorySync;
     this.onNotification = handlers.onNotification;
+    this.onSessionUpdate = handlers.onSessionUpdate;
     this.token = handlers.token;
   }
 
@@ -276,13 +281,24 @@ export class MyraAudioSession {
           window.location.hostname === "127.0.0.1" ||
           window.location.hostname === "::1");
 
+      if (!isLocalHost) {
+        try {
+          const validToken = await getValidRemoteWsToken(this.onSessionUpdate);
+          if (validToken) {
+            this.token = validToken;
+          }
+        } catch {
+          /* ignore and check fallback */
+        }
+      }
+
       if (!isLocalHost && !this.token && typeof localStorage !== "undefined") {
         try {
           const raw = localStorage.getItem("sora_remote_session");
           if (raw) {
             const sess = JSON.parse(raw);
             if (sess?.token || sess?.accessToken) {
-              this.token = sess.token || sess.accessToken;
+              this.token = sess.accessToken || sess.token;
             }
           }
         } catch { /* ignore */ }
@@ -298,8 +314,12 @@ export class MyraAudioSession {
       }
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const endpoint = this.token ? `/remote-live?token=${encodeURIComponent(this.token)}` : "/live";
-      this.ws = new WebSocket(`${protocol}//${window.location.host}${endpoint}`);
+      const endpoint = isLocalHost && !this.token ? "/live" : "/remote-live";
+      const wsUrl = `${protocol}//${window.location.host}${endpoint}`;
+      const wsProtocols = this.token ? ["myraa-auth", this.token] : undefined;
+
+      console.log(`[Myraa WS] Connecting to ${endpoint} (authenticated=${Boolean(this.token)})...`);
+      this.ws = wsProtocols ? new WebSocket(wsUrl, wsProtocols) : new WebSocket(wsUrl);
       this.ws.binaryType = "blob";
 
       this.ws.onopen = () => {
@@ -324,6 +344,13 @@ export class MyraAudioSession {
         // we can reconnect. The microphone and AudioContexts will be re-created on
         // the next connect() call.
         this._closeWsOnly();
+
+        if (code === 4401 || reason.includes("DEVICE_REVOKED") || reason.includes("Device revoked")) {
+          this.onError("DEVICE_REVOKED: This device pairing has been revoked by the admin.");
+          this._cleanupAudio();
+          this.setState("disconnected");
+          return;
+        }
 
         if (this.isIntentionalClose) {
           // User clicked Stop — do a clean full disconnect and stop here.
@@ -380,7 +407,7 @@ export class MyraAudioSession {
       this.reconnectTimer = null;
     }
 
-    this.reconnectTimer = setTimeout(() => {
+    this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null;
       if (this.isIntentionalClose) return;
 
@@ -393,13 +420,24 @@ export class MyraAudioSession {
           window.location.hostname === "127.0.0.1" ||
           window.location.hostname === "::1");
 
+      if (!isLocalHost) {
+        try {
+          const freshToken = await getValidRemoteWsToken(this.onSessionUpdate);
+          if (freshToken) {
+            this.token = freshToken;
+          }
+        } catch {
+          // ignore and proceed
+        }
+      }
+
       if (!isLocalHost && !this.token && typeof localStorage !== "undefined") {
         try {
           const raw = localStorage.getItem("sora_remote_session");
           if (raw) {
             const sess = JSON.parse(raw);
             if (sess?.token || sess?.accessToken) {
-              this.token = sess.token || sess.accessToken;
+              this.token = sess.accessToken || sess.token;
             }
           }
         } catch { /* ignore */ }
@@ -412,12 +450,13 @@ export class MyraAudioSession {
       }
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const endpoint = this.token ? `/remote-live?token=${encodeURIComponent(this.token)}` : "/live";
+      const endpoint = isLocalHost && !this.token ? "/live" : "/remote-live";
       const wsUrl = `${protocol}//${window.location.host}${endpoint}`;
-      console.log(`[Myraa WS] Reconnecting to ${wsUrl}...`);
+      const wsProtocols = this.token ? ["myraa-auth", this.token] : undefined;
+      console.log(`[Myraa WS] Reconnecting to ${endpoint}...`);
 
       try {
-        const ws = new WebSocket(wsUrl);
+        const ws = wsProtocols ? new WebSocket(wsUrl, wsProtocols) : new WebSocket(wsUrl);
         ws.binaryType = "blob";
         this.ws = ws;
 
@@ -443,6 +482,12 @@ export class MyraAudioSession {
           const reason = event?.reason || "";
           console.log(`[Myraa WS] Reconnect WS closed (code=${code}, reason="${reason}")`);
           this._closeWsOnly();
+          if (code === 4401 || reason.includes("DEVICE_REVOKED") || reason.includes("Device revoked")) {
+            this.onError("DEVICE_REVOKED: This device pairing has been revoked by the admin.");
+            this._cleanupAudio();
+            this.setState("disconnected");
+            return;
+          }
           if (!this.isIntentionalClose) {
             this.scheduleReconnect();
           } else {

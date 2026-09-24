@@ -432,7 +432,7 @@ export default function App() {
   // Sync token to audio session whenever remoteSession changes
   useEffect(() => {
     if (sessionRef.current) {
-      sessionRef.current.setToken(remoteSession?.token || remoteSession?.accessToken || "");
+      sessionRef.current.setToken(remoteSession?.accessToken || remoteSession?.token || "");
     }
   }, [remoteSession]);
 
@@ -512,7 +512,8 @@ export default function App() {
   // Initialize the audio session handlers once on mount
   useEffect(() => {
     sessionRef.current = new MyraAudioSession({
-      token: remoteSession?.token || remoteSession?.accessToken,
+      token: remoteSession?.accessToken || remoteSession?.token,
+      onSessionUpdate: (updated) => setRemoteSession(updated),
       onStateChange: (newState) => {
         setState(newState);
         if (newState === "disconnected") {

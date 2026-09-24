@@ -142,8 +142,17 @@ export class DataProtectionService {
       options.ipAddress === "::ffff:127.0.0.1" ||
       options.ipAddress === "localhost";
 
-    const cleanProto = (options.protocol || "").toLowerCase().trim();
-    const isEncrypted = cleanProto === "https:" || cleanProto === "wss:" || cleanProto === "https" || cleanProto === "wss";
+    const protos = (options.protocol || "")
+      .toLowerCase()
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const externalProto = protos[0] || "";
+    const isEncrypted =
+      externalProto === "https:" ||
+      externalProto === "wss:" ||
+      externalProto === "https" ||
+      externalProto === "wss";
 
     if (!isLocal && !isEncrypted) {
       const reason = `INSECURE_TRANSPORT_REJECTED: Remote connection via '${options.protocol}' rejected. HTTPS/WSS is mandatory for non-localhost endpoints.`;

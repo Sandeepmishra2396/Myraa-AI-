@@ -1,5 +1,8 @@
 import { StoredRemoteSession, STORAGE_KEY } from "../components/remote/CloudPairingModal";
 
+export type { StoredRemoteSession };
+export { STORAGE_KEY };
+
 export interface RefreshResult {
   success: boolean;
   session?: StoredRemoteSession;
@@ -110,4 +113,63 @@ export async function authenticatedRemoteFetch(
   }
 
   return { response: res };
+}
+
+/**
+ * Safely parse JSON payload from a signed token (works in both Browser and Node.js).
+ */
+export function parseTokenPayload(token: string): Record<string, any> | null {
+  try {
+    const dotIdx = token.indexOf(".");
+    if (dotIdx === -1) return null;
+    const rawPayload = token.slice(token.startsWith("myraa_at_") ? "myraa_at_".length : 0, dotIdx);
+    let b64 = rawPayload.replace(/-/g, "+").replace(/_/g, "/");
+    while (b64.length % 4 !== 0) {
+      b64 += "=";
+    }
+    const jsonStr = typeof atob === "function"
+      ? atob(b64)
+      : Buffer.from(b64, "base64").toString("utf-8");
+    return JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolves a valid access token or durable device token for remote WebSocket connection.
+ * If the current access token is missing, expired, or expiring soon (< 30s), attempts an automatic refresh.
+ */
+export async function getValidRemoteWsToken(
+  onUpdate?: (updated: StoredRemoteSession) => void,
+): Promise<string | null> {
+  if (typeof localStorage === "undefined") return null;
+  let sess: StoredRemoteSession | null = null;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) sess = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!sess) return null;
+
+  // Check if accessToken is valid and not expired
+  if (sess.accessToken && sess.accessToken.startsWith("myraa_at_")) {
+    const payload = parseTokenPayload(sess.accessToken);
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (payload?.exp && payload.exp > nowSec + 30) {
+      return sess.accessToken;
+    }
+  }
+
+  // Token is expired, expiring, or missing -> attempt refresh
+  if (sess.refreshToken || sess.token) {
+    const refreshRes = await refreshRemoteSession(sess, onUpdate);
+    if (refreshRes.success && refreshRes.session?.accessToken) {
+      return refreshRes.session.accessToken;
+    }
+  }
+
+  // Fallback to durable device token or whatever token is stored
+  return sess.accessToken || sess.token || null;
 }

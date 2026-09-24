@@ -283,29 +283,38 @@ export function SettingsPanel({
   useEffect(() => {
     if (!isOpen) return;
     const probe = async () => {
-      try {
-        // Re-use the local agent directly (same machine, same browser).
-        const res = await fetch("http://127.0.0.1:8765/health", { cache: "no-store" });
-        if (!res.ok) {
-          setAgentHealth({ online: false });
-          return;
-        }
-        const data = await res.json();
-        setAgentHealth({ online: true, toolCount: data.tool_count });
-      } catch {
-        // Cross-origin may fail; try the server proxy as a fallback.
+      const isLocalOrigin =
+        typeof window !== "undefined" &&
+        (window.location.hostname === "localhost" ||
+          window.location.hostname === "127.0.0.1" ||
+          window.location.hostname === "::1");
+
+      if (isLocalOrigin) {
         try {
-          const res2 = await fetch("/api/agent-health", { cache: "no-store" });
-          if (res2.ok) {
-            const d = await res2.json();
-            setAgentHealth({ online: !!d.online, toolCount: d.tool_count });
+          // Re-use the local agent directly (same machine, same browser).
+          const res = await fetch("http://127.0.0.1:8765/health", { cache: "no-store" });
+          if (res.ok) {
+            const data = await res.json();
+            setAgentHealth({ online: true, toolCount: data.tool_count });
             return;
           }
         } catch {
-          /* ignore */
+          // fall through to server proxy
         }
-        setAgentHealth({ online: false });
       }
+
+      // Remote / Cloud web companion mode: use server proxy to avoid mixed-content / private-network CORS errors
+      try {
+        const res2 = await fetch("/api/agent-health", { cache: "no-store" });
+        if (res2.ok) {
+          const d = await res2.json();
+          setAgentHealth({ online: !!d.online, toolCount: d.tool_count });
+          return;
+        }
+      } catch {
+        /* ignore */
+      }
+      setAgentHealth({ online: false });
     };
     probe();
     const id = setInterval(probe, 5000);
