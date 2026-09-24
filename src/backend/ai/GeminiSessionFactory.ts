@@ -2588,7 +2588,7 @@ export class GeminiSessionFactory {
             /quota|RESOURCE_EXHAUSTED|rate limit/i.test(sanitizedReason)
           ) {
             categorizedError = `GEMINI_QUOTA_EXCEEDED: Gemini quota or rate limit exceeded. (${sanitizedReason})`;
-          } else if (code && code !== 1000 && !isDurationLimit) {
+          } else if (code && code !== 1000 && !isDurationLimit && !flags.isClientClosed && !/operation was aborted|aborted|client closed|intentional/i.test(rawReason)) {
             categorizedError = `GEMINI_SESSION_CLOSED: Live session closed (code ${code}${sanitizedReason ? `: ${sanitizedReason}` : ""})`;
           }
 

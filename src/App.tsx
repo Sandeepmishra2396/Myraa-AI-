@@ -36,9 +36,43 @@ import { MyraaSettings, DEFAULT_SETTINGS, loadSettings, saveSettings } from "./l
 import { MyraaWakeWordDetector } from "./lib/wakeWord";
 import { CloudPairingModal, StoredRemoteSession, STORAGE_KEY } from "./components/remote/CloudPairingModal";
 import { authenticatedRemoteFetch } from "./lib/remoteAuth";
+function getStoredRemoteAuthHeaders(): Record<string, string> {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const sess = JSON.parse(raw);
+      const token = sess.accessToken || sess.token;
+      if (token) return { Authorization: `Bearer ${token}` };
+    }
+  } catch {}
+  return {};
+}
 
 export default function App() {
   const [state, setState] = useState<LiveState>("disconnected");
+
+  const isRemoteHost =
+    typeof window !== "undefined" &&
+    window.location.hostname !== "localhost" &&
+    window.location.hostname !== "127.0.0.1" &&
+    window.location.hostname !== "::1";
+
+  const [remoteSession, setRemoteSession] = useState<StoredRemoteSession | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const getAuthHeaders = (): Record<string, string> => {
+    const token = remoteSession?.accessToken || remoteSession?.token;
+    if (token) return { Authorization: `Bearer ${token}` };
+    return getStoredRemoteAuthHeaders();
+  };
 
   // Phase 8 Multimodal Vision & Suggestion States
   const [continuousScreenEnabled, setContinuousScreenEnabled] = useState<boolean>(false);
@@ -94,8 +128,9 @@ export default function App() {
   useEffect(() => {
     let timer: any;
     const fetchMultimodalStatus = async () => {
+      const authHeaders = getAuthHeaders();
       try {
-        const res = await fetch("/api/multimodal/screen/continuous/status");
+        const res = await fetch("/api/multimodal/screen/continuous/status", { headers: authHeaders });
         if (res.ok) {
           const data = await res.json();
           setContinuousScreenEnabled(!!data.enabled);
@@ -104,7 +139,7 @@ export default function App() {
         }
       } catch {}
       try {
-        const sugRes = await fetch("/api/multimodal/suggestions?limit=3");
+        const sugRes = await fetch("/api/multimodal/suggestions?limit=3", { headers: authHeaders });
         if (sugRes.ok) {
           const sugData = await sugRes.json();
           if (sugData.suggestions) {
@@ -117,20 +152,31 @@ export default function App() {
     fetchMultimodalStatus();
     timer = setInterval(fetchMultimodalStatus, 8000);
     return () => clearInterval(timer);
-  }, []);
+  }, [remoteSession]);
 
   const handleToggleContinuousScreen = async () => {
     try {
       const action = continuousScreenEnabled ? "stop" : "start";
+      const authHeaders = getAuthHeaders();
       const res = await fetch("/api/multimodal/screen/continuous", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({ action }),
       });
       if (res.ok) {
         const data = await res.json();
         setContinuousScreenEnabled(!!data.enabled);
         setContinuousScreenPaused(!!data.isPaused);
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        console.warn("[Screen/Vision] /api/multimodal/screen/continuous status:", res.status, errJson);
+      }
+
+      // Synchronize visual capture: if turning on Vision, ensure feed is streaming; if turning off, stop stream
+      if (action === "start" && !isScreenSharing) {
+        await startScreenSharing();
+      } else if (action === "stop" && isScreenSharing) {
+        stopScreenSharing();
       }
     } catch (e) {
       console.error("Failed to toggle continuous screen perception:", e);
@@ -139,9 +185,10 @@ export default function App() {
 
   const handleApplySuggestion = async (sugId: string) => {
     try {
+      const authHeaders = getAuthHeaders();
       const res = await fetch(`/api/multimodal/suggestions/${sugId}/apply`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders },
       });
       const data = await res.json();
       if (data.checkpointRequired) {
@@ -209,14 +256,57 @@ export default function App() {
   const startScreenSharing = async () => {
     setErrorText(null);
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 5 }
-        },
-        audio: false
-      });
+      let stream: MediaStream;
+      const isMobile = typeof navigator !== "undefined" && /android|iphone|ipad|mobile/i.test(navigator.userAgent);
+
+      if (isMobile || !navigator.mediaDevices?.getDisplayMedia) {
+        // Mobile or unsupported display capture: use device camera
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: "environment" },
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
+            audio: false,
+          });
+        } catch {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          });
+        }
+      } else {
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: {
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+              frameRate: { ideal: 5 },
+            },
+            audio: false,
+          });
+        } catch (displayErr: any) {
+          // If screen capture was rejected or unavailable, try camera fallback
+          if (
+            displayErr?.name === "NotAllowedError" ||
+            displayErr?.name === "NotFoundError" ||
+            !navigator.mediaDevices?.getDisplayMedia
+          ) {
+            console.log("[Screen/Vision] Screen share denied or unavailable. Falling back to camera stream...");
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: {
+                facingMode: { ideal: "environment" },
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+              },
+              audio: false,
+            });
+          } else {
+            throw displayErr;
+          }
+        }
+      }
 
       screenStreamRef.current = stream;
 
@@ -229,6 +319,7 @@ export default function App() {
 
       setIsScreenSharing(true);
       setIsScreenSharingPaused(false);
+      setContinuousScreenEnabled(true);
 
       // Stop handling when native stop sharing bar button ends
       stream.getVideoTracks()[0].onended = () => {
@@ -249,9 +340,9 @@ export default function App() {
       }, 500);
 
     } catch (e: any) {
-      console.error("Screen sharing permission declined or missing API:", e);
+      console.error("Screen/Vision permission declined or missing API:", e);
       if (e.name !== "NotAllowedError") {
-        setErrorText(`Could not capture screen: ${e.message || e}`);
+        setErrorText(`Could not start Vision feed: ${e.message || e}`);
       }
     }
   };
@@ -278,6 +369,7 @@ export default function App() {
 
     setIsScreenSharing(false);
     setIsScreenSharingPaused(false);
+    setContinuousScreenEnabled(false);
   };
 
   const pauseScreenSharing = () => {
@@ -386,22 +478,6 @@ export default function App() {
     const next = saveSettings(patch);
     setSettings(next);
   };
-
-  const isRemoteHost =
-    typeof window !== "undefined" &&
-    window.location.hostname !== "localhost" &&
-    window.location.hostname !== "127.0.0.1" &&
-    window.location.hostname !== "::1";
-
-  const [remoteSession, setRemoteSession] = useState<StoredRemoteSession | null>(() => {
-    if (typeof window === "undefined") return null;
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
-  });
 
   const handleUnpairDevice = async () => {
     if (remoteSession?.deviceId) {
@@ -651,6 +727,10 @@ export default function App() {
           setReconnectStatus(err.replace("RECONNECTING:", "").trim());
         } else {
           setReconnectStatus(null);
+          if (/operation was aborted/i.test(err)) {
+            console.log("[App] Suppressing expected abort/close notification:", err);
+            return;
+          }
           setErrorText(err);
         }
       },

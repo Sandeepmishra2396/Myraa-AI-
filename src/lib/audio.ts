@@ -164,6 +164,9 @@ export class MyraAudioSession {
     this.isIntentionalClose = false;
     this.setState("connecting");
 
+    // Clean up any lingering previous session audio resources before acquiring a fresh stream
+    this._cleanupAudio();
+
     try {
       // 1. Acquire microphone stream directly within the user click gesture context.
       // Calling getUserMedia here preserves the user gesture token so Chrome/Edge
@@ -223,7 +226,6 @@ export class MyraAudioSession {
         return;
       }
 
-      this._cleanupAudio();
       this.inputAudioCtx = new AudioContextClass({ sampleRate: 16000 });
       this.outputAudioCtx = new AudioContextClass({ sampleRate: 24000 });
 
@@ -248,6 +250,9 @@ export class MyraAudioSession {
       this.inputAnalyser = this.inputAudioCtx.createAnalyser();
       this.inputAnalyser.fftSize = 256;
 
+      if (!this.micStream) {
+        throw new Error("Microphone stream is not available.");
+      }
       this.micSourceNode = this.inputAudioCtx.createMediaStreamSource(this.micStream);
       this.micSourceNode.connect(this.inputAnalyser);
 
