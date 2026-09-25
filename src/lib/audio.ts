@@ -106,12 +106,16 @@ export class MyraAudioSession {
   private isIntentionalClose = false;
   /** How many consecutive reconnect attempts have been made. */
   private reconnectAttempts = 0;
-  /** Maximum reconnect attempts before giving up. */
-  private readonly MAX_RECONNECT_ATTEMPTS = 5;
-  /** Base delay in ms. Doubles each attempt: 1s, 2s, 4s, 8s, 16s. */
+  /** Maximum reconnect attempts before giving up. 10 × exponential (capped at 30s) = ~3 minutes — enough to survive a Render deployment restart (60–120s). */
+  private readonly MAX_RECONNECT_ATTEMPTS = 10;
+  /** Base delay in ms. Doubles each attempt (capped at 30s): 1s, 2s, 4s, 8s, 16s, 30s, 30s… */
   private readonly RECONNECT_BASE_DELAY_MS = 1000;
   /** Timer handle for a pending reconnect. */
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectTimer: ReturnType<typeof setInterval> | null = null;
+  /** Keepalive ping interval — prevents Render's proxy from timing out idle WebSocket connections after 30 min. */
+  private readonly KEEPALIVE_INTERVAL_MS = 25000;
+  /** Active keepalive timer handle. Cleared in _closeWsOnly(). */
+  private _keepaliveTimer: ReturnType<typeof setInterval> | null = null;
 
   private onNotification?: (notification: any) => void;
   private onSessionUpdate?: (updated: StoredRemoteSession) => void;
@@ -376,6 +380,15 @@ export class MyraAudioSession {
       this.ws.onopen = () => {
         console.log("[Myraa] Connected to server side WS bridge");
         if (!this.isActivated) return;
+        // Start keepalive ping — prevents Render's proxy from dropping idle WS after 30 min.
+        if (this._keepaliveTimer !== null) {
+          clearInterval(this._keepaliveTimer);
+        }
+        this._keepaliveTimer = setInterval(() => {
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: "ping" }));
+          }
+        }, this.KEEPALIVE_INTERVAL_MS);
         this.setState("listening");
       };
 
@@ -442,7 +455,10 @@ export class MyraAudioSession {
       return;
     }
 
-    const delay = this.RECONNECT_BASE_DELAY_MS * Math.pow(2, this.reconnectAttempts);
+    const delay = Math.min(
+      this.RECONNECT_BASE_DELAY_MS * Math.pow(2, this.reconnectAttempts),
+      30000  // cap at 30s — attempts 6–10 each wait 30s (covers a Render redeploy)
+    );
     this.reconnectAttempts += 1;
 
     console.log(`[Myraa WS] Reconnect attempt ${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS} in ${delay}ms...`);
@@ -519,6 +535,15 @@ export class MyraAudioSession {
           console.log("[Myraa WS] Reconnected to server bridge successfully.");
           this.reconnectAttempts = 0; // reset counter on success
           this.isActivated = true;
+          // Start keepalive ping — prevents Render's 30-min proxy timeout on idle WS connections.
+          if (this._keepaliveTimer !== null) {
+            clearInterval(this._keepaliveTimer);
+          }
+          this._keepaliveTimer = setInterval(() => {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+              this.ws.send(JSON.stringify({ type: "ping" }));
+            }
+          }, this.KEEPALIVE_INTERVAL_MS);
           // Stay in "connecting" until server sends { type:"status", status:"connected" }
         };
 
@@ -681,6 +706,11 @@ export class MyraAudioSession {
    * Used internally so reconnect can reopen WS without re-requesting the mic.
    */
   private _closeWsOnly(): void {
+    // Stop keepalive ping — must be cleared before the WS is nulled.
+    if (this._keepaliveTimer !== null) {
+      clearInterval(this._keepaliveTimer);
+      this._keepaliveTimer = null;
+    }
     if (this.ws) {
       try {
         // Null out handlers first so the onclose callback isn't invoked recursively.
