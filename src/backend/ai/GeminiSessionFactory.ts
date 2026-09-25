@@ -2267,6 +2267,68 @@ export interface SessionOptions {
   onRotate: () => Promise<void>;
 }
 
+export const LIVE_MODEL = "gemini-3.1-flash-live-preview";
+
+export function sanitizeGeminiErrorReason(rawReason: string | undefined | null): string {
+  return String(rawReason || "")
+    .replace(/AIza[0-9A-Za-z_-]{20,}/g, "AIzaSy...[REDACTED]")
+    .replace(/AQ\.[0-9A-Za-z_-]{20,}/g, "AQ....[REDACTED]")
+    .replace(/ya29\.[0-9A-Za-z._-]+/g, "ya29....[REDACTED]")
+    .replace(/auth_tokens\/[0-9A-Za-z._/-]+/g, "auth_tokens/[REDACTED]");
+}
+
+export function classifyGeminiLiveCloseError(
+  code: number | undefined,
+  rawReason: string | undefined | null,
+  liveModel: string = LIVE_MODEL,
+  flags: { isRotating?: boolean; isClientClosed?: boolean } = {},
+): { categorizedError: string | null; sanitizedReason: string; isAuthFailure: boolean } {
+  const sanitizedReason = sanitizeGeminiErrorReason(rawReason);
+  const isDurationLimit =
+    Boolean(flags.isRotating) ||
+    /GoAway|session duration|duration limit/i.test(sanitizedReason);
+
+  const isAuthFailure =
+    /API[_ ]?KEY|PERMISSION_DENIED|UNAUTHENTICATED|ACCESS_TOKEN_TYPE_UNSUPPORTED|invalid authentication credentials|Expected OAuth 2 access token|login cookie|invalid credentials/i.test(
+      sanitizedReason,
+    ) ||
+    (code === 1008 &&
+      /auth|credential|token|key|cookie|permission|unauthenticated/i.test(
+        sanitizedReason,
+      ));
+
+  let categorizedError: string | null = null;
+  if (isAuthFailure) {
+    const isProd =
+      process.env.NODE_ENV === "production" &&
+      process.env.SORA_LAUNCHED_BY !== "electron";
+    if (isProd) {
+      categorizedError = `GEMINI_AUTH_FAILED: Authentication failed. Please verify that the GEMINI_API_KEY environment variable in your Render Dashboard is set to a valid, active Google Gemini API key from Google AI Studio. (${sanitizedReason || "invalid credentials"})`;
+    } else {
+      categorizedError =
+        "Gemini API credential is invalid or expired. Please configure a valid Gemini credential in Settings.";
+    }
+  } else if (
+    /not found|not supported for bidiGenerateContent/i.test(sanitizedReason)
+  ) {
+    categorizedError = `GEMINI_MODEL_UNSUPPORTED: Model '${liveModel}' is not supported for Live voice. (${sanitizedReason})`;
+  } else if (
+    /quota|RESOURCE_EXHAUSTED|rate limit/i.test(sanitizedReason)
+  ) {
+    categorizedError = `GEMINI_QUOTA_EXCEEDED: Gemini quota or rate limit exceeded. (${sanitizedReason})`;
+  } else if (
+    code &&
+    code !== 1000 &&
+    !isDurationLimit &&
+    !flags.isClientClosed &&
+    !/operation was aborted|aborted|client closed|intentional/i.test(sanitizedReason)
+  ) {
+    categorizedError = `GEMINI_SESSION_CLOSED: Live session closed (code ${code}${sanitizedReason ? `: ${sanitizedReason}` : ""})`;
+  }
+
+  return { categorizedError, sanitizedReason, isAuthFailure };
+}
+
 // ---------------------------------------------------------------------------
 // GeminiSessionFactory
 // ---------------------------------------------------------------------------
@@ -2288,11 +2350,16 @@ export class GeminiSessionFactory {
       onRotate,
     } = opts;
 
-    const ai = new GoogleGenAI({ apiKey });
+    const isEphemeral = apiKey.startsWith("auth_tokens/");
+    const ai = new GoogleGenAI(
+      isEphemeral
+        ? { apiKey, httpOptions: { apiVersion: "v1alpha" } }
+        : { apiKey },
+    );
     let liveModel =
-      process.env.GEMINI_LIVE_MODEL || "gemini-3.1-flash-live-preview";
+      process.env.GEMINI_LIVE_MODEL || LIVE_MODEL;
     if (liveModel === "gemini-2.5-flash" || liveModel === "gemini-2.0-flash") {
-      liveModel = "gemini-3.1-flash-live-preview";
+      liveModel = LIVE_MODEL;
     }
 
     // Fresh memories + project context card every session open
@@ -2504,13 +2571,19 @@ export class GeminiSessionFactory {
         },
 
         onerror: (err: any) => {
-          const msg = err?.message || String(err);
+          const msg = sanitizeGeminiErrorReason(err?.message || String(err));
           console.error("[Gemini Live Error]:", msg);
           _logError(`GEMINI_LIVE_ERROR: ${msg}`);
           _logJson("error", "gemini_live_error", { error: msg });
+          const { categorizedError, isAuthFailure } = classifyGeminiLiveCloseError(
+            undefined,
+            msg,
+            liveModel,
+            flags,
+          );
           sendToClient({
             type: "error",
-            error: `Gemini Live error: ${msg}`,
+            error: isAuthFailure && categorizedError ? categorizedError : `Gemini Live error: ${msg}`,
           });
         },
 
@@ -2522,15 +2595,21 @@ export class GeminiSessionFactory {
             (event?._closeMessage
               ? event._closeMessage.toString()
               : "");
-          console.warn(
-            `[Gemini Live] Session closed (code: ${code ?? "none"}, reason: ${rawReason || "none"})`,
+          const { categorizedError, sanitizedReason } = classifyGeminiLiveCloseError(
+            code,
+            rawReason,
+            liveModel,
+            flags,
           );
-          _logError(`GEMINI_LIVE_CLOSED: code=${code} reason=${rawReason}`);
-          _logJson("info", "gemini_live_closed", { code, reason: rawReason });
+          console.warn(
+            `[Gemini Live] Session closed (code: ${code ?? "none"}, reason: ${sanitizedReason || "none"})`,
+          );
+          _logError(`GEMINI_LIVE_CLOSED: code=${code} reason=${sanitizedReason}`);
+          _logJson("info", "gemini_live_closed", { code, reason: sanitizedReason });
 
           const isDurationLimit =
             flags.isRotating ||
-            /GoAway|session duration|duration limit/i.test(rawReason);
+            /GoAway|session duration|duration limit/i.test(sanitizedReason);
 
           // Seamless GoAway rotation
           if (
@@ -2568,30 +2647,6 @@ export class GeminiSessionFactory {
             return;
           }
 
-          let categorizedError: string | null = null;
-          const sanitizedReason = (rawReason || "").replace(/AIza[0-9A-Za-z_-]{33,}/gi, "AIzaSy...[REDACTED]");
-          if (
-            /API[_ ]?KEY|PERMISSION_DENIED|UNAUTHENTICATED|ACCESS_TOKEN_TYPE_UNSUPPORTED/i.test(
-              sanitizedReason,
-            )
-          ) {
-            const isProd = process.env.NODE_ENV === "production";
-            const advice = isProd
-              ? "Please verify that the GEMINI_API_KEY environment variable in your Render Dashboard is set to a valid, active Google Gemini API key from Google AI Studio."
-              : "Please verify your Gemini API key in Settings.";
-            categorizedError = `GEMINI_AUTH_FAILED: Authentication failed. ${advice} (${sanitizedReason || "invalid credentials"})`;
-          } else if (
-            /not found|not supported for bidiGenerateContent/i.test(sanitizedReason)
-          ) {
-            categorizedError = `GEMINI_MODEL_UNSUPPORTED: Model '${liveModel}' is not supported for Live voice. (${sanitizedReason})`;
-          } else if (
-            /quota|RESOURCE_EXHAUSTED|rate limit/i.test(sanitizedReason)
-          ) {
-            categorizedError = `GEMINI_QUOTA_EXCEEDED: Gemini quota or rate limit exceeded. (${sanitizedReason})`;
-          } else if (code && code !== 1000 && !isDurationLimit && !flags.isClientClosed && !/operation was aborted|aborted|client closed|intentional/i.test(rawReason)) {
-            categorizedError = `GEMINI_SESSION_CLOSED: Live session closed (code ${code}${sanitizedReason ? `: ${sanitizedReason}` : ""})`;
-          }
-
           if (categorizedError) {
             sendToClient({
               type: "error",
@@ -2604,7 +2659,7 @@ export class GeminiSessionFactory {
               type: "status",
               status: "session_closed",
               code,
-              reason: rawReason || "Session closed cleanly",
+              reason: sanitizedReason || "Session closed cleanly",
             });
           }
         },

@@ -83,7 +83,7 @@ export function getPersistentServerSecret(): string {
 // ---------------------------------------------------------------------------
 // Gemini API key store (secrets.json in the data dir).
 // ---------------------------------------------------------------------------
-const SECRETS_FILE = dataFile("secrets.json");
+export const SECRETS_FILE = dataFile("secrets.json");
 
 interface Secrets {
   geminiApiKey?: string;
@@ -143,6 +143,7 @@ export function isPlaceholderKey(key: string | undefined | null): boolean {
     k.includes("your_production") ||
     k.includes("your_local") ||
     k.includes("your_gemini") ||
+    k.includes("my_gemini_api_key") ||
     k.includes("your_api_key") ||
     k.includes("key_here") ||
     k.includes("<your_") ||
@@ -151,22 +152,48 @@ export function isPlaceholderKey(key: string | undefined | null): boolean {
   );
 }
 
+export type CredentialClass =
+  | "API_KEY"
+  | "AI_STUDIO_AUTH_KEY"
+  | "OAUTH_ACCESS_TOKEN"
+  | "EPHEMERAL_TOKEN"
+  | "PLACEHOLDER"
+  | "INVALID"
+  | "NONE";
+
 /**
- * Validates whether a candidate string is a plausible Google Gemini API key.
- * Accepts both standard API keys (starts with 'AIza...') and Google AI Studio authorization keys (starts with 'AQ....').
- * Only rejects empty, whitespace, excessively short inputs, or unconfigured template placeholders.
+ * Classifies a candidate Gemini credential into a safe metadata category without exposing the secret.
+ */
+export function classifyCredential(key: string | undefined | null): CredentialClass {
+  const cleaned = cleanKey(key);
+  if (!cleaned) return "NONE";
+  if (isPlaceholderKey(cleaned)) return "PLACEHOLDER";
+  if (cleaned.startsWith("ya29.")) return "OAUTH_ACCESS_TOKEN";
+  if (cleaned.length < 15) return "INVALID";
+  if (cleaned.startsWith("AIza")) return "API_KEY";
+  if (cleaned.startsWith("AQ.")) return "AI_STUDIO_AUTH_KEY";
+  if (cleaned.startsWith("auth_tokens/")) return "EPHEMERAL_TOKEN";
+  return "API_KEY";
+}
+
+/**
+ * Validates whether a candidate string is a plausible Google Gemini API key or AI Studio auth key.
+ * Accepts standard API keys ('AIza...'), Google AI Studio authorization keys ('AQ....'), and ephemeral tokens ('auth_tokens/...').
+ * Rejects empty, whitespace, excessively short inputs, template placeholders, or raw OAuth 2.0 access tokens ('ya29....').
  */
 export function isValidGeminiApiKey(key: string | undefined | null): boolean {
   if (!key) return false;
   const cleaned = cleanKey(key);
   if (cleaned.length < 15) return false;
   if (isPlaceholderKey(cleaned)) return false;
+  if (cleaned.startsWith("ya29.")) return false;
   return true;
 }
 
 export interface KeyMetadata {
   key?: string;
   source: "secrets.json" | "appdata_secrets.json" | "GEMINI_API_KEY" | "GOOGLE_API_KEY" | "GOOGLE_GENAI_API_KEY" | "none";
+  credentialClass: CredentialClass;
   isValid: boolean;
   prefix: string;
   masked: string;
@@ -175,6 +202,7 @@ export interface KeyMetadata {
 }
 
 export function inspectKey(key: string | undefined | null): {
+  credentialClass: CredentialClass;
   isValid: boolean;
   prefix: string;
   masked: string;
@@ -183,9 +211,17 @@ export function inspectKey(key: string | undefined | null): {
 } {
   const k = cleanKey(key);
   if (!k) {
-    return { isValid: false, prefix: "empty", masked: "none", length: 0, isPlaceholder: false };
+    return {
+      credentialClass: "NONE",
+      isValid: false,
+      prefix: "empty",
+      masked: "none",
+      length: 0,
+      isPlaceholder: false,
+    };
   }
   const isPlaceholder = isPlaceholderKey(k);
+  const credentialClass = classifyCredential(k);
   const isValid = isValidGeminiApiKey(k);
   const prefix = isPlaceholder
     ? "placeholder"
@@ -193,26 +229,37 @@ export function inspectKey(key: string | undefined | null): {
     ? "AIza"
     : k.startsWith("AQ.")
     ? "AQ."
-    : k.substring(0, Math.min(4, k.length));
-  const masked = k.length > 8
-    ? `${k.substring(0, Math.min(6, k.length))}...${k.substring(Math.max(0, k.length - 4))}`
-    : "***";
-  return { isValid, prefix, masked, length: k.length, isPlaceholder };
+    : k.startsWith("ya29.")
+    ? "ya29."
+    : k.startsWith("auth_tokens/")
+    ? "auth_tokens/"
+    : "other";
+  const masked = isPlaceholder
+    ? "placeholder"
+    : `${prefix}...[REDACTED]`;
+  return { credentialClass, isValid, prefix, masked, length: k.length, isPlaceholder };
+}
+
+function getFileMtimeMs(filePath: string): number {
+  try {
+    return fs.statSync(filePath).mtimeMs;
+  } catch {
+    return 0;
+  }
 }
 
 /**
  * Resolves the active Gemini API key along with safe diagnostics.
  * Priority:
- *   1. User-entered key in data directory (secrets.json)
- *   2. User-entered key in %APPDATA%\MYRAA\secrets.json
- *   3. GEMINI_API_KEY in environment (.env)
- *   4. GOOGLE_API_KEY in environment (.env)
- *   5. GOOGLE_GENAI_API_KEY in environment (.env)
+ *   1. User-entered key in data directory (secrets.json) / %APPDATA%\MYRAA\secrets.json (newest valid file wins when both exist)
+ *   2. GEMINI_API_KEY in environment (.env)
+ *   3. GOOGLE_API_KEY in environment (.env)
+ *   4. GOOGLE_GENAI_API_KEY in environment (.env)
  */
 export function resolveApiKeyWithMetadata(): KeyMetadata {
-  // In production, server environment variables take absolute precedence to ensure
-  // secrets are loaded strictly from the server environment, never client/local files.
-  if (process.env.NODE_ENV === "production") {
+  // In cloud production (not packaged Electron desktop), server environment variables take
+  // absolute precedence to ensure secrets are loaded strictly from the server environment.
+  if (process.env.NODE_ENV === "production" && process.env.SORA_LAUNCHED_BY !== "electron") {
     const envGemini = cleanKey(process.env.GEMINI_API_KEY);
     const envGeminiInfo = inspectKey(envGemini);
     if (envGeminiInfo.isValid) {
@@ -234,24 +281,39 @@ export function resolveApiKeyWithMetadata(): KeyMetadata {
     if (envGemini) return { key: undefined, source: "GEMINI_API_KEY", ...envGeminiInfo };
     if (envGoogle) return { key: undefined, source: "GOOGLE_API_KEY", ...envGoogleInfo };
     if (envGenAi) return { key: undefined, source: "GOOGLE_GENAI_API_KEY", ...envGenAiInfo };
-    return { key: undefined, source: "none", isValid: false, prefix: "none", masked: "none", length: 0, isPlaceholder: false };
+    return {
+      key: undefined,
+      source: "none",
+      credentialClass: "NONE",
+      isValid: false,
+      prefix: "none",
+      masked: "none",
+      length: 0,
+      isPlaceholder: false,
+    };
   }
 
-  // 1. Data dir secrets.json
+  // 1 & 2. Data dir secrets.json and Roaming AppData secrets.json
   const stored = cleanKey(readSecretsFromFile(SECRETS_FILE).geminiApiKey);
   const storedInfo = inspectKey(stored);
+  const appDataFile = getAppDataSecretsFile();
+  const hasDistinctAppData = Boolean(appDataFile && appDataFile !== SECRETS_FILE);
+  const appDataKey = hasDistinctAppData ? cleanKey(readSecretsFromFile(appDataFile!).geminiApiKey) : "";
+  const appDataInfo = inspectKey(appDataKey);
+
+  if (storedInfo.isValid && appDataInfo.isValid) {
+    const storedMtime = getFileMtimeMs(SECRETS_FILE);
+    const appDataMtime = getFileMtimeMs(appDataFile!);
+    if (appDataMtime > storedMtime) {
+      return { key: appDataKey, source: "appdata_secrets.json", ...appDataInfo };
+    }
+    return { key: stored, source: "secrets.json", ...storedInfo };
+  }
   if (storedInfo.isValid) {
     return { key: stored, source: "secrets.json", ...storedInfo };
   }
-
-  // 2. Roaming AppData secrets.json
-  const appDataFile = getAppDataSecretsFile();
-  if (appDataFile && appDataFile !== SECRETS_FILE) {
-    const appDataKey = cleanKey(readSecretsFromFile(appDataFile).geminiApiKey);
-    const appDataInfo = inspectKey(appDataKey);
-    if (appDataInfo.isValid) {
-      return { key: appDataKey, source: "appdata_secrets.json", ...appDataInfo };
-    }
+  if (appDataInfo.isValid) {
+    return { key: appDataKey, source: "appdata_secrets.json", ...appDataInfo };
   }
 
   // 3. GEMINI_API_KEY in environment
@@ -277,21 +339,35 @@ export function resolveApiKeyWithMetadata(): KeyMetadata {
 
   // If no valid candidate, report metadata of rejected token if present
   if (stored) return { key: undefined, source: "secrets.json", ...storedInfo };
+  if (appDataKey) return { key: undefined, source: "appdata_secrets.json", ...appDataInfo };
   if (envGemini) return { key: undefined, source: "GEMINI_API_KEY", ...envGeminiInfo };
   if (envGoogle) return { key: undefined, source: "GOOGLE_API_KEY", ...envGoogleInfo };
 
-  return { key: undefined, source: "none", isValid: false, prefix: "none", masked: "none", length: 0, isPlaceholder: false };
+  return {
+    key: undefined,
+    source: "none",
+    credentialClass: "NONE",
+    isValid: false,
+    prefix: "none",
+    masked: "none",
+    length: 0,
+    isPlaceholder: false,
+  };
 }
 
 /**
- * Safe logger for key resolution at boot / connection. Never prints full keys.
+ * Safe logger for key resolution at boot / connection. Never prints full keys or secret characters.
  */
 export function logKeyResolution(): void {
   const meta = resolveApiKeyWithMetadata();
   if (meta.isValid && meta.key) {
-    console.log(`[Auth Resolution] Active Key Source: ${meta.source} (Prefix: ${meta.prefix}, Length: ${meta.length}, Masked: ${meta.masked})`);
+    console.log(
+      `[Auth Resolution] source=${meta.source} credentialClass=${meta.credentialClass} prefix=${meta.prefix} length=${meta.length}`,
+    );
   } else {
-    console.warn(`[Auth Resolution] No valid API key found. Primary candidate in ${meta.source} was rejected (Prefix: ${meta.prefix}, Length: ${meta.length}, Masked: ${meta.masked}).`);
+    console.warn(
+      `[Auth Resolution] No valid API key found. source=${meta.source} credentialClass=${meta.credentialClass} prefix=${meta.prefix} length=${meta.length}`,
+    );
   }
 }
 
@@ -312,6 +388,11 @@ export function hasGeminiApiKey(): boolean {
 export function setGeminiApiKey(key: string): void {
   const cleaned = cleanKey(key);
   if (!cleaned) throw new Error("API key must not be empty.");
+  if (cleaned.startsWith("ya29.")) {
+    throw new Error(
+      "Gemini API credential is invalid or expired. Please configure a valid Gemini credential in Settings.",
+    );
+  }
   if (cleaned.length < 15) throw new Error("API key is too short. Please provide a valid Gemini API key or authorization key.");
   if (isPlaceholderKey(cleaned)) throw new Error("API key appears to be a template placeholder. Please provide a valid Gemini API key.");
   const current = readSecrets();

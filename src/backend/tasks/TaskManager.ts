@@ -289,7 +289,9 @@ export async function callDesktopAgent(
   tool: string,
   args: Record<string, unknown>,
 ): Promise<{ ok: boolean; result?: unknown; error?: string }> {
-  const isCloud = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER);
+  const isCloud =
+    (process.env.NODE_ENV === "production" || Boolean(process.env.RENDER)) &&
+    process.env.SORA_LAUNCHED_BY !== "electron";
   if (isCloud) {
     // Cloud Render environment: localhost desktop agent does NOT exist on the container.
     // Cloud Render MUST NEVER directly access localhost.
@@ -311,6 +313,30 @@ export async function callDesktopAgent(
     }
   }
 
+  // Normalize common application aliases so both source and frozen PyInstaller desktop agents
+  // resolve them identically (e.g., "file manager" -> "file explorer", "vs code" -> "vscode").
+  let effectiveArgs = args;
+  if (tool === "openApplication" && args && typeof args === "object") {
+    const rawKey = String(args.name ?? args.app ?? args.application ?? "").trim().toLowerCase();
+    const aliasMap: Record<string, string> = {
+      "file manager": "file explorer",
+      "filemanager": "file explorer",
+      "explorer": "file explorer",
+      "files": "file explorer",
+      "windows explorer": "file explorer",
+      "vs code": "vscode",
+      "visual studio code": "vscode",
+      "code": "vscode",
+    };
+    if (aliasMap[rawKey]) {
+      effectiveArgs = { ...args };
+      if ("name" in effectiveArgs) effectiveArgs.name = aliasMap[rawKey];
+      else if ("app" in effectiveArgs) effectiveArgs.app = aliasMap[rawKey];
+      else if ("application" in effectiveArgs) effectiveArgs.application = aliasMap[rawKey];
+      else effectiveArgs.name = aliasMap[rawKey];
+    }
+  }
+
   if (!desktopAgentVerified) {
     await ensureDesktopAgent();
   }
@@ -318,8 +344,8 @@ export async function callDesktopAgent(
   activeControllers.add(controller);
 
   try {
-    _logCommand(`EXECUTE ${tool} ${JSON.stringify(args)}`);
-    _logJson("info", "tool_execute", { tool, args });
+    _logCommand(`EXECUTE ${tool} ${JSON.stringify(effectiveArgs)}`);
+    _logJson("info", "tool_execute", { tool, args: effectiveArgs });
     const timer = setTimeout(
       () => controller.abort(),
       DESKTOP_AGENT_TIMEOUT,
@@ -328,7 +354,7 @@ export async function callDesktopAgent(
     const res = await fetch(`${DESKTOP_AGENT_URL}/execute`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tool, args }),
+      body: JSON.stringify({ tool, args: effectiveArgs }),
       signal: controller.signal,
     });
     clearTimeout(timer);
@@ -366,11 +392,13 @@ export async function callDesktopAgent(
       /* ignore and return formatted error */
     }
 
-    const isCloud = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER);
+    const isCloudFallback =
+      (process.env.NODE_ENV === "production" || Boolean(process.env.RENDER)) &&
+      process.env.SORA_LAUNCHED_BY !== "electron";
     const msg =
       err?.name === "AbortError"
         ? "Desktop agent timed out or aborted by emergency stop."
-        : isCloud
+        : isCloudFallback
         ? "Windows desktop companion is not currently connected. Please ensure MYRAA is running on your PC."
         : "Desktop agent is not running. Start it with: uvicorn desktop_agent.main:app --port 8765";
     _logError(`AGENT_UNREACHABLE ${tool}: ${msg}`);

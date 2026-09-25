@@ -1136,7 +1136,7 @@ export default function App() {
                   >
                     Dismiss
                   </button>
-                  {/API_KEY|GEMINI_AUTH/i.test(errorText) && (
+                  {/API_KEY|GEMINI_AUTH|credential is invalid or expired|authentication credentials/i.test(errorText) && (
                     <button
                       onClick={() => {
                         setErrorText(null);

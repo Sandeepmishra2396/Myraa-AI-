@@ -269,6 +269,16 @@ async function startServer() {
     });
   }
 
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    const msg =
+      err.code === "EADDRINUSE"
+        ? `[Server] Fatal: Port ${PORT} on ${HOST} is already in use (EADDRINUSE).`
+        : `[Server] Fatal HTTP listener error (${err.code || "UNKNOWN"}): ${err.message}`;
+    console.error(msg);
+    logError(msg);
+    process.exit(1);
+  });
+
   server.listen(PORT, HOST, () => {
     const isTls = Boolean(tlsCertPath && tlsKeyPath && fs.existsSync(tlsCertPath) && fs.existsSync(tlsKeyPath));
     const protocol = isTls ? "https" : "http";
@@ -291,7 +301,7 @@ async function startServer() {
   });
 
   let isShuttingDown = false;
-  const shutdown = (signal: string) => {
+  const shutdown = (signal: string, exitCode = 0) => {
     if (isShuttingDown) return;
     isShuttingDown = true;
     console.log(`[Server] Graceful shutdown initiated (${signal})...`);
@@ -318,18 +328,18 @@ async function startServer() {
     server.close(() => {
       console.log("[Server] HTTP and WebSocket listeners closed cleanly.");
       logStartup("[Server] HTTP and WebSocket listeners closed cleanly.");
-      process.exit(0);
+      process.exit(exitCode);
     });
 
     // Force exit if connection drain exceeds 5 seconds
     setTimeout(() => {
       console.warn("[Server] Forced shutdown timeout reached. Terminating.");
-      process.exit(0);
+      process.exit(exitCode);
     }, 5000).unref();
   };
 
-  process.on("SIGINT", () => shutdown("SIGINT"));
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT", 0));
+  process.on("SIGTERM", () => shutdown("SIGTERM", 0));
 
   process.on("unhandledRejection", (reason: any) => {
     const msg = reason?.message || String(reason);
@@ -337,8 +347,9 @@ async function startServer() {
   });
 
   process.on("uncaughtException", (error: Error) => {
+    console.error(`[Process] Uncaught exception: ${error?.stack || error?.message || error}`);
     logError(`[Process] Uncaught exception: ${error.message}`);
-    shutdown("uncaughtException");
+    shutdown("uncaughtException", 1);
   });
 }
 

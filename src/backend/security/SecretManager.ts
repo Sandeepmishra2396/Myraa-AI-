@@ -374,6 +374,8 @@ export class SecretManager {
 
     // Also strip generic API key patterns
     cleaned = cleaned.replace(/AIza[0-9A-Za-z\-_]{20,}/g, "AIzaSy...[REDACTED]");
+    cleaned = cleaned.replace(/AQ\.[0-9A-Za-z\-_.]{15,}/g, "AQ...[REDACTED]");
+    cleaned = cleaned.replace(/ya29\.[0-9A-Za-z\-_.]{15,}/g, "ya29...[REDACTED]");
     cleaned = cleaned.replace(/sk-[A-Za-z0-9_-]{20,}/g, "sk-...[REDACTED]");
     cleaned = cleaned.replace(/AKIA[0-9A-Z]{16}/g, "AKIA...[REDACTED]");
     cleaned = cleaned.replace(/gh[pousr]_[A-Za-z0-9_]{36,}/g, "gh_...[REDACTED]");
@@ -404,7 +406,12 @@ export class SecretManager {
     }> = [
       {
         type: "Google / Gemini API Key",
-        regex: /AIza[0-9A-Za-z\-_]{20,}/,
+        regex: /(?:AIza[0-9A-Za-z\-_]{20,}|AQ\.[0-9A-Za-z\-_.]{20,})/,
+        confidence: "HIGH",
+      },
+      {
+        type: "Google OAuth Access Token",
+        regex: /ya29\.[0-9A-Za-z\-_.]{20,}/,
         confidence: "HIGH",
       },
       {

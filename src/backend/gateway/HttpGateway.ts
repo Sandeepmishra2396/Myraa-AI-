@@ -32,6 +32,7 @@ import {
   DATA_DIR,
   dataFile,
   resolveApiKeyWithMetadata,
+  classifyCredential,
   hasGeminiApiKey,
   setGeminiApiKey,
   clearGeminiApiKey,
@@ -159,7 +160,7 @@ export function createHttpApp(): express.Application {
   // ── Environment-Aware CORS Middleware ────────────────────────────────────
   app.use((req, res, next) => {
     const origin = req.headers.origin;
-    const isProd = process.env.NODE_ENV === "production";
+    const isProd = process.env.NODE_ENV === "production" && process.env.SORA_LAUNCHED_BY !== "electron";
 
     if (origin) {
       let allowed = false;
@@ -2616,14 +2617,16 @@ export function createHttpApp(): express.Application {
     res.json({
       hasApiKey: meta.isValid && Boolean(meta.key),
       source: meta.source,
+      credentialClass: meta.credentialClass,
       masked: meta.masked,
       prefix: meta.prefix,
+      length: meta.length,
       isPlaceholder: Boolean(meta.isPlaceholder),
     });
   });
 
   app.post("/api/config/apikey", requireLocalhost, async (req, res) => {
-    if (process.env.NODE_ENV === "production") {
+    if (process.env.NODE_ENV === "production" && process.env.SORA_LAUNCHED_BY !== "electron") {
       return res.status(403).json({
         error: "Forbidden: API key mutation via HTTP is disabled in production. Secrets must be configured strictly in the server environment.",
       });
@@ -2633,41 +2636,56 @@ export function createHttpApp(): express.Application {
       if (!key) {
         return res.status(400).json({ error: "API key is required." });
       }
-      if (key.length < 15) {
+      const credClass = classifyCredential(key);
+      if (credClass === "OAUTH_ACCESS_TOKEN") {
         return res.status(400).json({
           error:
-            "API key is too short. Please provide a valid Gemini API key or authorization key.",
+            "Gemini API credential is invalid or expired. Raw OAuth access tokens (ya29.*) are not supported as Gemini Live API keys. Please configure a valid Gemini API key in Settings.",
         });
       }
-      // Validate by listing models — rejects only genuine auth failures
+      if (key.length < 15 || credClass === "PLACEHOLDER" || credClass === "INVALID") {
+        return res.status(400).json({
+          error:
+            "API key is too short or invalid. Please provide a valid Gemini API key or authorization key.",
+        });
+      }
+      // Validate by listing models — rejects genuine auth failures (expired/revoked AQ. or invalid AIza keys)
       try {
         const test = new GoogleGenAI({ apiKey: key });
         const pager = await test.models.list();
         await pager[Symbol.asyncIterator]().next();
       } catch (e: any) {
-        const msg = String(e?.message || e);
+        const msg = sanitizeError(String(e?.message || e));
         const isAuthError =
-          /API[_ ]?KEY|PERMISSION_DENIED|UNAUTHENTICATED|ACCESS_TOKEN_TYPE_UNSUPPORTED|invalid|401|403/i.test(
+          /API[_ ]?KEY|PERMISSION_DENIED|UNAUTHENTICATED|ACCESS_TOKEN_TYPE_UNSUPPORTED|invalid authentication credentials|Expected OAuth 2 access token|login cookie|invalid|401|403/i.test(
             msg,
           );
         if (isAuthError) {
-          logError(`APIKEY_VALIDATION_REJECTED: ${msg}`);
-          logJson("warn", "apikey_validation_rejected", { error: msg });
+          logError(`APIKEY_VALIDATION_REJECTED (class=${credClass}, length=${key.length}): ${msg}`);
+          logJson("warn", "apikey_validation_rejected", {
+            credentialClass: credClass,
+            length: key.length,
+            error: msg,
+          });
           return res.status(400).json({
             error:
-              "That API key was rejected by Google (authentication failed). Please check the key in Google AI Studio and try again.",
+              "Gemini API credential is invalid or expired. That credential was rejected by Google (authentication failed). Please check the key in Google AI Studio and try again.",
           });
         }
-        logError(`APIKEY_VALIDATION_SOFT_FAIL (saving anyway): ${msg}`);
-        logJson("warn", "apikey_validation_soft_fail", { error: msg });
+        logError(`APIKEY_VALIDATION_SOFT_FAIL (saving anyway, class=${credClass}): ${msg}`);
+        logJson("warn", "apikey_validation_soft_fail", {
+          credentialClass: credClass,
+          length: key.length,
+          error: msg,
+        });
       }
       setGeminiApiKey(key);
       process.env.GEMINI_API_KEY = key;
       delete process.env.GOOGLE_API_KEY;
       delete process.env.GOOGLE_GENAI_API_KEY;
-      logCommand("APIKEY_SAVED");
-      logJson("info", "apikey_saved", {});
-      res.json({ ok: true, hasApiKey: true });
+      logCommand(`APIKEY_SAVED (class=${credClass}, length=${key.length})`);
+      logJson("info", "apikey_saved", { credentialClass: credClass, length: key.length });
+      res.json({ ok: true, hasApiKey: true, credentialClass: credClass });
     } catch (e: any) {
       const sanitized = sanitizeError(e?.message || e);
       logError(`APIKEY_SAVE_ERROR: ${sanitized}`);
@@ -2679,7 +2697,7 @@ export function createHttpApp(): express.Application {
   });
 
   app.delete("/api/config/apikey", requireLocalhost, (_req, res) => {
-    if (process.env.NODE_ENV === "production") {
+    if (process.env.NODE_ENV === "production" && process.env.SORA_LAUNCHED_BY !== "electron") {
       return res.status(403).json({
         error: "Forbidden: API key mutation via HTTP is disabled in production. Secrets must be configured strictly in the server environment.",
       });

@@ -14,7 +14,11 @@
  */
 
 import { resolveApiKeyWithMetadata } from "../../../server_paths.ts";
-import { GeminiSessionFactory } from "../ai/GeminiSessionFactory.ts";
+import {
+  GeminiSessionFactory,
+  classifyGeminiLiveCloseError,
+  sanitizeGeminiErrorReason,
+} from "../ai/GeminiSessionFactory.ts";
 import { remoteSessionManager } from "../remote/RemoteSessionManager.ts";
 
 export class ConversationManager {
@@ -29,16 +33,20 @@ export class ConversationManager {
     const keyMeta = resolveApiKeyWithMetadata();
 
     if (!keyMeta.isValid || !keyMeta.key) {
-      const isCloud = process.env.NODE_ENV === "production" || keyMeta.source === "GEMINI_API_KEY";
-      const isPlaceholder = Boolean(keyMeta.isPlaceholder || (keyMeta.masked && keyMeta.masked.endsWith("HERE")));
-      const errMsg = isPlaceholder
+      const isCloud =
+        (process.env.NODE_ENV === "production" || keyMeta.source === "GEMINI_API_KEY") &&
+        process.env.SORA_LAUNCHED_BY !== "electron";
+      const isPlaceholder = Boolean(keyMeta.isPlaceholder);
+      const errMsg = isPlaceholder && isCloud
         ? "SERVER_API_KEY_PLACEHOLDER: The server environment variable GEMINI_API_KEY on Render contains an unconfigured template placeholder (ends in HERE). Please update GEMINI_API_KEY in the Render Dashboard with a valid Google Gemini API key from Google AI Studio."
         : isCloud
         ? "NO_SERVER_API_KEY: Server environment variable GEMINI_API_KEY is missing or invalid. Please configure your Google Gemini API key in the Render Dashboard."
+        : keyMeta.source !== "none"
+        ? "Gemini API credential is invalid or expired. Please configure a valid Gemini credential in Settings."
         : "NO_API_KEY: Please configure a valid Gemini API key (starts with AIzaSy) in Settings to start talking to MYRAA.";
 
       console.warn(
-        `[Gemini Auth] Connection rejected: ${errMsg} (Source: ${keyMeta.source}, Prefix: ${keyMeta.prefix}, Length: ${keyMeta.length})`,
+        `[Gemini Auth] Connection rejected: source=${keyMeta.source} credentialClass=${keyMeta.credentialClass} prefix=${keyMeta.prefix} length=${keyMeta.length}`,
       );
       this._send(clientWs, {
         type: "error",
@@ -50,7 +58,7 @@ export class ConversationManager {
 
     const apiKey = keyMeta.key;
     console.log(
-      `[Gemini Auth] Using active key from ${keyMeta.source} (Prefix: ${keyMeta.prefix}, Length: ${keyMeta.length}, Masked: ${keyMeta.masked})`,
+      `[Gemini Auth] source=${keyMeta.source} credentialClass=${keyMeta.credentialClass} prefix=${keyMeta.prefix} length=${keyMeta.length}`,
     );
 
     // Synchronize process.env so SDK doesn't warn about conflicting env vars
@@ -89,13 +97,23 @@ export class ConversationManager {
         onRotate: rotate,
       });
     } catch (err: any) {
-      console.error("Error connecting to Gemini Live API:", err);
-      clientWs.send(
-        JSON.stringify({
-          type: "error",
-          error: `Could not connect to Gemini: ${err.message || err}`,
-        }),
+      const sanitized = sanitizeGeminiErrorReason(err?.message || String(err));
+      console.error("Error connecting to Gemini Live API:", sanitized);
+      const liveModel =
+        process.env.GEMINI_LIVE_MODEL || "gemini-3.1-flash-live-preview";
+      const { categorizedError, isAuthFailure } = classifyGeminiLiveCloseError(
+        undefined,
+        sanitized,
+        liveModel,
+        flags,
       );
+      this._send(clientWs, {
+        type: "error",
+        error:
+          isAuthFailure && categorizedError
+            ? categorizedError
+            : `Could not connect to Gemini: ${sanitized}`,
+      });
       clientWs.close();
       return;
     }

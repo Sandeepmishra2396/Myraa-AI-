@@ -1,4 +1,4 @@
-﻿/* ===========================================================================
+/* ===========================================================================
  * MYRAA — Electron preload
  * ---------------------------------------------------------------------------
  * Runs in an isolated context and exposes a minimal, explicit API surface to
@@ -53,5 +53,8 @@ contextBridge.exposeInMainWorld('myraa', {
     ipcRenderer.on('floating:setting-changed', handler);
     return () => ipcRenderer.removeListener('floating:setting-changed', handler);
   },
+
+  // Native Desktop Agent execution bridge (loopback 127.0.0.1:8765)
+  executeDesktopTool: (tool, args) => ipcRenderer.invoke('desktop:execute-tool', { tool, args }),
 });
 

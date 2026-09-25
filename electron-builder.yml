@@ -1,4 +1,4 @@
-﻿appId: com.myraa.desktop
+appId: com.myraa.desktop
 productName: MYRAA
 copyright: Copyright © 2026 Sandeep Mishra, Mishtron Labs
 
@@ -15,6 +15,8 @@ files:
   - electron/**/*
   - dist/**/*
   - assets/**/*
+  - desktop_agent/**/*
+  - run_agent.py
   - package.json
 
 # The PyInstaller-frozen desktop agent (embeds its own Python runtime) is copied
@@ -25,6 +27,7 @@ extraResources:
     filter: ["**/*"]
 
 win:
+  icon: build/icon.ico
   target:
     - target: nsis
       arch: [x64]

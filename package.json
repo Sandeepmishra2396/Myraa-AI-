@@ -19,8 +19,8 @@
     "test": "vitest run --fileParallelism=false",
     "electron": "electron .",
     "app": "npm run build && electron .",
-    "dist": "npm run build && electron-builder --win nsis portable"
-
+    "dist": "npm run build && electron-builder --win nsis portable",
+    "build:windows": "npm run dist"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

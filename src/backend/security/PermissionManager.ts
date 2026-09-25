@@ -38,8 +38,10 @@ export function requireLocalhost(req: any, res: any, next: () => void): void {
 // ---------------------------------------------------------------------------
 export function sanitizeError(msg: unknown): string {
   return String(msg || "")
-    .replace(/AIza[0-9A-Za-z\-_]{35}/g, "AIzaSy...[REDACTED]")
-    .replace(/AQ\.[0-9A-Za-z\-_]{30,}/g, "AQ...[REDACTED]");
+    .replace(/AIza[0-9A-Za-z\-_]{10,}/g, "AIzaSy...[REDACTED]")
+    .replace(/AQ\.[0-9A-Za-z\-_.]{10,}/g, "AQ...[REDACTED]")
+    .replace(/ya29\.[0-9A-Za-z\-_.]{10,}/g, "ya29...[REDACTED]")
+    .replace(/auth_tokens\/[0-9A-Za-z\-_.]{10,}/g, "auth_tokens/...[REDACTED]");
 }
 
 // ---------------------------------------------------------------------------
