@@ -26,13 +26,37 @@ import { emergencyStopCoordinator } from "./EmergencyStopCoordinator.ts";
 import { securityPolicyEngine } from "../security/SecurityPolicyEngine.ts";
 import { securityAuditLogger } from "../security/SecurityAuditLogger.ts";
 
+import {
+  hashDeviceIdSafe,
+  classifyDisconnectFailure,
+  sanitizeDiagnosticString,
+  type CanonicalConnectionState,
+  type GeminiSessionState,
+  type RemoteFailureClass,
+} from "../../lib/connectionStateMachine.ts";
+
 export interface ActiveRemoteClient {
   session: RemoteSession;
   ws: any;
+  lastHeartbeatMs: number;
+  heartbeatTimeoutMs: number;
+  geminiState: GeminiSessionState;
+}
+
+export interface DeviceConnectionTelemetry {
+  deviceId: string;
+  connectionState: CanonicalConnectionState;
+  geminiState: GeminiSessionState;
+  lastHeartbeat: string | null;
+  lastGeminiTimestamp: string | null;
+  reconnectAttempt: number;
+  lastCloseCode: number | null;
+  lastFailureClass: RemoteFailureClass;
 }
 
 export class RemoteSessionManager {
   private _activeClients = new Map<string, ActiveRemoteClient>(); // sessionId -> client
+  private _deviceTelemetry = new Map<string, DeviceConnectionTelemetry>(); // deviceId -> telemetry
   private _pendingDesktopCalls = new Map<string, {
     targetSessionId: string;
     targetDeviceId: string;
@@ -40,6 +64,15 @@ export class RemoteSessionManager {
     resolve: (res: { ok: boolean; result?: unknown; error?: string }) => void;
     timer: NodeJS.Timeout;
   }>();
+
+  resetForTesting(): void {
+    this._activeClients.clear();
+    this._deviceTelemetry.clear();
+    for (const pending of this._pendingDesktopCalls.values()) {
+      clearTimeout(pending.timer);
+    }
+    this._pendingDesktopCalls.clear();
+  }
 
   // ---------------------------------------------------------------------------
   // Authentication & Validation
@@ -64,15 +97,31 @@ export class RemoteSessionManager {
 
     let device = await remoteStore.getDevice(verification.deviceId);
     if (!device) {
+      // Check if device was recorded as lost/revoked before allowing recovery
+      const lostRecord = await remoteStore.getLostDeviceRecord(verification.deviceId);
+      if (lostRecord) {
+        return null;
+      }
+
       // If the token was authentically signed by this server's persistent HMAC secret,
-      // recover the device registration so ephemeral server restarts don't lock out legitimate devices.
-      const existingDevices = await remoteStore.listDevices();
-      const isSoleDevice = existingDevices.length === 0;
+      // recover the device registration preserving its signed role claim so ephemeral
+      // container restarts neither lock out legitimate devices nor invert admin/standard roles.
+      const existingDevices = await remoteStore.listDevices({ skipAutoAdminPromotion: true });
+      const hasExistingAdmin = existingDevices.some((d) => d.role === "admin" && !d.revoked);
+      const resolvedRole: DeviceRole = verification.role
+        ? verification.role === "admin" && hasExistingAdmin
+          ? "standard"
+          : verification.role
+        : existingDevices.length === 0
+        ? "admin"
+        : "standard";
+
       const restoredDevice: PairedDevice = {
         id: verification.deviceId,
         name: userAgent?.includes("Android") ? "Android Companion" : "Paired Companion",
-        deviceType: userAgent?.includes("Android") ? "mobile" : "browser",
-        role: isSoleDevice ? "admin" : "standard",
+        deviceType: verification.deviceType || (userAgent?.includes("Android") ? "mobile" : "browser"),
+        role: resolvedRole,
+        roleExplicit: true,
         tokenHash: pairingManager.hashToken(cleanToken),
         pairedAt: new Date().toISOString(),
         lastSeenAt: new Date().toISOString(),
@@ -88,12 +137,16 @@ export class RemoteSessionManager {
       return null;
     }
 
-    // Verify token hash matches stored hash
+    // Verify token hash matches stored hash (or bind hash if provisionally restored from signed access token)
     const inputHash = pairingManager.hashToken(cleanToken);
-    const inputBuf = Buffer.from(inputHash);
-    const storedBuf = Buffer.from(device.tokenHash);
-    if (inputBuf.length !== storedBuf.length || !crypto.timingSafeEqual(inputBuf, storedBuf)) {
-      return null;
+    if (!device.tokenHash) {
+      device.tokenHash = inputHash;
+    } else {
+      const inputBuf = Buffer.from(inputHash);
+      const storedBuf = Buffer.from(device.tokenHash);
+      if (inputBuf.length !== storedBuf.length || !crypto.timingSafeEqual(inputBuf, storedBuf)) {
+        return null;
+      }
     }
 
     // Update last seen metadata
@@ -106,12 +159,27 @@ export class RemoteSessionManager {
   }
 
   // ---------------------------------------------------------------------------
-  // Active Connection Management
+  // Active Connection Management & Platform-Aware Heartbeat
   // ---------------------------------------------------------------------------
 
-  registerClient(ws: any, device: PairedDevice, ipAddress: string, userAgent: string): RemoteSession {
+  registerClient(
+    ws: any,
+    device: PairedDevice,
+    ipAddress: string,
+    userAgent: string,
+    options?: { heartbeatTimeoutMs?: number },
+  ): RemoteSession {
     const sessionId = crypto.randomUUID();
-    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
+
+    const isMobile =
+      device.deviceType === "mobile" ||
+      /android|iphone|ipad|mobile/i.test(userAgent || "");
+    const defaultTimeout = isMobile
+      ? parseInt(process.env.MYRAA_WS_HEARTBEAT_TIMEOUT_MOBILE_MS || "60000", 10)
+      : parseInt(process.env.MYRAA_WS_HEARTBEAT_TIMEOUT_MS || "45000", 10);
+    const heartbeatTimeoutMs = options?.heartbeatTimeoutMs ?? defaultTimeout;
 
     const session: RemoteSession = {
       sessionId,
@@ -125,15 +193,304 @@ export class RemoteSessionManager {
       authenticated: true,
     };
 
-    this._activeClients.set(sessionId, { session, ws });
+    (ws as any).remoteSession = session;
+    (ws as any).remoteSessionId = sessionId;
 
-    ws.on("close", () => {
-      this._activeClients.delete(sessionId);
-      console.log(`[RemoteSession] Session '${sessionId}' disconnected (${device.name}).`);
+    this._activeClients.set(sessionId, {
+      session,
+      ws,
+      lastHeartbeatMs: nowMs,
+      heartbeatTimeoutMs,
+      geminiState: "STARTING_GEMINI",
     });
 
-    console.log(`[RemoteSession] Registered active remote session '${sessionId}' for device '${device.name}' (Role: ${device.role}).`);
+    const prevTelemetry = this._deviceTelemetry.get(device.id);
+    this._deviceTelemetry.set(device.id, {
+      deviceId: device.id,
+      connectionState: "CONNECTED",
+      geminiState: "STARTING_GEMINI",
+      lastHeartbeat: now,
+      lastGeminiTimestamp: prevTelemetry?.lastGeminiTimestamp ?? null,
+      reconnectAttempt: 0,
+      lastCloseCode: prevTelemetry?.lastCloseCode ?? null,
+      lastFailureClass: "NONE",
+    });
+
+    // Persist safe session snapshot asynchronously
+    remoteStore
+      .saveSessionSnapshot({
+        deviceId: device.id,
+        deviceType: device.deviceType,
+        sessionId,
+        conversationId: `conv_${device.id}`,
+        connectionState: "CONNECTED",
+        geminiState: "STARTING_GEMINI",
+        lastHeartbeat: now,
+        reconnectAttempt: 0,
+        lastFailureClass: "NONE",
+      })
+      .catch(() => {});
+
+    if (typeof ws.on === "function") {
+      ws.on("pong", () => {
+        this.recordHeartbeat(sessionId);
+      });
+
+      ws.on("close", (code?: number, reasonBuf?: Buffer | string) => {
+        this._activeClients.delete(sessionId);
+        const closeCode = typeof code === "number" ? code : 1006;
+        const rawReason = reasonBuf ? String(reasonBuf) : "";
+        const { failureClass } = classifyDisconnectFailure(closeCode, rawReason);
+        const currentTel = this._deviceTelemetry.get(device.id);
+        this._deviceTelemetry.set(device.id, {
+          deviceId: device.id,
+          connectionState: "DISCONNECTED",
+          geminiState: "CLOSED",
+          lastHeartbeat: currentTel?.lastHeartbeat || now,
+          lastGeminiTimestamp: currentTel?.lastGeminiTimestamp ?? null,
+          reconnectAttempt: (currentTel?.reconnectAttempt ?? 0) + (closeCode === 1000 ? 0 : 1),
+          lastCloseCode: closeCode,
+          lastFailureClass: closeCode === 1000 ? "NONE" : failureClass,
+        });
+        remoteStore
+          .saveSessionSnapshot({
+            deviceId: device.id,
+            deviceType: device.deviceType,
+            sessionId,
+            connectionState: "DISCONNECTED",
+            geminiState: "CLOSED",
+            lastCloseCode: closeCode,
+            lastFailureClass: closeCode === 1000 ? "NONE" : failureClass,
+          })
+          .catch(() => {});
+        console.log(
+          `[RemoteSession] Session '${sessionId}' disconnected (deviceHash=${hashDeviceIdSafe(device.id)} code=${closeCode} failureClass=${closeCode === 1000 ? "NONE" : failureClass}).`,
+        );
+      });
+    }
+
+    console.log(
+      `[RemoteSession] Registered active remote session '${sessionId}' (deviceHash=${hashDeviceIdSafe(device.id)} role=${device.role}).`,
+    );
     return session;
+  }
+
+  /**
+   * Updates heartbeat timestamp for an active session (called on ping, pong, or incoming client frames).
+   */
+  recordHeartbeat(sessionIdOrDeviceId: string, nowMs = Date.now()): boolean {
+    const iso = new Date(nowMs).toISOString();
+    const bySession = this._activeClients.get(sessionIdOrDeviceId);
+    if (bySession) {
+      bySession.lastHeartbeatMs = nowMs;
+      bySession.session.lastHeartbeatAt = iso;
+      const tel = this._deviceTelemetry.get(bySession.session.deviceId);
+      if (tel) {
+        tel.lastHeartbeat = iso;
+      }
+      return true;
+    }
+
+    for (const client of this._activeClients.values()) {
+      if (client.session.deviceId === sessionIdOrDeviceId) {
+        client.lastHeartbeatMs = nowMs;
+        client.session.lastHeartbeatAt = iso;
+        const tel = this._deviceTelemetry.get(sessionIdOrDeviceId);
+        if (tel) {
+          tel.lastHeartbeat = iso;
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Sweeps active connections, sends protocol ping frames, and closes any dead connections
+   * that have exceeded their platform-specific heartbeat timeout.
+   */
+  checkHeartbeats(nowMs = Date.now()): { pinged: number; terminated: string[] } {
+    let pinged = 0;
+    const terminated: string[] = [];
+
+    for (const [sessionId, client] of this._activeClients.entries()) {
+      const elapsed = nowMs - client.lastHeartbeatMs;
+      if (elapsed > client.heartbeatTimeoutMs) {
+        terminated.push(sessionId);
+        const deviceId = client.session.deviceId;
+        const tel = this._deviceTelemetry.get(deviceId);
+        this._deviceTelemetry.set(deviceId, {
+          deviceId,
+          connectionState: "DISCONNECTED",
+          geminiState: "CLOSED",
+          lastHeartbeat: tel?.lastHeartbeat || client.session.lastHeartbeatAt,
+          lastGeminiTimestamp: tel?.lastGeminiTimestamp ?? null,
+          reconnectAttempt: (tel?.reconnectAttempt ?? 0) + 1,
+          lastCloseCode: 4000,
+          lastFailureClass: "HEARTBEAT_TIMEOUT",
+        });
+        try {
+          client.ws.close(4000, "HEARTBEAT_TIMEOUT: Connection unresponsive");
+        } catch {
+          /* ignore */
+        }
+        this._activeClients.delete(sessionId);
+        console.warn(
+          `[RemoteSession] Terminated unresponsive session '${sessionId}' (deviceHash=${hashDeviceIdSafe(deviceId)} elapsedMs=${elapsed}).`,
+        );
+        continue;
+      }
+
+      if (client.ws && client.ws.readyState === 1) {
+        try {
+          if (typeof client.ws.ping === "function") {
+            client.ws.ping();
+          }
+          pinged++;
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    return { pinged, terminated };
+  }
+
+  /**
+   * Updates the Gemini Live state and connection state for a device and persists a safe snapshot.
+   */
+  async updateDeviceSessionState(
+    deviceId: string,
+    updates: {
+      connectionState?: CanonicalConnectionState;
+      geminiState?: GeminiSessionState;
+      lastGeminiTimestamp?: string;
+      lastCloseCode?: number | null;
+      lastFailureClass?: RemoteFailureClass;
+      reconnectAttempt?: number;
+      recentContext?: { role: "user" | "model"; text: string }[];
+    },
+  ): Promise<void> {
+    if (!deviceId) return;
+    const now = new Date().toISOString();
+    const existing = this._deviceTelemetry.get(deviceId) || {
+      deviceId,
+      connectionState: "CONNECTED",
+      geminiState: "IDLE",
+      lastHeartbeat: now,
+      lastGeminiTimestamp: null,
+      reconnectAttempt: 0,
+      lastCloseCode: null,
+      lastFailureClass: "NONE",
+    };
+
+    const nextTelemetry: DeviceConnectionTelemetry = {
+      ...existing,
+      connectionState: updates.connectionState ?? existing.connectionState,
+      geminiState: updates.geminiState ?? existing.geminiState,
+      lastGeminiTimestamp: updates.lastGeminiTimestamp ?? existing.lastGeminiTimestamp,
+      lastCloseCode: updates.lastCloseCode !== undefined ? updates.lastCloseCode : existing.lastCloseCode,
+      lastFailureClass: updates.lastFailureClass ?? existing.lastFailureClass,
+      reconnectAttempt: updates.reconnectAttempt ?? existing.reconnectAttempt,
+      lastHeartbeat: now,
+    };
+    this._deviceTelemetry.set(deviceId, nextTelemetry);
+
+    for (const client of this._activeClients.values()) {
+      if (client.session.deviceId === deviceId && updates.geminiState) {
+        client.geminiState = updates.geminiState;
+      }
+    }
+
+    await remoteStore.saveSessionSnapshot({
+      deviceId,
+      connectionState: nextTelemetry.connectionState,
+      geminiState: nextTelemetry.geminiState,
+      lastHeartbeat: nextTelemetry.lastHeartbeat || now,
+      lastGeminiTimestamp: nextTelemetry.lastGeminiTimestamp,
+      lastCloseCode: nextTelemetry.lastCloseCode,
+      lastFailureClass: nextTelemetry.lastFailureClass,
+      reconnectAttempt: nextTelemetry.reconnectAttempt,
+      recentContext: updates.recentContext,
+    });
+  }
+
+  /**
+   * Returns safe, token-free connection observability status for GET /api/remote/connection-status.
+   */
+  async getConnectionStatus(params: {
+    deviceId?: string;
+    authenticated: boolean;
+    deviceAuthorized: boolean;
+    accessTokenExpiry: string | null;
+    failureReason?: string;
+  }): Promise<{
+    connectionState: CanonicalConnectionState;
+    authenticated: boolean;
+    deviceAuthorized: boolean;
+    accessTokenExpiry: string | null;
+    lastHeartbeat: string | null;
+    reconnectAttempt: number;
+    lastCloseCode: number | null;
+    lastFailureClass: RemoteFailureClass;
+    geminiState: GeminiSessionState;
+  }> {
+    const { deviceId, authenticated, deviceAuthorized, accessTokenExpiry, failureReason } = params;
+    if (!deviceId) {
+      const failure = failureReason
+        ? classifyDisconnectFailure(null, failureReason, /TOKEN_EXPIRED/i.test(failureReason)).failureClass
+        : "NONE";
+      return {
+        connectionState: authenticated ? "CONNECTED" : "DISCONNECTED",
+        authenticated,
+        deviceAuthorized,
+        accessTokenExpiry,
+        lastHeartbeat: null,
+        reconnectAttempt: 0,
+        lastCloseCode: null,
+        lastFailureClass: failure,
+        geminiState: "IDLE",
+      };
+    }
+
+    const activeClient = this.getClientForDevice(deviceId);
+    const telemetry = this._deviceTelemetry.get(deviceId);
+    const snapshot = await remoteStore.getSessionSnapshot(deviceId);
+
+    const geminiState: GeminiSessionState =
+      activeClient?.geminiState ||
+      telemetry?.geminiState ||
+      (snapshot?.geminiState as GeminiSessionState) ||
+      "IDLE";
+
+    const connectionState: CanonicalConnectionState = activeClient
+      ? geminiState === "READY"
+        ? "READY"
+        : geminiState === "STARTING_GEMINI" || geminiState === "RECREATING"
+        ? "STARTING_GEMINI"
+        : "CONNECTED"
+      : (telemetry?.connectionState as CanonicalConnectionState) ||
+        (snapshot?.connectionState as CanonicalConnectionState) ||
+        "DISCONNECTED";
+
+    return {
+      connectionState,
+      authenticated,
+      deviceAuthorized,
+      accessTokenExpiry,
+      lastHeartbeat:
+        activeClient?.session.lastHeartbeatAt ||
+        telemetry?.lastHeartbeat ||
+        snapshot?.lastHeartbeat ||
+        null,
+      reconnectAttempt: telemetry?.reconnectAttempt ?? snapshot?.reconnectAttempt ?? 0,
+      lastCloseCode: telemetry?.lastCloseCode ?? snapshot?.lastCloseCode ?? null,
+      lastFailureClass:
+        (telemetry?.lastFailureClass as RemoteFailureClass) ||
+        (snapshot?.lastFailureClass as RemoteFailureClass) ||
+        "NONE",
+      geminiState,
+    };
   }
 
   getActiveSessions(): RemoteSession[] {
@@ -152,6 +509,18 @@ export class RemoteSessionManager {
     device.revokedAt = new Date().toISOString();
     device.revokedReason = reason;
     await remoteStore.saveDevice(device);
+    await remoteStore.deleteSessionSnapshot(deviceId);
+
+    this._deviceTelemetry.set(deviceId, {
+      deviceId,
+      connectionState: "FAILED",
+      geminiState: "CLOSED",
+      lastHeartbeat: new Date().toISOString(),
+      lastGeminiTimestamp: null,
+      reconnectAttempt: 0,
+      lastCloseCode: 4401,
+      lastFailureClass: "DEVICE_REVOKED",
+    });
 
     // Disconnect any active connections for this device immediately
     for (const [sessionId, client] of this._activeClients.entries()) {

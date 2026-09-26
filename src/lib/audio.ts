@@ -9,7 +9,17 @@
  * - Input & Output AnalyserNodes for real-time waveform visuals.
  */
 
-import { getValidRemoteWsToken, StoredRemoteSession } from "./remoteAuth";
+import {
+  getValidRemoteWsToken,
+  getAccessTokenExpiryInfo,
+  StoredRemoteSession,
+} from "./remoteAuth";
+import {
+  CanonicalConnectionState,
+  SafeDiagnosticMetadata,
+  RemoteReconnectController,
+  sanitizeDiagnosticString,
+} from "./connectionStateMachine";
 
 export type LiveState = "disconnected" | "connecting" | "listening" | "speaking";
 
@@ -110,15 +120,18 @@ export class MyraAudioSession {
   private readonly MAX_RECONNECT_ATTEMPTS = 10;
   /** Base delay in ms. Doubles each attempt (capped at 30s): 1s, 2s, 4s, 8s, 16s, 30s, 30s… */
   private readonly RECONNECT_BASE_DELAY_MS = 1000;
-  /** Timer handle for a pending reconnect. */
-  private reconnectTimer: ReturnType<typeof setInterval> | null = null;
   /** Keepalive ping interval — prevents Render's proxy from timing out idle WebSocket connections after 30 min. */
   private readonly KEEPALIVE_INTERVAL_MS = 25000;
   /** Active keepalive timer handle. Cleared in _closeWsOnly(). */
   private _keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  /** Canonical Reconnect Controller & State Machine */
+  private reconnectController: RemoteReconnectController;
+  /** Last observed WebSocket close code (e.g. 1006 after Render sleep/restart) */
+  private lastCloseCode: number | null = null;
 
   private onNotification?: (notification: any) => void;
   private onSessionUpdate?: (updated: StoredRemoteSession) => void;
+  private onConnectionStateChange?: (state: CanonicalConnectionState) => void;
   private token?: string;
 
   constructor(handlers: {
@@ -129,6 +142,7 @@ export class MyraAudioSession {
     onMemorySync?: (memories: any[]) => void;
     onNotification?: (notification: any) => void;
     onSessionUpdate?: (updated: StoredRemoteSession) => void;
+    onConnectionStateChange?: (state: CanonicalConnectionState) => void;
     token?: string;
   }) {
     this.onStateChange = handlers.onStateChange;
@@ -138,7 +152,24 @@ export class MyraAudioSession {
     this.onMemorySync = handlers.onMemorySync;
     this.onNotification = handlers.onNotification;
     this.onSessionUpdate = handlers.onSessionUpdate;
+    this.onConnectionStateChange = handlers.onConnectionStateChange;
     this.token = handlers.token;
+
+    this.reconnectController = new RemoteReconnectController({
+      maxAttempts: this.MAX_RECONNECT_ATTEMPTS,
+      baseDelayMs: this.RECONNECT_BASE_DELAY_MS,
+      maxDelayMs: 30000,
+      onStateChange: (state) => {
+        if (this.onConnectionStateChange) {
+          this.onConnectionStateChange(state);
+        }
+      },
+      onHeartbeatTimeout: () => {
+        console.warn("[Myraa WS] Client heartbeat timeout detected; cycling dead socket for clean reconnect.");
+        this._closeWsOnly();
+        this.scheduleReconnect(4000, "HEARTBEAT_TIMEOUT: pong timeout");
+      },
+    });
   }
 
   private setState(state: LiveState) {
@@ -148,6 +179,21 @@ export class MyraAudioSession {
 
   public getState(): LiveState {
     return this.currentState;
+  }
+
+  public getCanonicalConnectionState(): CanonicalConnectionState {
+    return this.reconnectController.getState();
+  }
+
+  public getConnectionSnapshot(): SafeDiagnosticMetadata {
+    const wsState = !this.ws
+      ? "CLOSED"
+      : this.ws.readyState === WebSocket.CONNECTING
+      ? "CONNECTING"
+      : this.ws.readyState === WebSocket.OPEN
+      ? "OPEN"
+      : "CLOSING";
+    return this.reconnectController.getDiagnostics(wsState);
   }
 
   public setToken(token: string): void {
@@ -164,11 +210,12 @@ export class MyraAudioSession {
   }
 
   // Requests microphone and creates connections.
-  // Safe to call multiple times — reconnect attempts reuse this path.
+  // Safe to call multiple times — single-flight guarded so duplicate sockets cannot spawn.
   public async connect() {
-    if (this.isActivated) return;
+    if (this.isActivated || this.reconnectController.hasAttemptInFlight()) return;
     this.isActivated = true;
     this.isIntentionalClose = false;
+    this.lastCloseCode = null;
     this.setState("connecting");
 
     // Clean up any lingering previous session audio resources before acquiring a fresh stream
@@ -192,7 +239,7 @@ export class MyraAudioSession {
           },
         });
       } catch (micError: any) {
-        console.error("[Myraa Audio] Microphone acquisition failed:", micError);
+        console.error("[Myraa Audio] Microphone acquisition failed:", sanitizeDiagnosticString(micError?.message || String(micError)));
         this.isActivated = false;
         this.setState("disconnected");
 
@@ -275,12 +322,6 @@ export class MyraAudioSession {
         const channelData: Float32Array = e.data.channelData;
 
         // Local VAD energy check for immediate client-side barge-in.
-        // Thresholds are tuned to distinguish real user speech from speaker echo bleed:
-        //   - echoCancellation: true in getUserMedia helps but Web Audio API output bypasses
-        //     Chrome's AEC reference signal, so speaker echo can still reach the mic.
-        //   - RMS 0.15 threshold: real speech is typically 0.15–0.5; speaker room bleed is 0.05–0.12
-        //   - 4 consecutive frames: ~40–80ms of sustained energy (avoids spike false positives)
-        //   - 600ms cooldown: prevents re-triggering on the tail of the same echo burst
         if (this.activeSources.length > 0 || this.currentState === "speaking") {
           const now = Date.now();
           const cooldownMs = 600;
@@ -330,56 +371,125 @@ export class MyraAudioSession {
       this.micWorkletNode.connect(this.inputAudioCtx.destination);
 
       // 3. Establish custom WebSocket server bridge now that audio hardware is ready
-      const isLocalHost =
-        typeof window !== "undefined" &&
-        (window.location.hostname === "localhost" ||
-          window.location.hostname === "127.0.0.1" ||
-          window.location.hostname === "::1");
+      await this._openWebSocketBridge(false);
 
-      if (!isLocalHost) {
-        try {
-          const validToken = await getValidRemoteWsToken(this.onSessionUpdate);
-          if (validToken) {
-            this.token = validToken;
-          }
-        } catch {
-          /* ignore and check fallback */
+    } catch (e: any) {
+      console.error("Connection establish sequence failed:", sanitizeDiagnosticString(e?.message || String(e)));
+      this.onError(e.message || "Failed to initialize active channel.");
+      this._cleanupAudio();
+      this.setState("disconnected");
+      if (!this.isIntentionalClose) {
+        this.scheduleReconnect(0, e?.message || "Connection establish sequence failed");
+      }
+    }
+  }
+
+  /**
+   * Single-flight WebSocket bridge establishment used by both initial connect()
+   * and automatic reconnects. Guarantees only 1 WebSocket attempt exists at a time,
+   * validates/refreshes access tokens before connecting, and logs safe diagnostics.
+   */
+  private async _openWebSocketBridge(isReconnect: boolean): Promise<void> {
+    if (this.isIntentionalClose) return;
+
+    // Close any previous socket before starting a new attempt
+    this._closeWsOnly();
+
+    const { generation: attemptGen } = this.reconnectController.beginConnectAttempt(isReconnect);
+
+    const isLocalHost =
+      typeof window !== "undefined" &&
+      (window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1" ||
+        window.location.hostname === "::1");
+
+    if (!isLocalHost) {
+      try {
+        const expiryInfo = getAccessTokenExpiryInfo();
+        if (expiryInfo.isExpiringSoon || expiryInfo.isExpired) {
+          this.reconnectController.setAuthMetadata(
+            expiryInfo.isExpired ? "expired" : "expiring_soon",
+            expiryInfo.expiresInSec
+          );
+          this.reconnectController.transitionTo("AUTH_EXPIRED", "CLOSED");
+          this.reconnectController.setAuthMetadata("refreshing", expiryInfo.expiresInSec);
+          this.reconnectController.transitionTo("REFRESHING_AUTH", "CLOSED");
         }
+        // If the previous close was 1006 (e.g. Render wake-up or proxy rejection),
+        // force a token refresh / fallback check so we don't reuse a stale session token.
+        const forceRefresh = isReconnect && this.lastCloseCode === 1006;
+        const validToken = await getValidRemoteWsToken(this.onSessionUpdate, { forceRefresh });
+        if (validToken) {
+          this.token = validToken;
+        }
+        const updatedExpiry = getAccessTokenExpiryInfo(this.token);
+        this.reconnectController.setAuthMetadata(
+          this.token?.startsWith("sora_dev_") ? "fallback_device_token" : "valid",
+          updatedExpiry.expiresInSec
+        );
+      } catch {
+        /* ignore and check safe fallback below */
       }
+    }
 
-      if (!isLocalHost && !this.token && typeof localStorage !== "undefined") {
-        try {
-          const raw = localStorage.getItem("sora_remote_session");
-          if (raw) {
-            const sess = JSON.parse(raw);
-            if (sess?.token || sess?.accessToken) {
-              this.token = sess.accessToken || sess.token;
-            }
+    // Abort if disconnect() or a newer attempt occurred while awaiting token refresh
+    if (this.isIntentionalClose || !this.reconnectController.isCurrentGeneration(attemptGen)) {
+      return;
+    }
+
+    if (!isLocalHost && !this.token && typeof localStorage !== "undefined") {
+      try {
+        const raw = localStorage.getItem("sora_remote_session");
+        if (raw) {
+          const sess = JSON.parse(raw);
+          const expiryInfo = getAccessTokenExpiryInfo(sess);
+          // NEVER use an expired accessToken — fall back to durable device token (sora_dev_...)
+          if (sess?.accessToken && !expiryInfo.isExpired) {
+            this.token = sess.accessToken;
+          } else if (sess?.token) {
+            this.token = sess.token;
           }
-        } catch { /* ignore */ }
-      }
+        }
+      } catch { /* ignore */ }
+    }
 
-      if (!isLocalHost && !this.token) {
-        const err = "REMOTE_AUTH_REQUIRED: Non-localhost connections must authenticate via /remote-live with a paired device token.";
-        console.warn(`[Myraa Audio] ${err}`);
-        this.onError(err);
-        this._cleanupAudio();
-        this.setState("disconnected");
-        return;
-      }
+    if (!isLocalHost && !this.token) {
+      const err = "REMOTE_AUTH_REQUIRED: Non-localhost connections must authenticate via /remote-live with a paired device token.";
+      console.warn(`[Myraa Audio] ${err}`);
+      this.reconnectController.setAuthMetadata("unauthenticated", null);
+      this.reconnectController.transitionTo("FAILED", "CLOSED");
+      this.onError(err);
+      this._cleanupAudio();
+      this.isActivated = false;
+      this.setState("disconnected");
+      return;
+    }
 
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const endpoint = isLocalHost && !this.token ? "/live" : "/remote-live";
-      const wsUrl = `${protocol}//${window.location.host}${endpoint}`;
-      const wsProtocols = this.token ? ["myraa-auth", this.token] : undefined;
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const endpoint = isLocalHost && !this.token ? "/live" : "/remote-live";
+    const wsUrl = `${protocol}//${window.location.host}${endpoint}`;
+    const wsProtocols = this.token ? ["myraa-auth", this.token] : undefined;
 
-      console.log(`[Myraa WS] Connecting to ${endpoint} (authenticated=${Boolean(this.token)})...`);
-      this.ws = wsProtocols ? new WebSocket(wsUrl, wsProtocols) : new WebSocket(wsUrl);
-      this.ws.binaryType = "blob";
+    this.reconnectController.transitionTo("AUTHENTICATING", "CONNECTING");
 
-      this.ws.onopen = () => {
-        console.log("[Myraa] Connected to server side WS bridge");
-        if (!this.isActivated) return;
+    console.log(
+      `[Myraa WS] ${isReconnect ? "Reconnecting" : "Connecting"} to ${endpoint} ` +
+      `(authenticated=${Boolean(this.token)}, attempt=${this.reconnectAttempts}, state=${this.reconnectController.getState()})...`
+    );
+
+    try {
+      const ws = wsProtocols ? new WebSocket(wsUrl, wsProtocols) : new WebSocket(wsUrl);
+      ws.binaryType = "blob";
+      this.ws = ws;
+
+      ws.onopen = () => {
+        if (this.isIntentionalClose || !this.reconnectController.isCurrentGeneration(attemptGen)) {
+          try { ws.close(); } catch {}
+          return;
+        }
+        console.log("[Myraa WS] Connected to server-side WS bridge (awaiting Gemini READY)");
+        this.reconnectController.onSocketOpen();
+
         // Start keepalive ping — prevents Render's proxy from dropping idle WS after 30 min.
         if (this._keepaliveTimer !== null) {
           clearInterval(this._keepaliveTimer);
@@ -389,194 +499,116 @@ export class MyraAudioSession {
             this.ws.send(JSON.stringify({ type: "ping" }));
           }
         }, this.KEEPALIVE_INTERVAL_MS);
-        this.setState("listening");
+
+        this.reconnectController.startHeartbeat(() => {
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: "ping" }));
+          }
+        });
+
+        if (!isReconnect) {
+          this.setState("listening");
+        }
       };
 
-      this.ws.onmessage = this._handleWsMessage.bind(this);
+      ws.onmessage = this._handleWsMessage.bind(this);
 
-      this.ws.onerror = (wsError) => {
-        console.error("[Myraa WS] Transport error:", wsError);
-        // onerror is always followed by onclose — let onclose handle the reconnect decision.
+      ws.onerror = () => {
+        // onerror is always followed by onclose — let onclose handle classification and reconnect.
       };
 
-      this.ws.onclose = (event) => {
+      ws.onclose = (event) => {
+        if (!this.reconnectController.isCurrentGeneration(attemptGen)) {
+          return;
+        }
         const code = event?.code ?? 0;
-        const reason = event?.reason || "";
-        console.log(`[Myraa WS] Connection closed (code=${code}, reason="${reason}", intentional=${this.isIntentionalClose})`);
+        const rawReason = event?.reason || "";
+        const safeReason = sanitizeDiagnosticString(rawReason);
+        this.lastCloseCode = code;
 
-        // Tear down only the WS + audio resources; do NOT call full disconnect() so
-        // we can reconnect. The microphone and AudioContexts will be re-created on
-        // the next connect() call.
+        console.log(
+          `[Myraa WS] Connection closed (code=${code}, reason="${safeReason}", ` +
+          `intentional=${this.isIntentionalClose}, state=${this.reconnectController.getState()})`
+        );
+
         this._closeWsOnly();
 
-        if (code === 4401 || reason.includes("DEVICE_REVOKED") || reason.includes("Device revoked")) {
+        if (code === 4401 || rawReason.includes("DEVICE_REVOKED") || rawReason.includes("Device revoked")) {
+          this.reconnectController.triggerTerminalSecurityStop("DEVICE_REVOKED", safeReason || "Device revoked");
           this.onError("DEVICE_REVOKED: This device pairing has been revoked by the admin.");
           this._cleanupAudio();
+          this.isActivated = false;
+          this.setState("disconnected");
+          return;
+        }
+
+        if (code === 4423 || rawReason.includes("LOCKDOWN") || rawReason.includes("Security Lockdown")) {
+          this.reconnectController.triggerTerminalSecurityStop("SECURITY_LOCKDOWN", safeReason || "Security Lockdown active");
+          this.onError("LOCKDOWN: Remote access is currently locked down by security policy.");
+          this._cleanupAudio();
+          this.isActivated = false;
           this.setState("disconnected");
           return;
         }
 
         if (this.isIntentionalClose) {
-          // User clicked Stop — do a clean full disconnect and stop here.
+          this.reconnectController.markIntentionalDisconnect();
           this._cleanupAudio();
+          this.isActivated = false;
           this.setState("disconnected");
           return;
         }
 
-        // Unexpected close: attempt auto-reconnect.
-        this.scheduleReconnect();
+        this.scheduleReconnect(code, safeReason);
       };
-
-    } catch (e: any) {
-      console.error("Connection establish sequence failed:", e);
-      this.onError(e.message || "Failed to initialize active channel.");
-      this._cleanupAudio();
-      this.setState("disconnected");
-      if (!this.isIntentionalClose) {
-        this.scheduleReconnect();
-      }
+    } catch (err: any) {
+      console.error("[Myraa WS] Failed to create WebSocket:", sanitizeDiagnosticString(err?.message || String(err)));
+      this.scheduleReconnect(0, err?.message || "WebSocket creation error");
     }
   }
 
   /**
-   * Attempts to re-establish the WebSocket connection with exponential backoff.
-   * Does NOT auto-activate the microphone — the user must click the button again
-   * after reconnect completes. This only restores the WS bridge to the server.
+   * Schedules a single-flight reconnect with exponential backoff + bounded jitter via
+   * RemoteReconnectController. Backoff is only reset once the session reaches READY.
    */
-  private scheduleReconnect(): void {
+  private scheduleReconnect(closeCode = 1006, closeReason = ""): void {
     if (this.isIntentionalClose) return;
-    if (this.reconnectAttempts >= this.MAX_RECONNECT_ATTEMPTS) {
-      console.warn(`[Myraa WS] Max reconnect attempts (${this.MAX_RECONNECT_ATTEMPTS}) reached. Giving up.`);
-      this.onError(
-        `Connection lost after ${this.MAX_RECONNECT_ATTEMPTS} reconnect attempts. ` +
-        `Please check your network and tap the button to try again.`
+
+    const decision = this.reconnectController.scheduleReconnect(
+      closeCode,
+      closeReason,
+      async () => {
+        if (this.isIntentionalClose) return;
+        await this._openWebSocketBridge(true);
+      }
+    );
+
+    this.reconnectAttempts = decision.attempt;
+
+    if (!decision.scheduled) {
+      console.warn(
+        `[Myraa WS] Reconnect stopped (failureClass=${decision.failureClass}, attempts=${decision.attempt}/${this.MAX_RECONNECT_ATTEMPTS}).`
       );
+      if (decision.failureClass === "MAX_RECONNECTS_EXCEEDED") {
+        this.onError(
+          `Connection lost after ${this.MAX_RECONNECT_ATTEMPTS} reconnect attempts. ` +
+          `Please check your network and tap the button to try again.`
+        );
+      }
+      this._cleanupAudio();
+      this.isActivated = false;
       this.setState("disconnected");
       return;
     }
 
-    const delay = Math.min(
-      this.RECONNECT_BASE_DELAY_MS * Math.pow(2, this.reconnectAttempts),
-      30000  // cap at 30s — attempts 6–10 each wait 30s (covers a Render redeploy)
+    console.log(
+      `[Myraa WS] Reconnect attempt ${decision.attempt}/${this.MAX_RECONNECT_ATTEMPTS} ` +
+      `scheduled in ${decision.delayMs}ms (failureClass=${decision.failureClass})...`
     );
-    this.reconnectAttempts += 1;
-
-    console.log(`[Myraa WS] Reconnect attempt ${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS} in ${delay}ms...`);
-    // Notify the UI so it can show a "reconnecting" indicator without activating the mic.
     this.onError(
-      `RECONNECTING:${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS} (${Math.round(delay / 1000)}s)`
+      `RECONNECTING:${decision.attempt}/${this.MAX_RECONNECT_ATTEMPTS} (${Math.max(1, Math.round(decision.delayMs / 1000))}s)`
     );
     this.setState("connecting");
-
-    // Cancel any previously scheduled timer.
-    if (this.reconnectTimer !== null) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-
-    this.reconnectTimer = setTimeout(async () => {
-      this.reconnectTimer = null;
-      if (this.isIntentionalClose) return;
-
-      // Re-open only the WebSocket — no mic setup (isActivated=false so connect() runs).
-      this.isActivated = false;
-
-      const isLocalHost =
-        typeof window !== "undefined" &&
-        (window.location.hostname === "localhost" ||
-          window.location.hostname === "127.0.0.1" ||
-          window.location.hostname === "::1");
-
-      if (!isLocalHost) {
-        try {
-          const freshToken = await getValidRemoteWsToken(this.onSessionUpdate);
-          if (freshToken) {
-            this.token = freshToken;
-          }
-        } catch {
-          // ignore and proceed
-        }
-      }
-
-      if (!isLocalHost && !this.token && typeof localStorage !== "undefined") {
-        try {
-          const raw = localStorage.getItem("sora_remote_session");
-          if (raw) {
-            const sess = JSON.parse(raw);
-            if (sess?.token || sess?.accessToken) {
-              this.token = sess.accessToken || sess.token;
-            }
-          }
-        } catch { /* ignore */ }
-      }
-
-      if (!isLocalHost && !this.token) {
-        console.warn("[Myraa WS] Cannot reconnect: non-localhost connection has no authenticated device token.");
-        this.setState("disconnected");
-        return;
-      }
-
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const endpoint = isLocalHost && !this.token ? "/live" : "/remote-live";
-      const wsUrl = `${protocol}//${window.location.host}${endpoint}`;
-      const wsProtocols = this.token ? ["myraa-auth", this.token] : undefined;
-      console.log(`[Myraa WS] Reconnecting to ${endpoint}...`);
-
-      try {
-        const ws = wsProtocols ? new WebSocket(wsUrl, wsProtocols) : new WebSocket(wsUrl);
-        ws.binaryType = "blob";
-        this.ws = ws;
-
-        ws.onopen = () => {
-          if (this.isIntentionalClose) {
-            try { ws.close(); } catch (e) {}
-            return;
-          }
-          console.log("[Myraa WS] Reconnected to server bridge successfully.");
-          this.reconnectAttempts = 0; // reset counter on success
-          this.isActivated = true;
-          // Start keepalive ping — prevents Render's 30-min proxy timeout on idle WS connections.
-          if (this._keepaliveTimer !== null) {
-            clearInterval(this._keepaliveTimer);
-          }
-          this._keepaliveTimer = setInterval(() => {
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-              this.ws.send(JSON.stringify({ type: "ping" }));
-            }
-          }, this.KEEPALIVE_INTERVAL_MS);
-          // Stay in "connecting" until server sends { type:"status", status:"connected" }
-        };
-
-        ws.onmessage = this._handleWsMessage.bind(this);
-
-        ws.onerror = () => {
-          // Will be followed by onclose, handled there.
-        };
-
-        ws.onclose = (event) => {
-          const code = event?.code ?? 0;
-          const reason = event?.reason || "";
-          console.log(`[Myraa WS] Reconnect WS closed (code=${code}, reason="${reason}")`);
-          this._closeWsOnly();
-          if (code === 4401 || reason.includes("DEVICE_REVOKED") || reason.includes("Device revoked")) {
-            this.onError("DEVICE_REVOKED: This device pairing has been revoked by the admin.");
-            this._cleanupAudio();
-            this.setState("disconnected");
-            return;
-          }
-          if (!this.isIntentionalClose) {
-            this.scheduleReconnect();
-          } else {
-            this._cleanupAudio();
-            this.setState("disconnected");
-          }
-        };
-
-      } catch (err: any) {
-        console.error("[Myraa WS] Reconnect failed to create WebSocket:", err);
-        this.scheduleReconnect();
-      }
-    }, delay);
   }
 
   // Interruption triggers: stops all active audio players immediately
@@ -640,9 +672,6 @@ export class MyraAudioSession {
         this.nextStartTime = currentTime;
       } else if (queueAhead > 10) {
         // Severe safety flush only — >10s queue means something is genuinely stuck.
-        // NOTE: Gemini sends audio at ~1.4× real-time, so the queue naturally grows
-        // ~3-4s ahead during a normal response. This is expected and correct — do NOT
-        // flush at low thresholds (3-4s) or it cuts the middle of every response.
         console.warn(`[Myraa Audio] Queue severely drifted (${queueAhead.toFixed(2)}s, ${this.activeSources.length} nodes). Flushing.`);
         this.activeSources.forEach((s) => { try { s.stop(); } catch {} });
         this.activeSources = [];
@@ -686,14 +715,9 @@ export class MyraAudioSession {
   public disconnect() {
     this.isIntentionalClose = true;
     this.isActivated = false;
-
-    // Cancel any pending reconnect timer.
-    if (this.reconnectTimer !== null) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
     this.reconnectAttempts = 0;
 
+    this.reconnectController.markIntentionalDisconnect();
     this._closeWsOnly();
     this._cleanupAudio();
     this.setState("disconnected");
@@ -706,6 +730,7 @@ export class MyraAudioSession {
    * Used internally so reconnect can reopen WS without re-requesting the mic.
    */
   private _closeWsOnly(): void {
+    this.reconnectController.stopHeartbeat();
     // Stop keepalive ping — must be cleared before the WS is nulled.
     if (this._keepaliveTimer !== null) {
       clearInterval(this._keepaliveTimer);
@@ -722,7 +747,6 @@ export class MyraAudioSession {
       } catch (e) {}
       this.ws = null;
     }
-    this.isActivated = false;
   }
 
   /**
@@ -776,11 +800,28 @@ export class MyraAudioSession {
    */
   private async _handleWsMessage(event: MessageEvent): Promise<void> {
     try {
+      this.reconnectController.recordHeartbeat();
       const data = JSON.parse(event.data);
+
+      if (data.type === "pong") {
+        if (data.geminiState) {
+          this.reconnectController.setGeminiState(data.geminiState);
+        }
+        return;
+      }
 
       // Root Error Handler message
       if (data.type === "error") {
-        this.onError(data.error);
+        const rawErr = String(data.error || "Unknown server error");
+        const safeErr = sanitizeDiagnosticString(rawErr);
+        if (/DEVICE_REVOKED|Device revoked/i.test(rawErr)) {
+          this.reconnectController.triggerTerminalSecurityStop("DEVICE_REVOKED", safeErr);
+        } else if (/LOCKDOWN|Security Lockdown/i.test(rawErr)) {
+          this.reconnectController.triggerTerminalSecurityStop("SECURITY_LOCKDOWN", safeErr);
+        } else if (/EMERGENCY_STOP|Emergency Stop/i.test(rawErr)) {
+          this.reconnectController.triggerTerminalSecurityStop("EMERGENCY_STOP", safeErr);
+        }
+        this.onError(rawErr);
         // Fatal server-side error: do a full intentional disconnect so we don't loop.
         this.disconnect();
         return;
@@ -790,20 +831,35 @@ export class MyraAudioSession {
       if (data.type === "status") {
         console.log("[Myraa WS Status]:", data.status);
         if (data.status === "connecting_gemini") {
-          // Waiting or rotating Gemini Live connection — no state change needed
-        } else if (data.status === "connected") {
+          this.reconnectController.setGeminiState("STARTING_GEMINI");
+        } else if (data.status === "recreating_gemini") {
+          this.reconnectController.setGeminiState("RECREATING");
+        } else if (data.status === "connected" || data.status === "gemini_recreated") {
+          this.reconnectAttempts = 0;
+          this.reconnectController.markStableReady();
           this.setState("listening");
+        } else if (data.status === "gemini_degraded") {
+          this.reconnectController.setGeminiState("DEGRADED");
+          console.warn(
+            "[Myraa WS] Gemini Live degraded; MYRAA WebSocket stays connected and will recreate Gemini on next input."
+          );
         } else if (data.status === "session_closed") {
+          const safeReason = sanitizeDiagnosticString(data.reason || "Normal close");
           if (data.reason && !/normal|goaway|duration|timeout|1000|power button|clean/i.test(data.reason)) {
-            console.warn("[Myraa WS] Gemini session closed:", data.code, data.reason);
-            this.onError(`Gemini Live closed: ${data.reason}`);
+            console.warn("[Myraa WS] Gemini session closed:", data.code, safeReason);
           } else {
-            console.log("[Myraa WS] Gemini session closed cleanly:", data.reason || "Normal close");
+            console.log("[Myraa WS] Gemini session closed cleanly:", safeReason);
           }
-          // Use _closeWsOnly so isIntentionalClose stays false and auto-reconnect works
-          this._closeWsOnly();
-          this.isActivated = false;
-          this.scheduleReconnect();
+          // DECOUPLED ARCHITECTURE:
+          // If the MYRAA /remote-live WebSocket is still OPEN, do NOT tear down the
+          // authenticated WebSocket session! Request in-place Gemini Live recreation.
+          if (this.ws && this.ws.readyState === WebSocket.OPEN && !this.isIntentionalClose) {
+            this.reconnectController.setGeminiState("RECREATING");
+            this.ws.send(JSON.stringify({ type: "recreate_gemini" }));
+          } else if (!this.isIntentionalClose) {
+            this._closeWsOnly();
+            this.scheduleReconnect(data.code ?? 1006, safeReason);
+          }
         }
         return;
       }
@@ -833,9 +889,6 @@ export class MyraAudioSession {
       // Handle live captions transcription
       if (data.type === "transcription") {
         this.onTranscription(data.role, data.text);
-        // When the server confirms user speech while MYRAA is playing, clear the
-        // playback queue. But respect the same 600ms cooldown used by the local VAD
-        // barge-in to avoid re-triggering immediately after we just interrupted.
         if (data.role === "user" && this.activeSources.length > 0) {
           const now = Date.now();
           if (now - this._lastBargeInTime > 600) {
@@ -858,6 +911,11 @@ export class MyraAudioSession {
         if (this.onNotification) {
           this.onNotification(data);
         }
+        if (data.type === "emergency_stop") {
+          this.reconnectController.triggerTerminalSecurityStop("EMERGENCY_STOP", "Emergency stop triggered");
+          this.disconnect();
+          return;
+        }
       }
 
       // Handle Tool Calling
@@ -879,7 +937,7 @@ export class MyraAudioSession {
       // Handle Cross-Device Desktop Tool Call (dispatched from remote/mobile companion)
       if (data.type === "desktop_tool_call") {
         const { callId, name, args } = data;
-        console.log(`[Myraa Audio] Received desktop tool call via bridge: ${name}`, args);
+        console.log(`[Myraa Audio] Received desktop tool call via bridge: ${name}`);
         this.onToolCall(name, args, (result) => {
           if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify({

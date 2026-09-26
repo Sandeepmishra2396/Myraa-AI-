@@ -1109,6 +1109,104 @@ export function createHttpApp(): express.Application {
     res.json({ type: "localhost", role: "admin" });
   });
 
+  // Safe Connection & Session Observability Endpoint (never exposes credentials)
+  app.get("/api/remote/connection-status", async (req: any, res) => {
+    try {
+      const forwardedIp = req.headers["x-forwarded-for"];
+      const clientIp = forwardedIp
+        ? String(forwardedIp).split(",")[0].trim()
+        : req.ip || req.socket?.remoteAddress || "127.0.0.1";
+      const isLocal =
+        !forwardedIp &&
+        (clientIp === "127.0.0.1" || clientIp === "::1" || clientIp === "::ffff:127.0.0.1");
+
+      const authHeader = req.headers.authorization;
+      const rawToken =
+        typeof authHeader === "string" && authHeader.startsWith("Bearer ")
+          ? authHeader.slice(7).trim()
+          : "";
+
+      const { remoteSessionManager } = await import("../remote/RemoteSessionManager.ts");
+      const { remoteSecurityCoordinator } = await import("../security/RemoteSecurityCoordinator.ts");
+      const { remoteStore } = await import("../remote/RemoteStore.ts");
+      const { pairingManager } = await import("../remote/PairingManager.ts");
+      const { getAccessTokenExpiryInfo, parseTokenPayload } = await import("../../lib/remoteAuth.ts");
+
+      if (rawToken) {
+        const expiryInfo = getAccessTokenExpiryInfo(rawToken);
+        const auth = await remoteSecurityCoordinator.authenticateRemoteCredential(
+          rawToken,
+          clientIp,
+          req.headers["user-agent"],
+        );
+
+        if (auth.authenticated && auth.device) {
+          const status = await remoteSessionManager.getConnectionStatus({
+            deviceId: auth.device.id,
+            authenticated: true,
+            deviceAuthorized: !auth.device.revoked,
+            accessTokenExpiry: expiryInfo.expiresAtIso,
+          });
+          return res.json(status);
+        }
+
+        // Token was invalid, expired, or revoked — extract safe deviceId if possible for diagnostics
+        let candidateDeviceId: string | undefined;
+        if (rawToken.startsWith("myraa_at_")) {
+          const parsed = parseTokenPayload(rawToken);
+          if (parsed?.did && typeof parsed.did === "string") {
+            candidateDeviceId = parsed.did;
+          }
+        } else if (rawToken.startsWith("sora_dev_")) {
+          const verified = pairingManager.verifyDeviceToken(rawToken);
+          if (verified.deviceId) {
+            candidateDeviceId = verified.deviceId;
+          }
+        }
+
+        const storedDevice = candidateDeviceId
+          ? await remoteStore.getDevice(candidateDeviceId)
+          : undefined;
+        const deviceAuthorized = Boolean(storedDevice && !storedDevice.revoked);
+
+        const status = await remoteSessionManager.getConnectionStatus({
+          deviceId: candidateDeviceId,
+          authenticated: false,
+          deviceAuthorized,
+          accessTokenExpiry: expiryInfo.expiresAtIso,
+          failureReason: auth.error || (expiryInfo.isExpired ? "TOKEN_EXPIRED" : "UNAUTHORIZED"),
+        });
+        if (expiryInfo.isExpired && status.connectionState === "DISCONNECTED") {
+          status.connectionState = "AUTH_EXPIRED";
+          status.lastFailureClass = "AUTH_EXPIRED";
+        }
+        return res.json(status);
+      }
+
+      if (isLocal) {
+        const queryDeviceId = typeof req.query?.deviceId === "string" ? req.query.deviceId : undefined;
+        const activeSessions = remoteSessionManager.getActiveSessions();
+        const targetDeviceId = queryDeviceId || activeSessions[0]?.deviceId || "local_desktop";
+        const status = await remoteSessionManager.getConnectionStatus({
+          deviceId: targetDeviceId,
+          authenticated: true,
+          deviceAuthorized: true,
+          accessTokenExpiry: null,
+        });
+        return res.json(status);
+      }
+
+      const status = await remoteSessionManager.getConnectionStatus({
+        authenticated: false,
+        deviceAuthorized: false,
+        accessTokenExpiry: null,
+      });
+      return res.json(status);
+    } catch (e: any) {
+      res.status(500).json({ error: sanitizeError(e?.message || e) });
+    }
+  });
+
   // ── Phase 19 Android Capability Execution Endpoint ─────────────────────
   // POST /api/remote/capability/execute — Execute a native Android capability
   app.post("/api/remote/capability/execute", requireLocalhostOrPairedDevice, async (req: any, res) => {

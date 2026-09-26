@@ -2258,12 +2258,17 @@ export interface SessionOptions {
   flags: {
     isRotating: boolean;
     isClientClosed: boolean;
+    geminiRecreateAttempts?: number;
+    maxGeminiRecreateAttempts?: number;
+    onGeminiStateChange?: (
+      state: "STARTING_GEMINI" | "READY" | "RECREATING" | "CLOSED" | "FAILED",
+    ) => void;
   };
   /** Running dialogue history (mutated in-place by callbacks) */
   dialogueHistory: { role: string; text: string }[];
   /** Accumulated model text for the current turn */
   currentModelResponseRef: { text: string };
-  /** Callback to signal that a new session should be created (GoAway rotation) */
+  /** Callback to signal that a new session should be created (GoAway rotation or transient recovery) */
   onRotate: () => Promise<void>;
 }
 
@@ -2567,7 +2572,9 @@ export class GeminiSessionFactory {
           );
           _logStartup(`GEMINI_LIVE_CONNECTED: model=${liveModel}`);
           _logJson("info", "gemini_live_connected", { model: liveModel });
-          sendToClient({ type: "status", status: "connected" });
+          flags.geminiRecreateAttempts = 0;
+          flags.onGeminiStateChange?.("READY");
+          sendToClient({ type: "status", status: "connected", geminiState: "READY" });
         },
 
         onerror: (err: any) => {
@@ -2581,10 +2588,22 @@ export class GeminiSessionFactory {
             liveModel,
             flags,
           );
-          sendToClient({
-            type: "error",
-            error: isAuthFailure && categorizedError ? categorizedError : `Gemini Live error: ${msg}`,
-          });
+          if (isAuthFailure && categorizedError) {
+            flags.onGeminiStateChange?.("FAILED");
+            sendToClient({
+              type: "error",
+              error: categorizedError,
+            });
+          } else {
+            // Non-fatal transport error: notify status without tearing down the MYRAA WebSocket;
+            // onclose will handle decoupled Gemini session recreation.
+            sendToClient({
+              type: "status",
+              status: "recreating_gemini",
+              geminiState: "RECREATING",
+              reason: `Gemini Live error: ${msg}`,
+            });
+          }
         },
 
         onclose: (event: any) => {
@@ -2595,7 +2614,7 @@ export class GeminiSessionFactory {
             (event?._closeMessage
               ? event._closeMessage.toString()
               : "");
-          const { categorizedError, sanitizedReason } = classifyGeminiLiveCloseError(
+          const { categorizedError, sanitizedReason, isAuthFailure } = classifyGeminiLiveCloseError(
             code,
             rawReason,
             liveModel,
@@ -2607,61 +2626,94 @@ export class GeminiSessionFactory {
           _logError(`GEMINI_LIVE_CLOSED: code=${code} reason=${sanitizedReason}`);
           _logJson("info", "gemini_live_closed", { code, reason: sanitizedReason });
 
-          const isDurationLimit =
-            flags.isRotating ||
-            /GoAway|session duration|duration limit/i.test(sanitizedReason);
-
-          // Seamless GoAway rotation
-          if (
-            isDurationLimit &&
-            clientWs.readyState === 1 &&
-            !flags.isClientClosed
-          ) {
-            console.log(
-              "[Gemini Live] Session duration limit reached. Seamlessly rotating to a fresh Gemini Live session...",
-            );
-            sendToClient({ type: "status", status: "connecting_gemini" });
-            setTimeout(async () => {
-              if (clientWs.readyState === 1 && !flags.isClientClosed) {
-                try {
-                  flags.isRotating = false;
-                  await onRotate();
-                  console.log(
-                    "[Gemini Live] Session smoothly rotated and restored!",
-                  );
-                } catch (rotateErr: any) {
-                  console.error(
-                    "[Gemini Live] Failed to rotate session:",
-                    rotateErr,
-                  );
-                  sendToClient({
-                    type: "status",
-                    status: "session_closed",
-                    code: 1000,
-                    reason:
-                      "Session duration limit reached. Tap the power button to talk again.",
-                  });
-                }
-              }
-            }, 500);
+          if (flags.isClientClosed || clientWs.readyState !== 1) {
+            flags.onGeminiStateChange?.("CLOSED");
             return;
           }
 
-          if (categorizedError) {
+          const isTerminalGeminiError =
+            isAuthFailure ||
+            /GEMINI_MODEL_UNSUPPORTED|GEMINI_QUOTA_EXCEEDED/i.test(categorizedError || "");
+
+          if (isTerminalGeminiError && categorizedError) {
+            flags.onGeminiStateChange?.("FAILED");
             sendToClient({
               type: "error",
               error: categorizedError,
               code,
               reason: sanitizedReason,
             });
-          } else {
+            return;
+          }
+
+          const isDurationLimit =
+            flags.isRotating ||
+            /GoAway|session duration|duration limit/i.test(sanitizedReason);
+          const isTransientGeminiClose =
+            isDurationLimit ||
+            (code !== 1000 &&
+              !/operation was aborted|aborted|client closed|intentional/i.test(sanitizedReason));
+
+          const maxRecreate = flags.maxGeminiRecreateAttempts ?? 3;
+          const currentAttempt = flags.geminiRecreateAttempts ?? 0;
+
+          // Decoupled Gemini Live session recreation (GoAway or transient upstream close)
+          if (isTransientGeminiClose && (isDurationLimit || currentAttempt < maxRecreate)) {
+            const nextAttempt = isDurationLimit ? 1 : currentAttempt + 1;
+            flags.geminiRecreateAttempts = isDurationLimit ? 0 : nextAttempt;
+            flags.onGeminiStateChange?.("RECREATING");
+
+            const delayMs = isDurationLimit
+              ? 300
+              : Math.min(500 * Math.pow(2, nextAttempt - 1), 4000);
+
+            console.log(
+              `[Gemini Live] Recreating Gemini session while keeping MYRAA WebSocket open (attempt=${nextAttempt}/${maxRecreate}, delay=${delayMs}ms)...`,
+            );
             sendToClient({
               type: "status",
-              status: "session_closed",
-              code,
-              reason: sanitizedReason || "Session closed cleanly",
+              status: "connecting_gemini",
+              geminiState: "RECREATING",
+              attempt: nextAttempt,
+              reason: sanitizedReason || "Recreating Gemini Live session",
             });
+
+            setTimeout(async () => {
+              if (clientWs.readyState === 1 && !flags.isClientClosed) {
+                try {
+                  flags.isRotating = false;
+                  await onRotate();
+                  console.log(
+                    "[Gemini Live] Session smoothly recreated and restored!",
+                  );
+                } catch (rotateErr: any) {
+                  console.error(
+                    "[Gemini Live] Failed to recreate session:",
+                    rotateErr,
+                  );
+                  flags.onGeminiStateChange?.("CLOSED");
+                  sendToClient({
+                    type: "status",
+                    status: "session_closed",
+                    geminiState: "CLOSED",
+                    code: code || 1011,
+                    reason:
+                      "Gemini Live session interrupted. Send a message or tap to resume.",
+                  });
+                }
+              }
+            }, delayMs);
+            return;
           }
+
+          flags.onGeminiStateChange?.("CLOSED");
+          sendToClient({
+            type: "status",
+            status: "session_closed",
+            geminiState: "CLOSED",
+            code,
+            reason: sanitizedReason || "Session closed cleanly",
+          });
         },
       },
     });

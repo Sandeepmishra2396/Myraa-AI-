@@ -96,7 +96,77 @@ export class RemoteSecurityCoordinator {
 
     // ── Case A: Short-Lived Access Token (myraa_at_...) ────────────────────────
     if (token.startsWith("myraa_at_")) {
-      const validation = identityAuthManager.validateAccessToken(token, ipAddress);
+      let validation = identityAuthManager.validateAccessToken(token, ipAddress);
+
+      // If in-memory session table was cleared by a Render sleep/restart, verify
+      // the cryptographic HMAC-SHA256 signature + expiration and re-hydrate if the
+      // paired device is still active and non-revoked in RemoteStore.
+      if (!validation.valid && validation.error?.startsWith("SESSION_NOT_FOUND")) {
+        const stateless = identityAuthManager.verifyStatelessAccessTokenClaims(token);
+        if (stateless.valid && stateless.payload) {
+          let storedDevice = await remoteStore.getDevice(stateless.payload.did);
+          if (storedDevice?.revoked) {
+            return {
+              authenticated: false,
+              error: "DEVICE_REVOKED: This device registration has been revoked.",
+            };
+          }
+          const lostRecord = await remoteStore.getLostDeviceRecord(stateless.payload.did);
+          if (lostRecord) {
+            return {
+              authenticated: false,
+              error: "DEVICE_REVOKED: This device registration has been revoked.",
+            };
+          }
+          if (!storedDevice) {
+            // Ephemeral container filesystem was wiped while the signed access token is still valid.
+            // Re-hydrate the device registration preserving its signed role claim, without
+            // allowing a second unauthorized admin if an active admin already exists.
+            const existingDevices = await remoteStore.listDevices({ skipAutoAdminPromotion: true });
+            const hasExistingAdmin = existingDevices.some((d) => d.role === "admin" && !d.revoked);
+            const claimRole = stateless.payload.role;
+            const resolvedRole: DeviceRole =
+              claimRole === "admin"
+                ? hasExistingAdmin
+                  ? "standard"
+                  : "admin"
+                : claimRole === "read_only"
+                ? "read_only"
+                : "standard";
+            storedDevice = {
+              id: stateless.payload.did,
+              name: userAgent?.includes("Android") ? "Android Companion" : "Paired Companion",
+              deviceType: userAgent?.includes("Android") ? "mobile" : "browser",
+              role: resolvedRole,
+              roleExplicit: true,
+              tokenHash: "",
+              pairedAt: new Date().toISOString(),
+              lastSeenAt: new Date().toISOString(),
+              lastIp: ipAddress,
+              userAgent,
+              revoked: false,
+            };
+            await remoteStore.saveDevice(storedDevice);
+          }
+          try {
+            const restoredSession = identityAuthManager.restoreSessionFromVerifiedClaims(
+              {
+                ...stateless.payload,
+                role: this._mapDeviceRoleToIdentityRole(storedDevice.role),
+              },
+              ipAddress,
+              userAgent,
+            );
+            validation = { valid: true, session: restoredSession };
+          } catch (restoreErr: any) {
+            return {
+              authenticated: false,
+              error: restoreErr?.message || "SESSION_REVOKED",
+            };
+          }
+        }
+      }
+
       if (!validation.valid || !validation.session) {
         this._recordAnomalyEvent(ipAddress, "INVALID_ACCESS_TOKEN", validation.error);
         return { authenticated: false, error: validation.error || "INVALID_ACCESS_TOKEN" };
@@ -278,6 +348,9 @@ export class RemoteSecurityCoordinator {
 
     // 3. Terminate active WebSocket connections in RemoteSessionManager
     await remoteSessionManager.revokeDevice(deviceId, reason);
+
+    // 3b. Purge any persisted session snapshot for revoked device
+    await remoteStore.deleteSessionSnapshot(deviceId);
 
     // 4. Audit Log
     securityAuditLogger.logEvent({

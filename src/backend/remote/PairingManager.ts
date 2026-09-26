@@ -27,9 +27,6 @@ import {
 import { remoteStore } from "./RemoteStore.ts";
 import { getPersistentServerSecret } from "../../../server_paths.ts";
 
-/** Server-side HMAC signing secret (persistent across restarts and deployments) */
-const SERVER_HMAC_SECRET = getPersistentServerSecret();
-
 export class PairingManager {
   private _activeSession: PairingSession | null = null;
   private _attempts = new Map<string, PairingAttemptRecord>(); // IP -> attempts
@@ -43,23 +40,31 @@ export class PairingManager {
     return crypto.createHash("sha256").update(token).digest("hex");
   }
 
-  /** Sign a device ID into a bearer token with HMAC-SHA256. */
-  signDeviceToken(deviceId: string): string {
-    const raw = `${deviceId}.${Date.now()}.${crypto.randomBytes(16).toString("hex")}`;
-    const hmac = crypto.createHmac("sha256", SERVER_HMAC_SECRET).update(raw).digest("hex");
+  /** Sign a device ID (and optional role/deviceType) into a bearer token with HMAC-SHA256. */
+  signDeviceToken(deviceId: string, role?: DeviceRole, deviceType?: DeviceType): string {
+    const secret = getPersistentServerSecret();
+    const base = `${deviceId}.${Date.now()}.${crypto.randomBytes(16).toString("hex")}`;
+    const raw = role ? `${base}.${role}.${deviceType || "browser"}` : base;
+    const hmac = crypto.createHmac("sha256", secret).update(raw).digest("hex");
     return `sora_dev_${Buffer.from(raw).toString("base64url")}.${hmac}`;
   }
 
   /** Verify that a device token was authentically issued by this server. */
-  verifyDeviceToken(token: string): { valid: boolean; deviceId?: string } {
+  verifyDeviceToken(token: string): {
+    valid: boolean;
+    deviceId?: string;
+    role?: DeviceRole;
+    deviceType?: DeviceType;
+  } {
     if (!token || !token.startsWith("sora_dev_")) return { valid: false };
     const parts = token.slice("sora_dev_".length).split(".");
     if (parts.length !== 2) return { valid: false };
 
     const [encodedRaw, signature] = parts;
     try {
+      const secret = getPersistentServerSecret();
       const raw = Buffer.from(encodedRaw, "base64url").toString("utf-8");
-      const expectedHmac = crypto.createHmac("sha256", SERVER_HMAC_SECRET).update(raw).digest("hex");
+      const expectedHmac = crypto.createHmac("sha256", secret).update(raw).digest("hex");
 
       const sigBuffer = Buffer.from(signature, "hex");
       const expectedBuffer = Buffer.from(expectedHmac, "hex");
@@ -67,8 +72,20 @@ export class PairingManager {
         return { valid: false };
       }
 
-      const [deviceId] = raw.split(".");
-      return { valid: true, deviceId };
+      const rawParts = raw.split(".");
+      const [deviceId, _ts, _rand, rawRole, rawDeviceType] = rawParts;
+      const role: DeviceRole | undefined =
+        rawRole === "admin" || rawRole === "standard" || rawRole === "read_only"
+          ? rawRole
+          : undefined;
+      const deviceType: DeviceType | undefined =
+        rawDeviceType === "mobile" ||
+        rawDeviceType === "tablet" ||
+        rawDeviceType === "browser" ||
+        rawDeviceType === "desktop_client"
+          ? rawDeviceType
+          : undefined;
+      return { valid: true, deviceId, role, deviceType };
     } catch {
       return { valid: false };
     }
@@ -246,14 +263,16 @@ export class PairingManager {
     this._activeSession.consumedByDeviceId = deviceId;
     this._clearFailedAttempts(ip);
 
-    const token = this.signDeviceToken(deviceId);
+    const resolvedDeviceType: DeviceType = opts.deviceType || "mobile";
+    const token = this.signDeviceToken(deviceId, assignedRole, resolvedDeviceType);
     const tokenHash = this.hashToken(token);
 
     const device: PairedDevice = {
       id: deviceId,
       name: opts.deviceName?.trim() || `Remote Device ${deviceId.slice(0, 6)}`,
-      deviceType: opts.deviceType || "mobile",
+      deviceType: resolvedDeviceType,
       role: assignedRole,
+      roleExplicit: true,
       tokenHash,
       pairedAt: new Date().toISOString(),
       lastSeenAt: new Date().toISOString(),

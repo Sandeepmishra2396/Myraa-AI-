@@ -18,6 +18,7 @@ export interface PairedDevice {
   name: string;             // Friendly name e.g. "Sandeep's iPhone"
   deviceType: DeviceType;
   role: DeviceRole;
+  roleExplicit?: boolean;   // True when role was explicitly assigned/recovered from signed claims
   tokenHash: string;        // SHA-256 hash of the issued device token
   pairedAt: string;         // ISO timestamp
   lastSeenAt: string;       // ISO timestamp
@@ -56,6 +57,39 @@ export interface RemoteSession {
   authenticated: boolean;
 }
 
+export interface SafeConversationTurn {
+  role: "user" | "model";
+  text: string;
+  timestamp?: string;
+}
+
+export interface SafeActiveTaskMetadata {
+  taskId: string;
+  title?: string;
+  status: "pending" | "running" | "completed" | "failed" | "paused";
+  stepIndex?: number;
+  updatedAt: string;
+}
+
+export interface RemoteSessionSnapshot {
+  deviceId: string;
+  deviceType: DeviceType;
+  sessionId: string;
+  conversationId: string;
+  taskId?: string;
+  recentContext: SafeConversationTurn[];
+  activeTaskMetadata?: SafeActiveTaskMetadata | null;
+  connectionState: string;
+  geminiState: string;
+  lastHeartbeat: string;
+  lastGeminiTimestamp: string | null;
+  lastCloseCode?: number | null;
+  lastFailureClass?: string;
+  reconnectAttempt?: number;
+  version: number;
+  updatedAt: string;
+}
+
 export interface EmergencyStopState {
   active: boolean;
   triggeredAt?: string;
@@ -89,3 +123,6 @@ export const MAX_REMOTE_MESSAGE_SIZE = 256 * 1024;      // 256 KB max WebSocket 
 export const MAX_AUDIO_FRAME_SIZE = 64 * 1024;          // 64 KB max PCM chunk
 export const REMOTE_SESSION_HEARTBEAT_TIMEOUT_MS = 60 * 1000; // 60 seconds
 export const DEFAULT_DEVICE_ROLE: DeviceRole = "standard";
+export const MAX_SNAPSHOT_CONTEXT_TURNS = 10;
+export const MAX_SNAPSHOT_TURN_CHARS = 500;
+

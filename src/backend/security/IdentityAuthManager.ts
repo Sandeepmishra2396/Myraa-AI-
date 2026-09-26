@@ -28,8 +28,6 @@ import {
 import { securityAuditLogger } from "./SecurityAuditLogger.ts";
 import { getPersistentServerSecret } from "../../../server_paths.ts";
 
-const SIGNING_SECRET = getPersistentServerSecret();
-
 interface StepUpChallenge {
   sessionId: string;
   pin: string;
@@ -74,7 +72,7 @@ export class IdentityAuthManager {
   }
 
   private _signString(data: string): string {
-    return crypto.createHmac("sha256", SIGNING_SECRET).update(data).digest("base64url");
+    return crypto.createHmac("sha256", getPersistentServerSecret()).update(data).digest("base64url");
   }
 
   private _verifySignature(data: string, signature: string): boolean {
@@ -302,6 +300,113 @@ export class IdentityAuthManager {
       return { valid: false, error: "MALFORMED_TOKEN_PAYLOAD: Failed to parse token payload." };
     }
   }
+
+  /**
+   * Cryptographically verifies an access token's HMAC-SHA256 signature and expiration
+   * without requiring the in-memory session map to be populated.
+   * Used by RemoteSecurityCoordinator to safely re-hydrate sessions for active paired
+   * devices after a Render instance sleep or server restart.
+   */
+  verifyStatelessAccessTokenClaims(
+    token: string,
+  ): {
+    valid: boolean;
+    payload?: {
+      sid: string;
+      did: string;
+      sub: string;
+      role: IdentityRole;
+      fam: string;
+      iat: number;
+      exp: number;
+      jti: string;
+    };
+    error?: string;
+  } {
+    if (!token || typeof token !== "string" || !token.startsWith("myraa_at_")) {
+      return { valid: false, error: "INVALID_TOKEN_FORMAT: Access token is missing or malformed." };
+    }
+    const parts = token.slice("myraa_at_".length).split(".");
+    if (parts.length !== 2) {
+      return { valid: false, error: "INVALID_TOKEN_FORMAT: Malformed token parts." };
+    }
+    const [encodedPayload, signature] = parts;
+    if (!this._verifySignature(encodedPayload, signature)) {
+      return { valid: false, error: "INVALID_SIGNATURE: Token signature verification failed." };
+    }
+    try {
+      const payloadStr = Buffer.from(encodedPayload, "base64url").toString("utf-8");
+      const payload = JSON.parse(payloadStr);
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (payload.exp && payload.exp < nowSec) {
+        return { valid: false, error: "TOKEN_EXPIRED: Access token has expired. Please refresh." };
+      }
+      if (!payload.sid || !payload.did) {
+        return { valid: false, error: "MALFORMED_TOKEN_PAYLOAD: Missing session or device claims." };
+      }
+      return { valid: true, payload };
+    } catch {
+      return { valid: false, error: "MALFORMED_TOKEN_PAYLOAD: Failed to parse token payload." };
+    }
+  }
+
+  /**
+   * Re-hydrates an in-memory session record from cryptographically verified access token claims
+   * after a server restart, once the caller has verified the device is active and non-revoked
+   * in persistent storage (RemoteStore).
+   */
+  restoreSessionFromVerifiedClaims(
+    claims: {
+      sid: string;
+      did: string;
+      sub?: string;
+      role: IdentityRole;
+      fam?: string;
+      iat?: number;
+      exp?: number;
+    },
+    ipAddress = "unknown",
+    userAgent = "unknown",
+  ): SessionRecord {
+    const existing = this._sessions.get(claims.sid);
+    if (existing) {
+      if (existing.revoked) {
+        throw new Error(`SESSION_REVOKED: ${existing.revokedReason || "Session has been revoked."}`);
+      }
+      existing.lastActivityAt = Date.now();
+      return { ...existing };
+    }
+
+    const now = Date.now();
+    const session: SessionRecord = {
+      sessionId: claims.sid,
+      deviceId: claims.did,
+      identityId: claims.sub || `device:${claims.did}`,
+      role: claims.role,
+      createdAt: claims.iat ? claims.iat * 1000 : now,
+      expiresAt: now + REFRESH_TOKEN_TTL_MS,
+      lastActivityAt: now,
+      ipAddress,
+      userAgent,
+      revoked: false,
+    };
+
+    const familyId = claims.fam || crypto.randomUUID();
+    if (!this._tokenFamilies.has(familyId)) {
+      this._tokenFamilies.set(familyId, {
+        familyId,
+        sessionId: claims.sid,
+        currentRefreshTokenHash: this._hash(`restored_family_${familyId}`),
+        usedRefreshTokenHashes: [],
+        revoked: false,
+        createdAt: now,
+      });
+    }
+
+    this._sessions.set(claims.sid, session);
+    return { ...session };
+  }
+
 
   // ---------------------------------------------------------------------------
   // Refresh Token Rotation & Replay Attack Detection

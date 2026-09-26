@@ -279,6 +279,8 @@ async function startServer() {
     process.exit(1);
   });
 
+  let wsHeartbeatInterval: ReturnType<typeof setInterval> | null = null;
+
   server.listen(PORT, HOST, () => {
     const isTls = Boolean(tlsCertPath && tlsKeyPath && fs.existsSync(tlsCertPath) && fs.existsSync(tlsKeyPath));
     const protocol = isTls ? "https" : "http";
@@ -298,6 +300,16 @@ async function startServer() {
         console.warn(`[RemoteStore] Sole admin recovery error: ${e?.message || e}`),
       );
     });
+    import("./src/backend/remote/RemoteSessionManager.ts").then(({ remoteSessionManager }) => {
+      wsHeartbeatInterval = setInterval(() => {
+        try {
+          remoteSessionManager.checkHeartbeats();
+        } catch {
+          /* best-effort heartbeat check */
+        }
+      }, 20000);
+      wsHeartbeatInterval.unref?.();
+    });
   });
 
   let isShuttingDown = false;
@@ -306,6 +318,11 @@ async function startServer() {
     isShuttingDown = true;
     console.log(`[Server] Graceful shutdown initiated (${signal})...`);
     logStartup(`[Server] Graceful shutdown initiated (${signal}).`);
+
+    if (wsHeartbeatInterval) {
+      clearInterval(wsHeartbeatInterval);
+      wsHeartbeatInterval = null;
+    }
 
     // 1. Stop background task coordinators
     try {

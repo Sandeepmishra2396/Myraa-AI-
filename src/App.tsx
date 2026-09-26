@@ -35,14 +35,15 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MyraaSettings, DEFAULT_SETTINGS, loadSettings, saveSettings } from "./lib/settingsStore";
 import { MyraaWakeWordDetector } from "./lib/wakeWord";
 import { CloudPairingModal, StoredRemoteSession, STORAGE_KEY } from "./components/remote/CloudPairingModal";
-import { authenticatedRemoteFetch } from "./lib/remoteAuth";
+import { authenticatedRemoteFetch, getAccessTokenExpiryInfo } from "./lib/remoteAuth";
 function getStoredRemoteAuthHeaders(): Record<string, string> {
   if (typeof localStorage === "undefined") return {};
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const sess = JSON.parse(raw);
-      const token = sess.accessToken || sess.token;
+      const expiry = getAccessTokenExpiryInfo(sess);
+      const token = (sess.accessToken && !expiry.isExpired) ? sess.accessToken : sess.token;
       if (token) return { Authorization: `Bearer ${token}` };
     }
   } catch {}
@@ -69,8 +70,13 @@ export default function App() {
   });
 
   const getAuthHeaders = (): Record<string, string> => {
-    const token = remoteSession?.accessToken || remoteSession?.token;
-    if (token) return { Authorization: `Bearer ${token}` };
+    if (remoteSession) {
+      const expiry = getAccessTokenExpiryInfo(remoteSession);
+      const token = (remoteSession.accessToken && !expiry.isExpired)
+        ? remoteSession.accessToken
+        : remoteSession.token;
+      if (token) return { Authorization: `Bearer ${token}` };
+    }
     return getStoredRemoteAuthHeaders();
   };
 
@@ -128,9 +134,15 @@ export default function App() {
   useEffect(() => {
     let timer: any;
     const fetchMultimodalStatus = async () => {
-      const authHeaders = getAuthHeaders();
+      const doFetch = async (url: string): Promise<Response> => {
+        if (isRemoteHost && remoteSession) {
+          const { response } = await authenticatedRemoteFetch(url, {}, remoteSession, setRemoteSession);
+          return response;
+        }
+        return fetch(url, { headers: getAuthHeaders() });
+      };
       try {
-        const res = await fetch("/api/multimodal/screen/continuous/status", { headers: authHeaders });
+        const res = await doFetch("/api/multimodal/screen/continuous/status");
         if (res.ok) {
           const data = await res.json();
           setContinuousScreenEnabled(!!data.enabled);
@@ -139,7 +151,7 @@ export default function App() {
         }
       } catch {}
       try {
-        const sugRes = await fetch("/api/multimodal/suggestions?limit=3", { headers: authHeaders });
+        const sugRes = await doFetch("/api/multimodal/suggestions?limit=3");
         if (sugRes.ok) {
           const sugData = await sugRes.json();
           if (sugData.suggestions) {
@@ -152,7 +164,7 @@ export default function App() {
     fetchMultimodalStatus();
     timer = setInterval(fetchMultimodalStatus, 8000);
     return () => clearInterval(timer);
-  }, [remoteSession]);
+  }, [remoteSession, isRemoteHost]);
 
   const handleToggleContinuousScreen = async () => {
     try {

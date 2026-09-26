@@ -53,6 +53,10 @@ export function getPersistentServerSecret(): string {
   if (process.env.RENDER_SERVICE_ID?.trim()) {
     return crypto.createHash("sha256").update(`myraa-render-secret:${process.env.RENDER_SERVICE_ID.trim()}`).digest("hex");
   }
+  const renderHost = process.env.RENDER_EXTERNAL_HOSTNAME?.trim() || process.env.RENDER_EXTERNAL_URL?.trim();
+  if (renderHost) {
+    return crypto.createHash("sha256").update(`myraa-render-host-secret:${renderHost}`).digest("hex");
+  }
   if (_cachedServerSecret) {
     return _cachedServerSecret;
   }
