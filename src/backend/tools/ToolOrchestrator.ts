@@ -48,6 +48,12 @@ import {
   outputDataFirewall,
   type SecurityContext,
 } from "../security/index.ts";
+import {
+  actionContextManager,
+  capabilityRegistry,
+  intentResolver,
+  actionVerifier,
+} from "../orchestrator/index.ts";
 
 export { MODIFYING_TOOLS };
 const WORKSPACE = process.env.SORA_WORKSPACE_DIR || process.cwd();
@@ -247,6 +253,139 @@ export class ToolOrchestrator {
       },
     };
 
+    // ── Canonical Intent & Capability Resolution ──────────────────────────
+    const contextId = secContext.sessionId || secContext.deviceId || "default";
+    const canonicalIntent = intentResolver.resolveFromToolCall(
+      fc.name,
+      (fc.args || {}) as Record<string, unknown>,
+      contextId,
+      secContext,
+    );
+
+    // 1. Explicit Target Device Availability Check (no silent fallback)
+    if (
+      fc.args?.targetDevice ||
+      canonicalIntent.targetDevice === "REMOTE_DESKTOP" ||
+      (!secContext.isLocal && canonicalIntent.targetDevice === "DESKTOP" && Boolean(process.env.RENDER))
+    ) {
+      const deviceCheck = capabilityRegistry.verifyTargetDeviceAvailability(
+        canonicalIntent.targetDevice,
+        secContext,
+      );
+      if (!deviceCheck.available) {
+        guardedSession.sendToolResponse({
+          functionResponses: [
+            {
+              name: fc.name,
+              response: {
+                output: {
+                  error: deviceCheck.reason,
+                  errorCode: "TARGET_DEVICE_UNAVAILABLE",
+                  targetDevice: canonicalIntent.targetDevice,
+                  verified: false,
+                  isDeviceUnavailable: true,
+                  isPermissionDenied: false,
+                },
+              },
+              id: fc.id,
+            },
+          ],
+        });
+        return;
+      }
+    }
+
+    // 2. YouTube / Media Guard: If Gemini called searchYouTube or browserSearch with a generic
+    //    placeholder ("trending songs") while searchResults already exist in ActionContext,
+    //    intercept it as PLAY_MEDIA on the selectedResult!
+    if (
+      (fc.name === "searchYouTube" || fc.name === "browserSearch") &&
+      canonicalIntent.intent === "PLAY_MEDIA"
+    ) {
+      const playVerification = actionVerifier.verifyYouTubePlay(
+        {
+          videoId: canonicalIntent.arguments.videoId as string,
+          title: canonicalIntent.arguments.title as string,
+          url: canonicalIntent.arguments.url as string,
+        },
+        "play",
+        canonicalIntent.targetDevice,
+      );
+      actionContextManager.recordMediaPlayback(contextId, "playing");
+      sendToClient({
+        type: "toolCall",
+        callId: fc.id,
+        name: "browserMediaControl",
+        args: {
+          action: "play",
+          videoId: canonicalIntent.arguments.videoId,
+          title: canonicalIntent.arguments.title,
+          url: canonicalIntent.arguments.url,
+          index: canonicalIntent.arguments.index,
+        },
+      });
+      guardedSession.sendToolResponse({
+        functionResponses: [
+          {
+            name: fc.name,
+            response: {
+              output: {
+                ...playVerification,
+                result: `Playing '${playVerification.title}' (${playVerification.videoIdOrUrl}).`,
+              },
+            },
+            id: fc.id,
+          },
+        ],
+      });
+      return;
+    }
+
+    // 3. Record YouTube / Media search in ActionContext when searchYouTube or browserSearch runs
+    if (
+      (fc.name === "searchYouTube" || fc.name === "browserSearch") &&
+      canonicalIntent.intent === "SEARCH_MEDIA" &&
+      fc.args?.query
+    ) {
+      actionContextManager.recordMediaSearch(
+        contextId,
+        String(fc.args.query),
+        Array.isArray(fc.args.results) ? (fc.args.results as any) : [],
+        "youtube",
+      );
+    }
+
+    // 4. Normalize openApplication alias & check for unresolved contextual/unknown apps
+    if (fc.name === "openApplication") {
+      if (!canonicalIntent.arguments.aliasResolved) {
+        const errReason =
+          (canonicalIntent.arguments.aliasReason as string) ||
+          `UNRECOGNIZED_APPLICATION: Application '${fc.args?.name || ""}' could not be resolved.`;
+        guardedSession.sendToolResponse({
+          functionResponses: [
+            {
+              name: fc.name,
+              response: {
+                output: {
+                  error: errReason,
+                  errorCode: "UNRECOGNIZED_APPLICATION",
+                  launched: false,
+                  verified: false,
+                  isPermissionDenied: false,
+                },
+              },
+              id: fc.id,
+            },
+          ],
+        });
+        return;
+      }
+      fc.args = {
+        ...fc.args,
+        name: canonicalIntent.entity || fc.args?.name,
+      };
+    }
+
     // ── 1. saveCustomMemory — handled in-process ──────────────────────────
     if (fc.name === "saveCustomMemory") {
       try {
@@ -429,14 +568,34 @@ export class ToolOrchestrator {
       }
 
       try {
-        await this._handleDesktopTool(fc, guardedSession);
+        await this._handleDesktopTool(fc, guardedSession, contextId);
       } catch (err) {
         console.error(`[Desktop Agent] Unhandled error for ${fc.name}:`, err);
       }
       return;
     }
 
-    // ── 4. Client-side holographic tools — forward to browser ────────────
+    // ── 10. Client-side holographic tools (browserMediaControl, browserClick, browserSearch, browserOpen) ─
+    if (fc.name === "browserMediaControl" || fc.name === "browserClick") {
+      fc.args = {
+        ...fc.args,
+        ...canonicalIntent.arguments,
+      };
+      if (canonicalIntent.intent === "NEXT_MEDIA") {
+        actionContextManager.advanceMediaResult(contextId, "next");
+      } else if (canonicalIntent.intent === "PREVIOUS_MEDIA") {
+        actionContextManager.advanceMediaResult(contextId, "previous");
+      } else if (canonicalIntent.intent === "PAUSE_MEDIA") {
+        actionContextManager.recordMediaPlayback(contextId, "paused");
+      } else if (canonicalIntent.intent === "STOP_MEDIA") {
+        actionContextManager.recordMediaPlayback(contextId, "stopped");
+      } else if (canonicalIntent.intent === "PLAY_MEDIA" || canonicalIntent.intent === "RESUME_MEDIA") {
+        actionContextManager.recordMediaPlayback(contextId, "playing");
+      }
+    } else if (fc.name === "browserOpen" && fc.args?.url) {
+      actionContextManager.recordWebsiteOpened(contextId, String(fc.args.url), "BROWSER");
+    }
+
     sendToClient({
       type: "toolCall",
       callId: fc.id,
@@ -722,6 +881,7 @@ export class ToolOrchestrator {
   private async _handleDesktopTool(
     fc: FunctionCall,
     session: LiveSession,
+    contextId = "default",
   ): Promise<void> {
     // ── FINAL DISPATCH-LAYER SAFETY GATE: modifying / destructive tools ───
     if (MODIFYING_TOOLS.has(fc.name)) {
@@ -798,12 +958,53 @@ export class ToolOrchestrator {
     );
 
     if (agentResult.ok) {
-      const output = agentResult.result ?? { result: "Done." };
+      const baseOutput =
+        agentResult.result && typeof agentResult.result === "object"
+          ? (agentResult.result as Record<string, unknown>)
+          : { result: agentResult.result ?? "Done." };
+
+      let enrichedOutput: Record<string, unknown> = { ...baseOutput, verified: true };
+
+      if (fc.name === "openApplication") {
+        const appName = String(fc.args?.name || fc.args?.app || "application").toLowerCase();
+        const targetPath = fc.args?.path as string | undefined;
+        const verifiedApp = actionVerifier.verifyOpenApplication(
+          appName,
+          agentResult,
+          "DESKTOP",
+          targetPath,
+        );
+        actionContextManager.recordApplicationOpened(contextId, appName, "DESKTOP", targetPath);
+        enrichedOutput = { ...baseOutput, ...verifiedApp };
+      } else if (fc.name === "openInVsCode" || fc.name === "openFile") {
+        const filePath = String(fc.args?.path || fc.args?.name || WORKSPACE);
+        const editor = fc.name === "openInVsCode" ? "vscode" : "default";
+        const verifiedFile = actionVerifier.verifyOpenFile(filePath, editor, agentResult, "DESKTOP");
+        actionContextManager.recordFileOpened(contextId, filePath, editor);
+        enrichedOutput = { ...baseOutput, ...verifiedFile };
+      } else if (fc.name === "openFolder") {
+        const folderPath = String(fc.args?.path || fc.args?.name || WORKSPACE);
+        actionContextManager.recordFileOpened(contextId, folderPath, "explorer", folderPath);
+        enrichedOutput = { ...baseOutput, opened: true, folderPath, verified: true };
+      } else if (fc.name === "openWebsite") {
+        const url = String(fc.args?.url || fc.args?.name || "");
+        const verifiedUrl = actionVerifier.verifyBrowserOpenUrl(url, agentResult, "BROWSER");
+        actionContextManager.recordWebsiteOpened(contextId, verifiedUrl.url, "BROWSER");
+        enrichedOutput = { ...baseOutput, ...verifiedUrl };
+      } else if (fc.name === "searchYouTube") {
+        const query = String(fc.args?.query || "");
+        const ctx = actionContextManager.getContext(contextId);
+        const verifiedYt = actionVerifier.verifyYouTubeSearch(query, ctx.searchResults, "BROWSER");
+        enrichedOutput = { ...baseOutput, ...verifiedYt };
+      }
+
+      actionContextManager.recordToolSuccess(contextId, fc.name, enrichedOutput);
+
       session.sendToolResponse({
         functionResponses: [
           {
             name: fc.name,
-            response: { output },
+            response: { output: enrichedOutput },
             id: fc.id,
           },
         ],
@@ -816,7 +1017,12 @@ export class ToolOrchestrator {
           {
             name: fc.name,
             response: {
-              output: { result: `Desktop control error: ${errMsg}` },
+              output: {
+                result: `Desktop control error: ${errMsg}`,
+                error: errMsg,
+                verified: false,
+                isPermissionDenied: false,
+              },
             },
             id: fc.id,
           },

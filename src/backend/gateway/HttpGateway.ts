@@ -3312,8 +3312,33 @@ export function createHttpApp(): express.Application {
         }
       }
 
+      const topSlice = videoList.slice(0, 15);
+      if (topSlice.length > 0) {
+        try {
+          const { actionContextManager, intentResolver } = await import("../orchestrator/index.ts");
+          if (!intentResolver.isGenericPlaceholderQuery(query)) {
+            actionContextManager.recordMediaSearch(
+              "default",
+              query,
+              topSlice.map((v, idx) => ({
+                index: idx,
+                videoId: v.videoId,
+                title: v.title,
+                url: `https://www.youtube.com/watch?v=${v.videoId}`,
+                author: v.author,
+                duration: v.duration,
+                thumbnail: v.thumbnail,
+              })),
+              "youtube",
+            );
+          }
+        } catch {
+          /* non-fatal */
+        }
+      }
+
       res.setHeader("Cache-Control", "public, max-age=60");
-      res.status(200).json({ results: videoList.slice(0, 15) });
+      res.status(200).json({ results: topSlice });
     } catch (err: any) {
       console.error("[YouTube Search Error]:", err.message);
       res.status(500).json({ error: err.message, results: [] });

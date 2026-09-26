@@ -146,16 +146,7 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
   // Safe tab initialization
   useEffect(() => {
     if (initialUrl) {
-      let startUrl = initialUrl === "about:blank" ? "about:blank" : initialUrl;
-      const cleanLower = startUrl.toLowerCase().replace(/\/$/, "");
-      if (
-        cleanLower === "https://youtube.com" ||
-        cleanLower === "https://www.youtube.com" ||
-        cleanLower === "http://youtube.com" ||
-        cleanLower === "http://www.youtube.com"
-      ) {
-        startUrl = "https://youtube.com/results?search_query=trending+songs";
-      }
+      const startUrl = initialUrl === "about:blank" ? "about:blank" : initialUrl;
       const restrictions = checkIsRestricted(startUrl);
       
       const newTab: Tab = {
@@ -478,15 +469,84 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
             break;
           }
           case "browserMediaControl": {
-            const action = args.action;
+            const action = String(args.action || "play").toLowerCase();
             const value = args.value;
 
-            // If user or agent commands playback while on YouTube search results, auto-play top matching video!
-            if (activeTab?.url && activeTab.url.includes("youtube.com/results") && (action === "play" || action === "skip") && ytSearchResults.length > 0) {
-              const topResult = ytSearchResults[0];
-              navigateToUrl(`https://youtube.com/watch?v=${topResult.videoId}`);
-              callback({ result: `Now playing "${topResult.title}" by ${topResult.author || 'YouTube'}.` });
+            // Resolve current video index in ytSearchResults if on a YouTube watch page
+            let currentVideoIdx = 0;
+            if (activeTab?.url && ytSearchResults.length > 0) {
+              try {
+                const u = new URL(activeTab.url);
+                const activeVid = u.searchParams.get("v");
+                if (activeVid) {
+                  const foundIdx = ytSearchResults.findIndex((r) => r.videoId === activeVid);
+                  if (foundIdx !== -1) currentVideoIdx = foundIdx;
+                }
+              } catch {}
+            }
+
+            // Handle NEXT / PREVIOUS track transitions deterministically
+            if ((action === "next" || action === "skip") && ytSearchResults.length > 0) {
+              const nextIdx = (currentVideoIdx + 1) % ytSearchResults.length;
+              const nextVideo = ytSearchResults[nextIdx] || ytSearchResults[0];
+              navigateToUrl(`https://youtube.com/watch?v=${nextVideo.videoId}`);
+              callback({
+                playing: true,
+                title: nextVideo.title,
+                videoIdOrUrl: nextVideo.videoId,
+                verified: true,
+                result: `Now playing next track: "${nextVideo.title}" by ${nextVideo.author || "YouTube"}.`,
+              });
               break;
+            }
+
+            if ((action === "previous" || action === "prev") && ytSearchResults.length > 0) {
+              const prevIdx = (currentVideoIdx - 1 + ytSearchResults.length) % ytSearchResults.length;
+              const prevVideo = ytSearchResults[prevIdx] || ytSearchResults[0];
+              navigateToUrl(`https://youtube.com/watch?v=${prevVideo.videoId}`);
+              callback({
+                playing: true,
+                title: prevVideo.title,
+                videoIdOrUrl: prevVideo.videoId,
+                verified: true,
+                result: `Now playing previous track: "${prevVideo.title}" by ${prevVideo.author || "YouTube"}.`,
+              });
+              break;
+            }
+
+            // If user or agent commands play while on YouTube search results (or with a specific videoId/index), play that video!
+            if (action === "play") {
+              const requestedIdx = typeof args.index === "number" ? args.index : 0;
+              const byId = args.videoId
+                ? ytSearchResults.find((v) => v.videoId === args.videoId)
+                : undefined;
+              const chosenResult =
+                byId ||
+                ytSearchResults[Math.max(0, Math.min(requestedIdx, Math.max(0, ytSearchResults.length - 1)))] ||
+                (args.videoId
+                  ? {
+                      videoId: args.videoId,
+                      title: args.title || "Selected YouTube Video",
+                      author: "YouTube",
+                    }
+                  : null);
+
+              const isAlreadyWatchingChosen =
+                activeTab?.url &&
+                chosenResult?.videoId &&
+                activeTab.url.includes(`watch?v=${chosenResult.videoId}`);
+
+              if (chosenResult?.videoId && !isAlreadyWatchingChosen) {
+                navigateToUrl(`https://youtube.com/watch?v=${chosenResult.videoId}`);
+                callback({
+                  playing: true,
+                  title: chosenResult.title,
+                  videoIdOrUrl: chosenResult.videoId,
+                  verified: true,
+                  result: `Now playing "${chosenResult.title}" by ${chosenResult.author || "YouTube"}.`,
+                });
+                break;
+              }
             }
 
             const iframe = iframeRef.current;
@@ -494,30 +554,50 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
               let video: HTMLVideoElement | null = null;
               try {
                 const doc = iframe.contentWindow.document;
-                video = doc ? (doc.querySelector('video') as HTMLVideoElement) : null;
+                video = doc ? (doc.querySelector("video") as HTMLVideoElement) : null;
               } catch {
                 // Cross-origin restriction expected for external embeds (e.g. YouTube)
               }
 
               if (video) {
-                if (action === "play") video.play();
-                else if (action === "pause") video.pause();
+                if (action === "play" || action === "resume") video.play();
+                else if (action === "pause" || action === "stop") video.pause();
                 else if (action === "volume") video.volume = value !== undefined ? value / 100 : 0.75;
                 else if (action === "mute") video.muted = true;
                 else if (action === "unmute") video.muted = false;
                 else if (action === "skip") video.currentTime += 30;
-                callback({ result: `Done. Executed player action: ${action}.` });
+                callback({
+                  playing: action === "play" || action === "resume",
+                  verified: true,
+                  result: `Done. Executed player action: ${action}.`,
+                });
               } else {
-                // Post command directly to embed API if running YouTube iframe
-                iframe.contentWindow.postMessage(JSON.stringify({
-                  event: "command",
-                  func: action === "play" ? "playVideo" : action === "pause" ? "pauseVideo" : action === "volume" && value !== undefined ? "setVolume" : "",
-                  args: action === "volume" && value !== undefined ? [value] : []
-                }), "*");
-                callback({ result: `Done. Sent ${action} command to YouTube player.` });
+                const ytFunc =
+                  action === "play" || action === "resume"
+                    ? "playVideo"
+                    : action === "pause"
+                    ? "pauseVideo"
+                    : action === "stop"
+                    ? "stopVideo"
+                    : action === "volume" && value !== undefined
+                    ? "setVolume"
+                    : "";
+                iframe.contentWindow.postMessage(
+                  JSON.stringify({
+                    event: "command",
+                    func: ytFunc,
+                    args: action === "volume" && value !== undefined ? [value] : [],
+                  }),
+                  "*",
+                );
+                callback({
+                  playing: action === "play" || action === "resume",
+                  verified: true,
+                  result: `Done. Sent ${action} command to YouTube player.`,
+                });
               }
             } else {
-              callback({ error: "Active streaming panel is empty." });
+              callback({ error: "Active streaming panel is empty.", verified: false });
             }
             break;
           }
@@ -580,17 +660,6 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
       }
     } else {
       finalUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(finalUrl)}`;
-    }
-
-    // Auto-route youtube.com homepage to trending music portal so it embeds cleanly
-    const cleanLower = finalUrl.toLowerCase().replace(/\/$/, "");
-    if (
-      cleanLower === "https://youtube.com" ||
-      cleanLower === "https://www.youtube.com" ||
-      cleanLower === "http://youtube.com" ||
-      cleanLower === "http://www.youtube.com"
-    ) {
-      finalUrl = "https://youtube.com/results?search_query=trending+songs";
     }
 
     loadStartRef.current = Date.now();

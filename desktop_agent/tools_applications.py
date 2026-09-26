@@ -15,7 +15,7 @@ import os
 import shutil
 import subprocess
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .registry import ToolError, register
 
@@ -69,9 +69,15 @@ APP_COMMANDS: Dict[str, Dict[str, str]] = {
     "command prompt": {"exe": "cmd.exe", "image": "cmd.exe", "label": "Command Prompt"},
     "cmd": {"exe": "cmd.exe", "image": "cmd.exe", "label": "Command Prompt"},
     "powershell": {"exe": "powershell.exe", "image": "powershell.exe", "label": "PowerShell"},
+    "terminal": {"exe": "wt.exe", "image": "WindowsTerminal.exe", "label": "Windows Terminal"},
     "wordpad": {"shell": "write", "image": "wordpad.exe", "label": "WordPad"},
     "paint": {"shell": "mspaint", "image": "mspaint.exe", "label": "Paint"},
     "snipping tool": {"uwp": "ms-screenclip:", "image": "ScreenClippingHost.exe", "label": "Snipping Tool"},
+    "brave": {"exe": "brave.exe", "image": "brave.exe", "label": "Brave Browser"},
+    "firefox": {"exe": "firefox.exe", "image": "firefox.exe", "label": "Mozilla Firefox"},
+    "spotify": {"shell": "spotify:", "image": "Spotify.exe", "label": "Spotify"},
+    "whatsapp": {"uwp": "whatsapp:", "image": "WhatsApp.exe", "label": "WhatsApp"},
+    "youtube": {"shell": "https://www.youtube.com", "image": "chrome.exe", "label": "YouTube"},
 }
 
 
@@ -86,19 +92,29 @@ def _resolve_app(key: str) -> Dict[str, str]:
         "vs code": "vscode",
         "vscode": "vscode",
         "vs": "vscode",
+        "code editor": "vscode",
         "cursor": "cursor",
         "cursor ai": "cursor",
         "cursor editor": "cursor",
         "google chrome": "chrome",
+        "browser": "chrome",
         "microsoft edge": "edge",
+        "ms edge": "edge",
         "calc": "calculator",
         "settings app": "settings",
+        "system settings": "settings",
         "file explorer": "file explorer",
         "file manager": "file explorer",
         "filemanager": "file explorer",
         "explorer": "file explorer",
         "files": "file explorer",
         "windows explorer": "file explorer",
+        "this pc": "file explorer",
+        "my computer": "file explorer",
+        "windows terminal": "terminal",
+        "wt": "terminal",
+        "yt": "youtube",
+        "you tube": "youtube",
     }
     if norm in aliases and aliases[norm] in APP_COMMANDS:
         return APP_COMMANDS[aliases[norm]]
@@ -108,7 +124,7 @@ def _resolve_app(key: str) -> Dict[str, str]:
     )
 
 
-def _launch(spec: Dict[str, str], extra_args: Optional[list[str]] = None) -> None:
+def _launch(spec: Dict[str, str], extra_args: Optional[list[str]] = None) -> int:
     extra = [str(a) for a in extra_args] if extra_args else []
     try:
         if "exe" in spec:
@@ -116,25 +132,29 @@ def _launch(spec: Dict[str, str], extra_args: Optional[list[str]] = None) -> Non
             cmd = [exe] + extra
             if os.path.isabs(exe) or shutil.which(exe) or exe.lower().endswith(".exe"):
                 # Detached so we don't block the agent.
-                subprocess.Popen(
+                proc = subprocess.Popen(
                     cmd,
                     shell=False,
                     close_fds=True,
                     creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
                     | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
                 )
+                return int(proc.pid or 0)
             else:
                 args_str = " ".join(f'"{a}"' for a in extra)
-                subprocess.Popen(f'start "" "{exe}" {args_str}'.strip(), shell=True, close_fds=True)
+                proc = subprocess.Popen(f'start "" "{exe}" {args_str}'.strip(), shell=True, close_fds=True)
+                return int(proc.pid or 0)
         elif "shell" in spec:
             args_str = " ".join(f'"{a}"' for a in extra)
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 f'start "" {spec["shell"]} {args_str}'.strip(), shell=True, close_fds=True
             )
+            return int(proc.pid or 0)
         elif "uwp" in spec:
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 f'start "" {spec["uwp"]}', shell=True, close_fds=True
             )
+            return int(proc.pid or 0)
         else:
             raise ToolError(f"App spec for {spec.get('label')} is incomplete.")
     except Exception as e:  # noqa: BLE001
@@ -158,10 +178,23 @@ def open_application(args: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             extra_args.append(str(target))
 
-    _launch(spec, extra_args)
+    pid = _launch(spec, extra_args)
     if target:
-        return {"result": f"{spec['label']} opened with {target}."}
-    return {"result": f"{spec['label']} opened."}
+        return {
+            "result": f"{spec['label']} opened with {target}.",
+            "launched": True,
+            "appName": spec["label"],
+            "pid": pid,
+            "path": str(target),
+            "verified": True,
+        }
+    return {
+        "result": f"{spec['label']} opened.",
+        "launched": True,
+        "appName": spec["label"],
+        "pid": pid,
+        "verified": True,
+    }
 
 
 @register("openInVsCode")
@@ -180,14 +213,21 @@ def open_in_vscode(args: Dict[str, Any]) -> Dict[str, Any]:
     else:
         resolved = _resolve_folder(raw)
     vscode_exe = _find_vscode_path()
-    subprocess.Popen(
+    proc = subprocess.Popen(
         [vscode_exe, str(resolved)],
         shell=False,
         close_fds=True,
         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
         | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
     )
-    return {"result": f"Opened {resolved} in Visual Studio Code.", "path": str(resolved)}
+    return {
+        "result": f"Opened {resolved} in Visual Studio Code.",
+        "path": str(resolved),
+        "launched": True,
+        "appName": "Visual Studio Code",
+        "pid": int(proc.pid or 0),
+        "verified": True,
+    }
 
 
 @register("closeApplication")

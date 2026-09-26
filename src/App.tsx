@@ -428,6 +428,10 @@ export default function App() {
   };
   const [modelCaption, setModelCaption] = useState<string>("");
   const [activeProjectorUrl, setActiveProjectorUrl] = useState<string | null>(null);
+  const activeProjectorUrlRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeProjectorUrlRef.current = activeProjectorUrl;
+  }, [activeProjectorUrl]);
   const [showGuide, setShowGuide] = useState<boolean>(false);
   const [errorText, setErrorText] = useState<string | null>(null);
   // Reconnect status — shown as a soft indicator, not the alarming error banner.
@@ -643,6 +647,7 @@ export default function App() {
             const q = notif.query || "";
             if (q) {
               const searchUrl = `https://youtube.com/results?search_query=${encodeURIComponent(q)}`;
+              activeProjectorUrlRef.current = searchUrl;
               setActiveProjectorUrl(searchUrl);
               setBrowserTrigger({
                 type: "browserSearch",
@@ -672,13 +677,20 @@ export default function App() {
 
         if (browserTools.includes(name)) {
           // Bring up the Holographic Browser Controller if it is not active
-          if (!activeProjectorUrl) {
+          if (!activeProjectorUrlRef.current) {
             let startingUrl = "https://youtube.com";
             if ((name === "browserOpen" || name === "openWebsite") && args.url) {
               startingUrl = args.url;
             } else if ((name === "browserSearch" || name === "searchYouTube") && args.query) {
               startingUrl = `https://youtube.com/results?search_query=${encodeURIComponent(args.query)}`;
+            } else if (args.url) {
+              startingUrl = args.url;
+            } else if (args.videoId) {
+              startingUrl = `https://www.youtube.com/watch?v=${args.videoId}`;
+            } else if (args.query) {
+              startingUrl = `https://youtube.com/results?search_query=${encodeURIComponent(args.query)}`;
             }
+            activeProjectorUrlRef.current = startingUrl;
             setActiveProjectorUrl(startingUrl);
           }
 
