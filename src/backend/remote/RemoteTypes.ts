@@ -1,5 +1,5 @@
 /**
- * MYRAA — RemoteTypes (Phase 7)
+ * MYRAA — RemoteTypes (Phase 7 + Multi-Device Architecture)
  *
  * Core type definitions for Remote Voice Companion:
  *   - Device roles and permission contracts
@@ -7,16 +7,35 @@
  *   - Device tokens and active remote sessions
  *   - Emergency stop state and audit structures
  *   - Remote WebSocket protocol messages
+ *
+ * Multi-Device Extension (additive, non-breaking):
+ *   - ProductType: first-class product identity
+ *     PHONE ≠ REMOTE DESKTOP. SAME ACCOUNT ≠ AUTOMATIC REMOTE CONNECTION.
+ *   - PairedDevice.productType: optional field (migration-compatible)
  */
 
 export type DeviceRole = "read_only" | "standard" | "admin";
 
 export type DeviceType = "mobile" | "tablet" | "browser" | "desktop_client";
 
+/**
+ * First-class product type — distinct from DeviceRole and DeviceType.
+ *
+ * MYRAA_MOBILE  — Android app; phone-local capabilities; fully independent.
+ * MYRAA_DESKTOP — Electron/Windows app; desktop-local capabilities; fully independent.
+ * MYRAA_BROWSER — Web companion tab; browser-scoped capabilities.
+ *
+ * This is the canonical discriminator for device engine routing.
+ * DeviceType is preserved for wire-protocol compatibility.
+ */
+export type ProductType = "MYRAA_MOBILE" | "MYRAA_DESKTOP" | "MYRAA_BROWSER";
+
 export interface PairedDevice {
   id: string;               // Unique device UUID
   name: string;             // Friendly name e.g. "Sandeep's iPhone"
   deviceType: DeviceType;
+  /** First-class product type. Optional during migration — inferred from deviceType/userAgent if absent. */
+  productType?: ProductType;
   role: DeviceRole;
   roleExplicit?: boolean;   // True when role was explicitly assigned/recovered from signed claims
   tokenHash: string;        // SHA-256 hash of the issued device token
