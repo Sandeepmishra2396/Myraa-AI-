@@ -68,7 +68,7 @@ export const APPLICATION_ALIASES: Readonly<Record<string, string>> = {
   "firefox": "firefox",
   "mozilla firefox": "firefox",
 
-  // Media & Web Apps
+  // Media & Web & Mobile Apps
   "youtube": "youtube",
   "yt": "youtube",
   "youtube app": "youtube",
@@ -78,6 +78,27 @@ export const APPLICATION_ALIASES: Readonly<Record<string, string>> = {
   "maps": "maps",
   "google maps": "maps",
   "calendar": "calendar",
+  "telegram": "telegram",
+  "instagram": "instagram",
+  "facebook": "facebook",
+  "twitter": "twitter",
+  "x": "twitter",
+  "netflix": "netflix",
+  "amazon": "amazon",
+  "camera": "camera",
+  "gallery": "gallery",
+  "photos": "photos",
+  "google photos": "photos",
+  "contacts": "contacts",
+  "messages": "messages",
+  "clock": "clock",
+  "alarm": "alarm",
+  "drive": "drive",
+  "google drive": "drive",
+  "meet": "meet",
+  "google meet": "meet",
+  "keep": "keep",
+  "notes": "notes",
 
   // System & Productivity Utilities
   "notepad": "notepad",
@@ -143,6 +164,25 @@ export const MOBILE_SUPPORTED_APPS: ReadonlySet<string> = new Set([
   "whatsapp",
   "chrome",
   "spotify",
+  "telegram",
+  "instagram",
+  "facebook",
+  "twitter",
+  "netflix",
+  "amazon",
+  "settings",
+  "camera",
+  "gallery",
+  "photos",
+  "contacts",
+  "messages",
+  "calculator",
+  "clock",
+  "alarm",
+  "drive",
+  "meet",
+  "keep",
+  "notes",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -382,6 +422,10 @@ export class CapabilityRegistry {
     this._availabilityOverrides = { ...overrides };
   }
 
+  getDeviceAvailabilityOverrides(): Readonly<DeviceAvailabilityOverrides> {
+    return this._availabilityOverrides;
+  }
+
   resetForTesting(): void {
     this._availabilityOverrides = {};
   }
@@ -403,7 +447,7 @@ export class CapabilityRegistry {
       capability: `tool.${capabilityOrTool}`,
       toolNames: [capabilityOrTool],
       target: "DESKTOP",
-      supportedTargets: ["DESKTOP", "BROWSER", "PHONE", "REMOTE_DESKTOP"],
+      supportedTargets: ["DESKTOP", "BROWSER", "PHONE", "REMOTE_DESKTOP", "CURRENT_DEVICE"],
       riskLevel: isMod ? "MEDIUM" : "LOW",
       permissionRequired: isMod ? "standard" : "read_only",
       confirmationRequired: isMod,
@@ -429,7 +473,10 @@ export class CapabilityRegistry {
     const cleaned = String(rawInput || "")
       .trim()
       .toLowerCase()
-      .replace(/\b(open\s+karo|kholo|khol\s+do|chalu\s+karo|launch|start|open|on\s+laptop|on\s+pc|on\s+desktop|laptop\s+par|pc\s+par|desktop\s+par|me|mein|par)\b/gi, "")
+      .replace(
+        /\b(open\s+karo|kholo|khol\s+do|chalu\s+karo|launch|start|open|on\s+laptop|on\s+pc|on\s+desktop|on\s+phone|on\s+mobile|laptop\s+par|laptop\s+mein|laptop\s+me|pc\s+par|pc\s+mein|pc\s+me|desktop\s+par|desktop\s+mein|desktop\s+me|phone\s+par|phone\s+mein|phone\s+me|phone\s+pe|mobile\s+par|mobile\s+mein|mobile\s+me|mere\s+mobile|mere\s+phone|remote\s+desktop\s+par|remote\s+pc\s+par|me|mein|par|pe)\b/gi,
+        "",
+      )
       .replace(/\s+/g, " ")
       .trim();
 

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MYRAA — ProjectScanner
  *
  * Scans a workspace directory structure safely.
@@ -37,6 +37,9 @@ export const DEFAULT_IGNORE_DIRS = new Set([
   ".hg",
   "bower_components",
   ".electron",
+  "agent_dist",
+  "scratch",
+  "logs",
 ]);
 
 export const BINARY_EXTENSIONS = new Set([

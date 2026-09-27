@@ -108,7 +108,7 @@
     "category": "fact",
     "text": "Phase 26 regression test memory item",
     "createdAt": "2026-09-23T11:04:25.603Z",
-    "updatedAt": "2026-09-24T16:09:07.990Z",
+    "updatedAt": "2026-09-27T05:12:43.001Z",
     "key": "test_mem_phase26",
     "importance": "medium",
     "confidence": "medium",
@@ -116,8 +116,8 @@
     "status": "active",
     "deviceId": "device_android_test_1",
     "deviceType": "android",
-    "version": 6,
-    "lastSyncedAt": "2026-09-24T16:09:07.990Z"
+    "version": 8,
+    "lastSyncedAt": "2026-09-27T05:12:43.001Z"
   },
   {
     "id": "mnhcpg2lf",
@@ -153,7 +153,7 @@
     "category": "project",
     "text": "MYRAA utilizes a decoupled agent-planner architecture with zero-trust tool firewalls.",
     "createdAt": "2026-09-23T13:03:36.394Z",
-    "updatedAt": "2026-09-24T16:08:30.459Z",
+    "updatedAt": "2026-09-27T05:12:31.795Z",
     "key": "project_architecture",
     "importance": "high",
     "confidence": "medium",
@@ -161,15 +161,15 @@
     "status": "active",
     "deviceId": "desktop_master_console",
     "deviceType": "desktop",
-    "version": 7,
-    "lastSyncedAt": "2026-09-24T16:08:30.459Z"
+    "version": 9,
+    "lastSyncedAt": "2026-09-27T05:12:31.795Z"
   },
   {
     "id": "201fmx85d",
     "category": "preference",
     "text": "User plans to visit Tokyo in October 2026.",
     "createdAt": "2026-09-23T13:03:39.119Z",
-    "updatedAt": "2026-09-24T16:08:33.654Z",
+    "updatedAt": "2026-09-27T05:12:37.481Z",
     "key": "vacation_plan",
     "importance": "medium",
     "confidence": "medium",
@@ -177,15 +177,15 @@
     "status": "active",
     "deviceId": "desktop_master_console",
     "deviceType": "desktop",
-    "version": 7,
-    "lastSyncedAt": "2026-09-24T16:08:33.654Z"
+    "version": 9,
+    "lastSyncedAt": "2026-09-27T05:12:37.482Z"
   },
   {
     "id": "dkyaauaah",
     "category": "project",
     "text": "Launch rescheduled to Nov 15 after QA review.",
     "createdAt": "2026-09-23T13:03:39.134Z",
-    "updatedAt": "2026-09-24T16:08:33.667Z",
+    "updatedAt": "2026-09-27T05:12:37.503Z",
     "key": "project_deadline",
     "importance": "medium",
     "confidence": "medium",
@@ -193,7 +193,7 @@
     "status": "needs_revalidation",
     "deviceId": "android_pixel_e2e_device",
     "deviceType": "android",
-    "version": 8,
+    "version": 10,
     "lastSyncedAt": "2026-09-23T13:03:39.136Z"
   },
   {
@@ -272,5 +272,50 @@
     "deviceType": "android",
     "version": 2,
     "lastSyncedAt": "2026-09-23T13:42:33.978Z"
+  },
+  {
+    "id": "ip9jydwgb",
+    "category": "project",
+    "text": "Launch rescheduled to Nov 15 after QA review.",
+    "createdAt": "2026-09-27T05:11:00.734Z",
+    "updatedAt": "2026-09-27T05:11:00.736Z",
+    "key": "project_deadline",
+    "importance": "medium",
+    "confidence": "low",
+    "source": "system_generated",
+    "status": "active",
+    "deviceId": "android_pixel_e2e_device",
+    "deviceType": "android",
+    "version": 2,
+    "lastSyncedAt": "2026-09-27T05:11:00.736Z"
+  },
+  {
+    "id": "k30o3k6sm",
+    "category": "user_preference",
+    "text": "Prefers concise production logs and dark theme.",
+    "createdAt": "2026-09-27T05:11:52.419Z",
+    "updatedAt": "2026-09-27T05:12:43.587Z",
+    "importance": "medium",
+    "confidence": "medium",
+    "source": "system_generated",
+    "status": "active",
+    "deviceType": "desktop",
+    "version": 1
+  },
+  {
+    "id": "1pmj265qi",
+    "category": "project",
+    "text": "Launch rescheduled to Nov 15 after QA review.",
+    "createdAt": "2026-09-27T05:12:37.503Z",
+    "updatedAt": "2026-09-27T05:12:37.507Z",
+    "key": "project_deadline",
+    "importance": "medium",
+    "confidence": "low",
+    "source": "system_generated",
+    "status": "active",
+    "deviceId": "android_pixel_e2e_device",
+    "deviceType": "android",
+    "version": 2,
+    "lastSyncedAt": "2026-09-27T05:12:37.507Z"
   }
 ]

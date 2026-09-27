@@ -4176,6 +4176,791 @@ export function createHttpApp(): express.Application {
     }
   });
 
+  // ── Phase 9–10: Production UX, Multi-Device & Handoff REST Endpoints ────
+  const DEFAULT_MOBILE_UX_ID = "myraa-mobile-primary";
+  const DEFAULT_DESKTOP_UX_ID = "myraa-desktop-primary";
+  let lastUxPairingId = "";
+
+  async function buildUxSnapshot(mobileId = DEFAULT_MOBILE_UX_ID, desktopId = DEFAULT_DESKTOP_UX_ID) {
+    const {
+      productionUxController,
+      crossDeviceWorkflowOrchestrator,
+      deviceRegistry,
+    } = await import("../device/index.ts");
+    const { emergencyStopCoordinator } = await import("../remote/EmergencyStopCoordinator.ts");
+    const { securityPolicyEngine } = await import("../security/SecurityPolicyEngine.ts");
+
+    if (!deviceRegistry.getDevice(mobileId)) {
+      productionUxController.initMobileUxSession({
+        deviceId: mobileId,
+        deviceName: "MYRAA Android Phone",
+        online: true,
+      });
+    }
+    if (!deviceRegistry.getDevice(desktopId)) {
+      productionUxController.initDesktopUxSession({
+        deviceId: desktopId,
+        deviceName: "MYRAA Windows Workstation",
+        online: true,
+        projectPath: "d:/SORA AI/Sora AI",
+        projectName: "MYRAA Production Core",
+      });
+    }
+
+    const mobile = productionUxController.getMobileUxState(mobileId);
+    const desktop = productionUxController.getDesktopUxState(desktopId);
+    const mobileHandoffs = crossDeviceWorkflowOrchestrator.listHandoffsForDevice(mobileId);
+    const desktopHandoffs = crossDeviceWorkflowOrchestrator.listHandoffsForDevice(desktopId);
+    const handoffMap = new Map<string, any>();
+    for (const h of [...mobileHandoffs, ...desktopHandoffs]) {
+      handoffMap.set(h.handoffId, h);
+    }
+    const handoffs = Array.from(handoffMap.values());
+    const activeWorkflows = handoffs.map((h: any) => ({
+      ...h,
+      workflowId: h.handoffId,
+      title: h.intent || h.capability || "Cross-Device Workflow",
+      state: h.progress?.status || h.state || "ACTIVE",
+      initiatingDeviceId: h.sourceDevice?.deviceId || h.sourceDeviceId,
+      currentExecutingDeviceId: h.targetDevice?.deviceId || h.targetDeviceId,
+    }));
+
+    return {
+      success: true,
+      mobile,
+      desktop,
+      handoffs,
+      activeWorkflows,
+      emergencyStopActive: emergencyStopCoordinator.isActive(),
+      emergencyStop: { active: emergencyStopCoordinator.isActive() },
+      securityMode: securityPolicyEngine.getMode(),
+      totalGeminiLiveTools: desktop.toolsAndCapabilities.totalGeminiLiveTools,
+    };
+  }
+
+  app.get("/api/ux/state", async (req, res) => {
+    try {
+      const mobileId = String(req.query.mobileDeviceId || DEFAULT_MOBILE_UX_ID);
+      const desktopId = String(req.query.desktopDeviceId || DEFAULT_DESKTOP_UX_ID);
+      const snap = await buildUxSnapshot(mobileId, desktopId);
+      res.status(200).json(snap);
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to load UX state.") });
+    }
+  });
+
+  app.post("/api/ux/mobile/onboarding", async (req, res) => {
+    try {
+      const { deviceId = DEFAULT_MOBILE_UX_ID, step, stepId, completeAll } = req.body || {};
+      const { productionUxController } = await import("../device/index.ts");
+      let onboarding: any;
+      if (completeAll) {
+        for (const s of ["WELCOME", "VOICE_SETUP", "PERMISSIONS", "PRIVACY_AND_ACCOUNT", "READY"] as const) {
+          onboarding = productionUxController.completeMobileOnboardingStep(deviceId, s);
+        }
+      } else {
+        onboarding = productionUxController.completeMobileOnboardingStep(
+          deviceId,
+          (step || stepId || "WELCOME") as any,
+        );
+      }
+      const snap = await buildUxSnapshot(deviceId, DEFAULT_DESKTOP_UX_ID);
+      res.status(200).json({ ...snap, onboarding });
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Onboarding step failed.") });
+    }
+  });
+
+  app.post("/api/ux/mobile/target", async (req, res) => {
+    try {
+      const { deviceId = DEFAULT_MOBILE_UX_ID, target } = req.body || {};
+      const { productionUxController } = await import("../device/index.ts");
+      productionUxController.selectMobileTargetDevice(deviceId, target || "CURRENT_DEVICE");
+      const snap = await buildUxSnapshot(deviceId, DEFAULT_DESKTOP_UX_ID);
+      res.status(200).json(snap);
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Target selection failed.") });
+    }
+  });
+
+  app.post("/api/ux/desktop/target", async (req, res) => {
+    try {
+      const { deviceId = DEFAULT_DESKTOP_UX_ID, target } = req.body || {};
+      const { productionUxController } = await import("../device/index.ts");
+      productionUxController.selectDesktopTargetDevice(deviceId, target || "CURRENT_DEVICE");
+      const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, deviceId);
+      res.status(200).json(snap);
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Desktop target selection failed.") });
+    }
+  });
+
+  app.post("/api/ux/mobile/permission", async (req, res) => {
+    try {
+      const { deviceId = DEFAULT_MOBILE_UX_ID, permission, granted } = req.body || {};
+      const { productionUxController } = await import("../device/index.ts");
+      const updated = productionUxController.updateMobilePermission({
+        deviceId,
+        permission,
+        granted: Boolean(granted),
+      });
+      const snap = await buildUxSnapshot(deviceId, DEFAULT_DESKTOP_UX_ID);
+      res.status(200).json({ ...snap, updatedPermission: updated });
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Permission update failed.") });
+    }
+  });
+
+  app.post("/api/ux/mobile/privacy", async (req, res) => {
+    try {
+      const {
+        deviceId = DEFAULT_MOBILE_UX_ID,
+        privacyShieldEnabled,
+        continuousScreenContextEnabled,
+        redactSensitiveNotifications,
+        localOnlyMode,
+        clearDeviceLocalContext,
+      } = req.body || {};
+      const { productionUxController } = await import("../device/index.ts");
+      const privacyControls = productionUxController.updateMobilePrivacyControls({
+        deviceId,
+        privacyShieldEnabled,
+        continuousScreenContextEnabled,
+        redactSensitiveNotifications,
+        localOnlyMode,
+        clearDeviceLocalContext,
+      });
+      const snap = await buildUxSnapshot(deviceId, DEFAULT_DESKTOP_UX_ID);
+      res.status(200).json({ ...snap, privacyControls });
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Privacy controls update failed.") });
+    }
+  });
+
+  app.post("/api/ux/mobile/settings", async (req, res) => {
+    try {
+      const {
+        deviceId = DEFAULT_MOBILE_UX_ID,
+        languagePreference,
+        wakeWordEnabled,
+        wakePhrase,
+        voiceOutputEnabled,
+        theme,
+        remoteAutoDisconnectMinutes,
+      } = req.body || {};
+      const { productionUxController } = await import("../device/index.ts");
+      const settings = productionUxController.updateMobileSettings({
+        deviceId,
+        languagePreference,
+        wakeWordEnabled,
+        wakePhrase,
+        voiceOutputEnabled,
+        theme,
+        remoteAutoDisconnectMinutes,
+      });
+      const snap = await buildUxSnapshot(deviceId, DEFAULT_DESKTOP_UX_ID);
+      res.status(200).json({ ...snap, settings });
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Mobile settings update failed.") });
+    }
+  });
+
+  app.post("/api/ux/mobile/voice", async (req, res) => {
+    try {
+      const {
+        deviceId = DEFAULT_MOBILE_UX_ID,
+        utterance,
+        explicitTargetOverride,
+        targetDesktopDeviceId,
+      } = req.body || {};
+      if (!utterance || !String(utterance).trim()) {
+        res.status(400).json({ error: "Utterance is required." });
+        return;
+      }
+      const { productionUxController } = await import("../device/index.ts");
+      const turn = await productionUxController.submitMobileVoiceCommand({
+        deviceId,
+        utterance: String(utterance).trim(),
+        explicitTargetOverride,
+        targetDesktopDeviceId: targetDesktopDeviceId || DEFAULT_DESKTOP_UX_ID,
+      });
+      const snap = await buildUxSnapshot(deviceId, DEFAULT_DESKTOP_UX_ID);
+      res.status(200).json({ ...snap, turn });
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Mobile voice command failed.") });
+    }
+  });
+
+  app.post("/api/ux/desktop/voice", async (req, res) => {
+    try {
+      const {
+        deviceId = DEFAULT_DESKTOP_UX_ID,
+        utterance,
+        explicitTargetOverride,
+        targetPhoneDeviceId,
+      } = req.body || {};
+      if (!utterance || !String(utterance).trim()) {
+        res.status(400).json({ error: "Utterance is required." });
+        return;
+      }
+      const { productionUxController } = await import("../device/index.ts");
+      const turn = await productionUxController.submitDesktopVoiceCommand({
+        deviceId,
+        utterance: String(utterance).trim(),
+        explicitTargetOverride,
+        targetPhoneDeviceId: targetPhoneDeviceId || DEFAULT_MOBILE_UX_ID,
+      });
+      const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, deviceId);
+      res.status(200).json({ ...snap, turn });
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Desktop voice command failed.") });
+    }
+  });
+
+  app.post("/api/ux/desktop/project", async (req, res) => {
+    try {
+      const {
+        deviceId = DEFAULT_DESKTOP_UX_ID,
+        projectName = "MYRAA Production Core",
+        projectPath = "d:/SORA AI/Sora AI",
+        activeFile,
+      } = req.body || {};
+      const { productionUxController } = await import("../device/index.ts");
+      const dashboard = productionUxController.openProjectInDashboard({
+        deviceId,
+        projectName,
+        projectPath,
+        activeFile,
+      });
+      const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, deviceId);
+      res.status(200).json({ ...snap, dashboard });
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Project dashboard update failed.") });
+    }
+  });
+
+  app.post("/api/ux/desktop/context", async (req, res) => {
+    try {
+      const {
+        deviceId = DEFAULT_DESKTOP_UX_ID,
+        currentWindow,
+        activeApplication,
+        activeFile,
+        activeWebsite,
+        screenSharingActive,
+        privacyShieldActive,
+      } = req.body || {};
+      const { productionUxController } = await import("../device/index.ts");
+      const activeContext = productionUxController.updateDesktopActiveContext({
+        deviceId,
+        currentWindow,
+        activeApplication,
+        activeFile,
+        activeWebsite,
+        screenSharingActive,
+        privacyShieldActive,
+      });
+      const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, deviceId);
+      res.status(200).json({ ...snap, activeContext });
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Desktop context update failed.") });
+    }
+  });
+
+  app.post("/api/ux/account/auth", async (req, res) => {
+    try {
+      const {
+        action,
+        accountId = "acct-sandeep-myraa",
+        displayName = "Sandeep Mishra",
+        email = "sandeep@mishtron.ai",
+        deviceId,
+        online,
+        reason,
+      } = req.body || {};
+      const {
+        productionUxController,
+        sharedAccountMemoryManager,
+      } = await import("../device/index.ts");
+
+      if (action === "login") {
+        sharedAccountMemoryManager.registerAccount({
+          accountId,
+          displayName,
+          email,
+          role: "admin",
+        });
+        sharedAccountMemoryManager.registerAccountDevice({
+          accountId,
+          deviceId: DEFAULT_MOBILE_UX_ID,
+          deviceName: "MYRAA Android Phone",
+          productType: "MYRAA_MOBILE",
+          role: "admin",
+          online: true,
+        });
+        sharedAccountMemoryManager.registerAccountDevice({
+          accountId,
+          deviceId: DEFAULT_DESKTOP_UX_ID,
+          deviceName: "MYRAA Windows Workstation",
+          productType: "MYRAA_DESKTOP",
+          role: "admin",
+          online: true,
+        });
+        productionUxController.initMobileUxSession({
+          deviceId: DEFAULT_MOBILE_UX_ID,
+          deviceName: "MYRAA Android Phone",
+          accountId,
+        });
+        productionUxController.initDesktopUxSession({
+          deviceId: DEFAULT_DESKTOP_UX_ID,
+          deviceName: "MYRAA Windows Workstation",
+          accountId,
+        });
+        // Seed default Hinglish preference in Shared Account Preferences
+        sharedAccountMemoryManager.setSharedPreference({
+          accountId,
+          deviceId: DEFAULT_MOBILE_UX_ID,
+          key: "hinglish_preference",
+          value: "hinglish",
+        });
+        // Seed mobile-local foreground_app context so both devices have distinct local context
+        sharedAccountMemoryManager.writeDeviceLocalMemory({
+          deviceId: DEFAULT_MOBILE_UX_ID,
+          productType: "MYRAA_MOBILE",
+          accountId,
+          key: "foreground_app",
+          value: "com.myraa.mobile",
+        });
+      } else if (action === "logout") {
+        productionUxController.initMobileUxSession({
+          deviceId: DEFAULT_MOBILE_UX_ID,
+          accountId: null,
+        });
+        productionUxController.initDesktopUxSession({
+          deviceId: DEFAULT_DESKTOP_UX_ID,
+          accountId: null,
+        });
+      } else if (action === "set_online" && deviceId) {
+        sharedAccountMemoryManager.setDeviceOnline(accountId, deviceId, Boolean(online));
+      } else if (action === "revoke_device" && deviceId) {
+        sharedAccountMemoryManager.revokeAccountDevice(accountId, deviceId, reason || "Revoked via UX");
+      } else if (action === "mark_lost" && deviceId) {
+        sharedAccountMemoryManager.markAccountDeviceLost(accountId, deviceId, reason || "Marked lost via UX");
+      }
+
+      const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
+      res.status(200).json(snap);
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Account action failed.") });
+    }
+  });
+
+  app.post("/api/ux/memory", async (req, res) => {
+    try {
+      const {
+        action = "save",
+        deviceId = DEFAULT_MOBILE_UX_ID,
+        productType = "MYRAA_MOBILE",
+        accountId,
+        scope = "SHARED",
+        domain = "MEMORY",
+        key,
+        value,
+        category,
+      } = req.body || {};
+      const {
+        productionUxController,
+        sharedAccountMemoryManager,
+      } = await import("../device/index.ts");
+
+      const currentState = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
+      const effectiveAccountId =
+        accountId !== undefined
+          ? accountId
+          : productType === "MYRAA_DESKTOP"
+            ? currentState.desktop.memoryView.accountId
+            : currentState.mobile.memoryView.accountId;
+
+      if (action === "queue_offline") {
+        if (!effectiveAccountId) {
+          res.status(400).json({ error: "Sign into a MYRAA Account before queueing shared offline mutations." });
+          return;
+        }
+        sharedAccountMemoryManager.setDeviceOnline(effectiveAccountId, deviceId, false);
+        const queued = sharedAccountMemoryManager.writeSharedMemory({
+          accountId: effectiveAccountId,
+          deviceId,
+          key: String(key || "offline_item"),
+          content: String(value ?? "Offline mutation value"),
+          category: category || "general",
+        });
+        const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
+        res.status(200).json({ ...snap, mutationResult: queued });
+        return;
+      }
+
+      if (action === "sync_offline") {
+        if (!effectiveAccountId) {
+          res.status(400).json({ error: "Sign into a MYRAA Account before syncing offline queue." });
+          return;
+        }
+        const synced = sharedAccountMemoryManager.reconnectAndSync({
+          accountId: effectiveAccountId,
+          deviceId,
+        });
+        const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
+        res.status(200).json({ ...snap, syncResult: synced });
+        return;
+      }
+
+      if (domain === "PREFERENCE" && scope === "SHARED" && effectiveAccountId) {
+        const prefRes = sharedAccountMemoryManager.setSharedPreference({
+          accountId: effectiveAccountId,
+          deviceId,
+          key: String(key || "preference_key"),
+          value,
+        });
+        const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
+        res.status(200).json({ ...snap, memoryResult: prefRes });
+        return;
+      }
+
+      if (domain === "TASK" && scope === "SHARED" && effectiveAccountId) {
+        const taskRes = sharedAccountMemoryManager.upsertSharedTask({
+          accountId: effectiveAccountId,
+          deviceId,
+          taskKey: String(key || "shared_task"),
+          task: { title: String(value || key || "Shared Task") },
+          status: "pending",
+        });
+        const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
+        res.status(200).json({ ...snap, memoryResult: taskRes });
+        return;
+      }
+
+      const saveRes = productionUxController.saveMemoryFromUx({
+        deviceId,
+        productType,
+        accountId: effectiveAccountId,
+        scope,
+        key: String(key || ""),
+        value,
+        category,
+      });
+
+      const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
+      res.status(200).json({ ...snap, memoryResult: saveRes });
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Memory operation failed.") });
+    }
+  });
+
+  app.post("/api/ux/remote/pair-request", async (req, res) => {
+    try {
+      const {
+        sourceDeviceId = DEFAULT_MOBILE_UX_ID,
+        targetDeviceId = DEFAULT_DESKTOP_UX_ID,
+        accountId,
+        role = "admin",
+      } = req.body || {};
+      const { remoteBridge } = await import("../device/index.ts");
+      const challenge = remoteBridge.requestPairing({
+        sourceDeviceId,
+        targetDeviceId,
+        requestedBy: accountId || sourceDeviceId,
+        role,
+        explicitUserAction: true,
+      });
+      lastUxPairingId = challenge.pairingId;
+      const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
+      res.status(200).json({ ...snap, challenge, pairingCode: challenge.pairingCode, pairingId: challenge.pairingId });
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Pairing request failed.") });
+    }
+  });
+
+  app.post("/api/ux/remote/pair-confirm", async (req, res) => {
+    try {
+      const { pairingId, pairingCode, connectAfterPair = true } = req.body || {};
+      const { remoteBridge, productionUxController } = await import("../device/index.ts");
+      const effectivePairingId = pairingId || lastUxPairingId || "";
+      const confirmed = remoteBridge.confirmPairing({
+        pairingId: String(effectivePairingId),
+        pairingCode: String(pairingCode || ""),
+        approvedByTargetUser: true,
+      });
+      if (confirmed.success && connectAfterPair && confirmed.pairing) {
+        await productionUxController.connectRemoteBridgeFromUx({
+          sourceDeviceId: confirmed.pairing.sourceDeviceId,
+          targetDeviceId: confirmed.pairing.targetDeviceId,
+        });
+      }
+      const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
+      res.status(200).json({ ...snap, pairingResult: confirmed });
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Pairing confirmation failed.") });
+    }
+  });
+
+  app.post("/api/ux/remote/connect", async (req, res) => {
+    try {
+      const {
+        sourceDeviceId = DEFAULT_MOBILE_UX_ID,
+        targetDeviceId = DEFAULT_DESKTOP_UX_ID,
+        autoPairIfNeeded = true,
+      } = req.body || {};
+      const { productionUxController, remoteBridge } = await import("../device/index.ts");
+      let connectOutcome: any;
+      if (autoPairIfNeeded && !remoteBridge.isPaired(sourceDeviceId, targetDeviceId)) {
+        connectOutcome = await productionUxController.pairAndConnectRemoteDevice({
+          sourceDeviceId,
+          targetDeviceId,
+          connectNow: true,
+        });
+      } else {
+        const center = await productionUxController.connectRemoteBridgeFromUx({
+          sourceDeviceId,
+          targetDeviceId,
+        });
+        connectOutcome = {
+          paired: remoteBridge.isPaired(sourceDeviceId, targetDeviceId),
+          connected: center.connectionStatus === "CONNECTED",
+          remoteControlCenter: center,
+        };
+      }
+      const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
+      res.status(200).json({ ...snap, connectOutcome });
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Remote bridge connect failed.") });
+    }
+  });
+
+  app.post("/api/ux/remote/disconnect", async (req, res) => {
+    try {
+      const { sourceDeviceId, deviceId, reason } = req.body || {};
+      const { productionUxController } = await import("../device/index.ts");
+      productionUxController.disconnectRemoteBridgeFromUx({
+        sourceDeviceId: sourceDeviceId || deviceId || DEFAULT_MOBILE_UX_ID,
+        reason,
+      });
+      const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
+      res.status(200).json(snap);
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Remote bridge disconnect failed.") });
+    }
+  });
+
+  app.post("/api/ux/handoff", async (req, res) => {
+    try {
+      const {
+        action = "conversational",
+        accountId = "acct-sandeep-myraa",
+        handoffId,
+        workflowId,
+        handoffToken,
+        utterance,
+        sourceDeviceId = DEFAULT_MOBILE_UX_ID,
+        targetDeviceId = DEFAULT_DESKTOP_UX_ID,
+        projectPath = "d:/SORA AI/Sora AI",
+        filePath = "src/App.tsx",
+      } = req.body || {};
+      const effectiveHandoffId = handoffId || workflowId;
+      const {
+        crossDeviceWorkflowOrchestrator,
+        sharedAccountMemoryManager,
+      } = await import("../device/index.ts");
+
+      // Ensure account & both devices are registered and online if running handoff from UX
+      if (!sharedAccountMemoryManager.getAccount(accountId)) {
+        sharedAccountMemoryManager.registerAccount({
+          accountId,
+          displayName: "Sandeep Mishra",
+          role: "admin",
+        });
+      }
+      if (!sharedAccountMemoryManager.getAccountDevice(accountId, DEFAULT_MOBILE_UX_ID)) {
+        sharedAccountMemoryManager.registerAccountDevice({
+          accountId,
+          deviceId: DEFAULT_MOBILE_UX_ID,
+          deviceName: "MYRAA Android Phone",
+          productType: "MYRAA_MOBILE",
+          role: "admin",
+          online: true,
+        });
+      }
+      if (!sharedAccountMemoryManager.getAccountDevice(accountId, DEFAULT_DESKTOP_UX_ID)) {
+        sharedAccountMemoryManager.registerAccountDevice({
+          accountId,
+          deviceId: DEFAULT_DESKTOP_UX_ID,
+          deviceName: "MYRAA Windows Workstation",
+          productType: "MYRAA_DESKTOP",
+          role: "admin",
+          online: true,
+        });
+      }
+
+      let outcome: any;
+      if (action === "conversational") {
+        outcome = await crossDeviceWorkflowOrchestrator.executeConversationalCrossDeviceTurn({
+          accountId,
+          utterance: String(utterance || "Desktop par mera project kholo"),
+          sourceDeviceId,
+          targetDeviceId,
+          activeHandoffId: effectiveHandoffId,
+          projectPath,
+          filePath,
+          explicitAuthorization: true,
+        });
+        if (!outcome?.ok && !outcome?.handoff) {
+          outcome = crossDeviceWorkflowOrchestrator.createHandoff({
+            accountId,
+            sourceDeviceId,
+            targetDeviceId,
+            intent: targetDeviceId === DEFAULT_MOBILE_UX_ID ? "CREATE_REMINDER" : "OPEN_FOLDER",
+            capability:
+              targetDeviceId === DEFAULT_MOBILE_UX_ID ? "mobile.notes" : "desktop.openFolder",
+            utterance: String(utterance || "Desktop par mera project kholo"),
+            args:
+              targetDeviceId === DEFAULT_MOBILE_UX_ID
+                ? { title: "Continued Task", content: String(utterance || "Continued on phone") }
+                : { path: projectPath, filePath },
+            rawContext: {
+              projectPath,
+              filePath,
+              summary: String(utterance || "Cross-device handoff task"),
+              current_window: "MustBeStrippedLocalWindow",
+            },
+            explicitAuthorization: true,
+          });
+        }
+      } else if (action === "continue") {
+        const latestWf =
+          crossDeviceWorkflowOrchestrator.listHandoffsForDevice(sourceDeviceId)[0] ||
+          crossDeviceWorkflowOrchestrator.listHandoffsForDevice(targetDeviceId)[0];
+        const targetId = effectiveHandoffId || latestWf?.handoffId;
+        if (targetId && !utterance) {
+          outcome = await crossDeviceWorkflowOrchestrator.continueHandoffStep({
+            handoffId: targetId,
+            handoffToken,
+          });
+        } else {
+          outcome = await crossDeviceWorkflowOrchestrator.executeConversationalCrossDeviceTurn({
+            accountId,
+            utterance: String(utterance || "Ye task phone par continue karo"),
+            sourceDeviceId,
+            targetDeviceId,
+            projectPath,
+            filePath,
+            explicitAuthorization: true,
+          });
+        }
+      } else if (action === "pause" && effectiveHandoffId) {
+        outcome = crossDeviceWorkflowOrchestrator.pauseHandoff({
+          handoffId: effectiveHandoffId,
+          requestedByDeviceId: sourceDeviceId,
+          reason: "Paused from Production UX",
+        });
+      } else if (action === "resume" && effectiveHandoffId) {
+        outcome = crossDeviceWorkflowOrchestrator.resumeHandoff({
+          handoffId: effectiveHandoffId,
+          handoffToken,
+          resumingDeviceId: targetDeviceId,
+        });
+      } else if (action === "disconnect" && effectiveHandoffId) {
+        outcome = crossDeviceWorkflowOrchestrator.handleDeviceDisconnect({
+          handoffId: effectiveHandoffId,
+          disconnectedDeviceId: targetDeviceId,
+          reason: "Simulated disconnect from UX",
+        });
+      } else if (action === "recover" && effectiveHandoffId) {
+        outcome = crossDeviceWorkflowOrchestrator.recoverHandoffAfterReconnect({
+          handoffId: effectiveHandoffId,
+          reconnectedDeviceId: targetDeviceId,
+          handoffToken,
+        });
+      } else {
+        outcome = crossDeviceWorkflowOrchestrator.createHandoff({
+          accountId,
+          sourceDeviceId,
+          targetDeviceId,
+          intent: "OPEN_PROJECT",
+          capability:
+            targetDeviceId === DEFAULT_MOBILE_UX_ID
+              ? "mobile.openApp"
+              : "desktop.openFolder",
+          utterance: String(utterance || "Cross-device handoff"),
+          rawContext: {
+            projectPath,
+            filePath,
+            summary: String(utterance || "Cross-device handoff task"),
+            current_window: "MustBeStrippedLocalWindow",
+          },
+          explicitAuthorization: true,
+        });
+      }
+
+      const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
+      res.status(200).json({ ...snap, handoffOutcome: outcome });
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Handoff operation failed.") });
+    }
+  });
+
+  app.post("/api/ux/security/emergency-stop", async (req, res) => {
+    try {
+      const {
+        active,
+        action,
+        reason = "Triggered from Production UX Control Center",
+        deviceId = DEFAULT_DESKTOP_UX_ID,
+      } = req.body || {};
+      const shouldActivate = action ? action === "trigger" : Boolean(active);
+      const { emergencyStopCoordinator } = await import("../remote/EmergencyStopCoordinator.ts");
+      if (shouldActivate) {
+        await emergencyStopCoordinator.trigger({
+          source: deviceId === DEFAULT_MOBILE_UX_ID ? "remote_device" : "desktop_ui",
+          deviceId,
+          deviceName:
+            deviceId === DEFAULT_MOBILE_UX_ID
+              ? "MYRAA Android Phone"
+              : "MYRAA Windows Workstation",
+          reason,
+        });
+      } else {
+        await emergencyStopCoordinator.reset("local_admin_operator");
+      }
+      const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
+      res.status(200).json(snap);
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Emergency stop toggle failed.") });
+    }
+  });
+
+  app.post("/api/ux/security/lockdown", async (req, res) => {
+    try {
+      const { active, mode } = req.body || {};
+      const { securityPolicyEngine } = await import("../security/SecurityPolicyEngine.ts");
+      if (typeof mode === "string") {
+        const upper = mode.toUpperCase();
+        if (upper === "LOCKDOWN") {
+          securityPolicyEngine.setMode("LOCKDOWN");
+        } else if (upper === "ELEVATED" || upper === "STRICT") {
+          securityPolicyEngine.setMode("STRICT");
+        } else if (upper === "PARANOID") {
+          securityPolicyEngine.setMode("PARANOID");
+        } else {
+          securityPolicyEngine.setMode("BALANCED");
+        }
+      } else {
+        securityPolicyEngine.setMode(active ? "LOCKDOWN" : "BALANCED");
+      }
+      const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
+      res.status(200).json(snap);
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Security lockdown toggle failed.") });
+    }
+  });
+
   // ── Global Sanitized Error Handling Middleware ───────────────────────────
   // Guarantees fail-closed error responses and zero stack trace / path leakage to clients
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

@@ -19,6 +19,19 @@ import { actionContextManager } from "./ActionContext.ts";
 import { capabilityRegistry } from "./CapabilityRegistry.ts";
 import { intentResolver } from "./IntentResolver.ts";
 import { actionVerifier } from "./ActionVerifier.ts";
+import {
+  deviceAwareIntelligence,
+  type CurrentDeviceProfile,
+  type SessionDeviceHint,
+  type SmartTargetResolution,
+} from "./DeviceAwareIntelligence.ts";
+import {
+  deviceRegistry,
+  remoteBridge,
+  sharedAccountMemoryManager,
+  crossDeviceWorkflowOrchestrator,
+  productionUxController,
+} from "../device/index.ts";
 import { contentSanitizer } from "../security/ContentSanitizer.ts";
 import { securityPolicyEngine } from "../security/SecurityPolicyEngine.ts";
 import { securityRiskEngine } from "../security/SecurityRiskEngine.ts";
@@ -35,6 +48,7 @@ import type {
   MediaSearchResultItem,
   OrchestratedExecutionPlan,
   OrchestratedPlanStep,
+  SmartTargetMode,
   TargetDevice,
 } from "./OrchestratorTypes.ts";
 
@@ -83,12 +97,17 @@ export interface OrchestratedActionOutcome {
   intent: CanonicalIntent;
   capability: string;
   targetDevice: TargetDevice;
+  targetMode?: SmartTargetMode;
+  currentDevice?: CurrentDeviceProfile;
   verified: boolean;
   verification: ActionVerificationResult;
   output: Record<string, unknown>;
   context: ExecutionContext;
   isPermissionDenied: boolean;
   isDeviceUnavailable: boolean;
+  isCapabilityUnsupported?: boolean;
+  noDesktopConnected?: boolean;
+  bridgeRequired?: boolean;
   requiresConfirmation: boolean;
   errorCode?: string;
   error?: string;
@@ -109,6 +128,179 @@ export class IntentCapabilityOrchestrator {
     this._plans.clear();
     actionContextManager.resetForTesting();
     capabilityRegistry.resetForTesting();
+    deviceAwareIntelligence.resetForTesting();
+    remoteBridge.resetForTesting();
+    sharedAccountMemoryManager.resetForTesting();
+    crossDeviceWorkflowOrchestrator.resetForTesting();
+    productionUxController.resetForTesting();
+  }
+
+  /**
+   * Phase 5 — Resolve Smart Target & Device-Aware Intelligence for an utterance.
+   */
+  resolveSmartTarget(
+    utterance: string,
+    secContext: SecurityContext = DEFAULT_ADMIN_CONTEXT,
+    contextId = "default",
+    explicitArgDevice?: string,
+    sessionHint?: SessionDeviceHint,
+  ): SmartTargetResolution {
+    return deviceAwareIntelligence.resolveSmartTarget(
+      utterance,
+      secContext,
+      contextId,
+      explicitArgDevice,
+      sessionHint,
+    );
+  }
+
+  /**
+   * Phase 5 — Orchestrate a natural-language utterance with full Device-Aware Intelligence:
+   *   - Current Device Awareness (A)
+   *   - Capability Awareness (B)
+   *   - Target Awareness (C)
+   *   - Device Availability (D)
+   *   - "No Desktop Connected" handling (E)
+   *   - No Silent Fallback (F)
+   *   - Smart Target Mode: PHONE | DESKTOP | CURRENT_DEVICE | REMOTE_DESKTOP (G)
+   */
+  async orchestrateDeviceAware(
+    utterance: string,
+    contextId = "default",
+    secContext: SecurityContext = DEFAULT_ADMIN_CONTEXT,
+    executors?: OrchestratorExecutors,
+    sessionHint?: SessionDeviceHint,
+  ): Promise<OrchestratedActionOutcome> {
+    const smart = deviceAwareIntelligence.resolveSmartTarget(
+      utterance,
+      secContext,
+      contextId,
+      undefined,
+      sessionHint,
+    );
+
+    const meta = capabilityRegistry.getCapabilityMetadata(smart.intent.capability);
+    const primaryToolName = meta.toolNames[0] || smart.intent.capability;
+
+    // 1. Check security policy first (Emergency Stop, Lockdown, RBAC) so security always takes precedence
+    const authCheck = capabilityRegistry.authorizeCapability(
+      smart.intent.capability,
+      primaryToolName,
+      smart.intent.arguments,
+      secContext,
+      smart.effectiveTargetDevice,
+      Boolean(smart.intent.arguments.confirmed),
+    );
+
+    if (!authCheck.authorized && authCheck.isPermissionDenied) {
+      const failVerification: ActionVerificationResult = {
+        verified: false,
+        capability: smart.intent.capability,
+        targetDevice: smart.effectiveTargetDevice,
+        details: {
+          authorized: false,
+          errorCode: authCheck.errorCode,
+          reason: authCheck.reason,
+        },
+        failureReason: authCheck.reason,
+        failureCode: authCheck.errorCode,
+      };
+
+      return {
+        ok: false,
+        intent: smart.intent,
+        capability: smart.intent.capability,
+        targetDevice: smart.effectiveTargetDevice,
+        targetMode: smart.targetMode,
+        currentDevice: smart.currentDevice,
+        verified: false,
+        verification: failVerification,
+        output: {
+          error: authCheck.reason,
+          errorCode: authCheck.errorCode,
+          blocked: true,
+          isPermissionDenied: true,
+          isDeviceUnavailable: false,
+          verified: false,
+        },
+        context: actionContextManager.getContext(contextId),
+        isPermissionDenied: true,
+        isDeviceUnavailable: false,
+        requiresConfirmation: authCheck.confirmationRequired,
+        errorCode: authCheck.errorCode,
+        error: authCheck.reason,
+      };
+    }
+
+    // 2. Enforce Device Availability, Capability Support & No Silent Fallback
+    if (!smart.canExecute) {
+      const isUnavailable = smart.errorCode === "TARGET_DEVICE_UNAVAILABLE";
+      const isUnsupported =
+        smart.errorCode === "CAPABILITY_NOT_SUPPORTED" || smart.errorCode === "BRIDGE_INACTIVE";
+
+      const failVerification: ActionVerificationResult = {
+        verified: false,
+        capability: smart.intent.capability,
+        targetDevice: smart.effectiveTargetDevice,
+        details: {
+          targetMode: smart.targetMode,
+          effectiveTargetDevice: smart.effectiveTargetDevice,
+          currentDevice: smart.currentDevice.deviceClass,
+          errorCode: smart.errorCode,
+          reason: smart.reason,
+          noDesktopConnected: smart.noDesktopConnected,
+          bridgeRequired: smart.bridgeRequired,
+          verified: false,
+        },
+        failureReason: smart.reason,
+        failureCode: smart.errorCode,
+      };
+
+      return {
+        ok: false,
+        intent: smart.intent,
+        capability: smart.intent.capability,
+        targetDevice: smart.effectiveTargetDevice,
+        targetMode: smart.targetMode,
+        currentDevice: smart.currentDevice,
+        verified: false,
+        verification: failVerification,
+        output: {
+          error: smart.reason,
+          errorCode: smart.errorCode,
+          targetMode: smart.targetMode,
+          targetDevice: smart.effectiveTargetDevice,
+          isPermissionDenied: false,
+          isDeviceUnavailable: isUnavailable,
+          isCapabilityUnsupported: isUnsupported,
+          noDesktopConnected: smart.noDesktopConnected,
+          bridgeRequired: smart.bridgeRequired,
+          verified: false,
+        },
+        context: actionContextManager.getContext(contextId),
+        isPermissionDenied: false,
+        isDeviceUnavailable: isUnavailable,
+        isCapabilityUnsupported: isUnsupported,
+        noDesktopConnected: smart.noDesktopConnected,
+        bridgeRequired: smart.bridgeRequired,
+        requiresConfirmation: false,
+        errorCode: smart.errorCode,
+        error: smart.reason,
+      };
+    }
+
+    // 3. Execute on verified target device
+    const outcome = await this.executeIntent(smart.intent, secContext, executors);
+    return {
+      ...outcome,
+      targetMode: smart.targetMode,
+      currentDevice: smart.currentDevice,
+      noDesktopConnected: outcome.isDeviceUnavailable &&
+        (smart.effectiveTargetDevice === "DESKTOP" || smart.effectiveTargetDevice === "REMOTE_DESKTOP")
+        ? true
+        : smart.noDesktopConnected,
+      bridgeRequired: smart.bridgeRequired,
+    };
   }
 
   /**
@@ -120,8 +312,25 @@ export class IntentCapabilityOrchestrator {
     secContext: SecurityContext = DEFAULT_ADMIN_CONTEXT,
     executors?: OrchestratorExecutors,
   ): Promise<OrchestratedActionOutcome> {
+    const smart = deviceAwareIntelligence.resolveSmartTarget(utterance, secContext, contextId);
+    const isRegisteredDevice = Boolean(
+      secContext.deviceId && deviceRegistry.getDevice(secContext.deviceId),
+    );
+
+    if (isRegisteredDevice || smart.errorCode === "TARGET_DEVICE_UNAVAILABLE") {
+      return this.orchestrateDeviceAware(utterance, contextId, secContext, executors);
+    }
+
     const intent = intentResolver.resolveFromUtterance(utterance, contextId, secContext);
-    return this.executeIntent(intent, secContext, executors);
+    const outcome = await this.executeIntent(intent, secContext, executors);
+    return {
+      ...outcome,
+      targetMode: smart.targetMode,
+      currentDevice: smart.currentDevice,
+      noDesktopConnected:
+        outcome.isDeviceUnavailable &&
+        (outcome.targetDevice === "DESKTOP" || outcome.targetDevice === "REMOTE_DESKTOP"),
+    };
   }
 
   /**

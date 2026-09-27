@@ -36,6 +36,7 @@ import { MyraaSettings, DEFAULT_SETTINGS, loadSettings, saveSettings } from "./l
 import { MyraaWakeWordDetector } from "./lib/wakeWord";
 import { CloudPairingModal, StoredRemoteSession, STORAGE_KEY } from "./components/remote/CloudPairingModal";
 import { authenticatedRemoteFetch, getAccessTokenExpiryInfo } from "./lib/remoteAuth";
+import { ProductionControlHubModal } from "./components/ux/ProductionUxPanels";
 function getStoredRemoteAuthHeaders(): Record<string, string> {
   if (typeof localStorage === "undefined") return {};
   try {
@@ -52,6 +53,7 @@ function getStoredRemoteAuthHeaders(): Record<string, string> {
 
 export default function App() {
   const [state, setState] = useState<LiveState>("disconnected");
+  const [showControlHub, setShowControlHub] = useState<boolean>(false);
 
   const isRemoteHost =
     typeof window !== "undefined" &&
@@ -1027,6 +1029,17 @@ export default function App() {
             <span>SETTINGS</span>
           </button>
 
+          {/* Phase 9/10 Production UX Control Hub */}
+          <button
+            data-testid="open-control-hub-btn"
+            onClick={() => setShowControlHub(true)}
+            className="flex items-center gap-1.5 transition text-xs font-mono tracking-widest cursor-pointer opacity-60 hover:opacity-100 text-cyan-300"
+            title="MYRAA Production Control Hub (Desktop, Mobile, Remote Bridge & Security)"
+          >
+            <ShieldCheck size={14} />
+            <span>CONTROL HUB</span>
+          </button>
+
           {/* Floating Desktop Companion Toggler (Electron Desktop Mode) */}
           {window.myraa?.isDesktop && (
             <button
@@ -1440,6 +1453,15 @@ export default function App() {
           remoteSession={remoteSession}
           onUnpair={handleUnpairDevice}
           onSessionUpdate={(updated) => setRemoteSession(updated)}
+        />
+      </ErrorBoundary>
+
+      {/* Phase 9/10 Production UX Control Hub Modal */}
+      <ErrorBoundary fallbackTitle="Production Control Hub Recovered">
+        <ProductionControlHubModal
+          isOpen={showControlHub}
+          onClose={() => setShowControlHub(false)}
+          defaultSurface="desktop"
         />
       </ErrorBoundary>
 

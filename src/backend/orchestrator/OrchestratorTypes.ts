@@ -21,6 +21,13 @@ export type TargetDevice =
   | "PHONE"
   | "DESKTOP"
   | "BROWSER"
+  | "REMOTE_DESKTOP"
+  | "CURRENT_DEVICE";
+
+export type SmartTargetMode =
+  | "PHONE"
+  | "DESKTOP"
+  | "CURRENT_DEVICE"
   | "REMOTE_DESKTOP";
 
 export type IntentType =
@@ -182,6 +189,8 @@ export interface CapabilityAuthorizationDecision {
     | "SECURITY_POLICY_DENIED"
     | "PERMISSION_DENIED"
     | "TARGET_DEVICE_UNAVAILABLE"
+    | "CAPABILITY_NOT_SUPPORTED"
+    | "BRIDGE_INACTIVE"
     | "CONFIRMATION_REQUIRED"
     | "UNRECOGNIZED_APPLICATION"
     | "INVALID_ARGUMENTS";

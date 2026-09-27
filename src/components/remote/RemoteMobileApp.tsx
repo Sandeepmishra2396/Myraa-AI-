@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { MyraAudioSession, LiveState } from "../../lib/audio";
 import { authenticatedRemoteFetch } from "../../lib/remoteAuth";
+import { ProductionControlHubModal } from "../ux/ProductionUxPanels";
 
 interface StoredRemoteSession {
   deviceId: string;
@@ -72,6 +73,7 @@ export const RemoteMobileApp: React.FC = () => {
   });
   const [isPairing, setIsPairing] = useState<boolean>(false);
   const [pairingError, setPairingError] = useState<string | null>(null);
+  const [showControlHub, setShowControlHub] = useState<boolean>(false);
 
   // Live Audio / Session State
   const [liveState, setLiveState] = useState<LiveState>("disconnected");
@@ -603,8 +605,23 @@ export const RemoteMobileApp: React.FC = () => {
             <p className="text-[11px] text-slate-500">
               Pairing codes expire automatically in 5 minutes.
             </p>
+            <div className="pt-3">
+              <button
+                type="button"
+                data-testid="mobile-standalone-hub-btn"
+                onClick={() => setShowControlHub(true)}
+                className="w-full py-2.5 px-4 rounded-xl bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/40 text-cyan-200 font-mono text-xs font-semibold cursor-pointer transition"
+              >
+                Open MYRAA Mobile Standalone & Control Hub
+              </button>
+            </div>
           </div>
         </div>
+        <ProductionControlHubModal
+          isOpen={showControlHub}
+          onClose={() => setShowControlHub(false)}
+          defaultSurface="mobile"
+        />
       </div>
     );
   }
@@ -641,6 +658,15 @@ export const RemoteMobileApp: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            data-testid="mobile-open-control-hub-btn"
+            onClick={() => setShowControlHub(true)}
+            className="px-2.5 py-1.5 rounded-xl bg-cyan-600/25 hover:bg-cyan-600/40 border border-cyan-500/40 text-cyan-200 text-xs font-mono font-semibold cursor-pointer"
+          >
+            Control Hub
+          </button>
+
           {/* Authenticated Admin "Pair Another Device" Action */}
           {session.role === "admin" && (
             <button
@@ -1079,6 +1105,12 @@ export const RemoteMobileApp: React.FC = () => {
           </div>
         </div>
       )}
+
+      <ProductionControlHubModal
+        isOpen={showControlHub}
+        onClose={() => setShowControlHub(false)}
+        defaultSurface="mobile"
+      />
     </div>
   );
 };

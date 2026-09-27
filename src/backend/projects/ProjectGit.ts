@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MYRAA — ProjectGit
  *
  * Safe read-only git integration for active workspaces.
@@ -41,48 +41,47 @@ export class ProjectGit {
     }
   }
 
+  private static cache = new Map<string, { expiresAt: number; info: ProjectGitInfo }>();
+
   /**
    * Gathers git status, current branch, uncommitted count, and recent commits.
    */
   static async getInfo(workspaceRoot: string): Promise<ProjectGitInfo> {
     const root = assertWithinWorkspace(workspaceRoot, workspaceRoot);
-
-    // Check if inside a work tree
-    const isInsideWorkTree = await this.runGit(root, ["rev-parse", "--is-inside-work-tree"]);
-    if (isInsideWorkTree !== "true") {
-      return { isGitRepo: false };
+    const cacheKey = root.toLowerCase();
+    const cached = this.cache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.info;
     }
 
-    // Verify workspace itself is the repository or contains .git
-    const toplevel = await this.runGit(root, ["rev-parse", "--show-toplevel"]);
     const hasGitEntry = await fs.stat(path.join(root, ".git")).then(() => true).catch(() => false);
-    const isExactRepo = toplevel && path.resolve(toplevel).toLowerCase() === path.resolve(root).toLowerCase();
-
-    if (!hasGitEntry && !isExactRepo) {
-      return { isGitRepo: false };
+    if (!hasGitEntry) {
+      const toplevel = await this.runGit(root, ["rev-parse", "--show-toplevel"]);
+      const isExactRepo =
+        Boolean(toplevel) &&
+        path.resolve(toplevel).toLowerCase() === path.resolve(root).toLowerCase();
+      if (!isExactRepo) {
+        const notRepo: ProjectGitInfo = { isGitRepo: false };
+        this.cache.set(cacheKey, { expiresAt: Date.now() + 1000, info: notRepo });
+        return notRepo;
+      }
     }
 
+    const [branchOut, statusOutput, logOutput, diffSummary] = await Promise.all([
+      this.runGit(root, ["branch", "--show-current"]),
+      this.runGit(root, ["status", "--porcelain"]),
+      this.runGit(root, ["log", "-n", "5", "--pretty=format:%h|%an|%cr|%s"]),
+      this.runGit(root, ["diff", "--stat"]),
+    ]);
 
-    // Branch
-    let branch = await this.runGit(root, ["branch", "--show-current"]);
+    let branch = branchOut;
     if (!branch) {
-      // Fallback for detached HEAD
       branch = await this.runGit(root, ["rev-parse", "--short", "HEAD"]);
     }
 
-    // Status / uncommitted changes
-    const statusOutput = await this.runGit(root, ["status", "--porcelain"]);
     const uncommittedChanges = statusOutput
       ? statusOutput.split(/\r?\n/).filter((l) => l.trim().length > 0).length
       : 0;
-
-    // Recent commits (last 5)
-    const logOutput = await this.runGit(root, [
-      "log",
-      "-n",
-      "5",
-      "--pretty=format:%h|%an|%cr|%s",
-    ]);
 
     const recentCommits: ProjectGitInfo["recentCommits"] = [];
     if (logOutput) {
@@ -94,15 +93,14 @@ export class ProjectGit {
       });
     }
 
-    // Diff summary
-    const diffSummary = await this.runGit(root, ["diff", "--stat"]);
-
-    return {
+    const info: ProjectGitInfo = {
       isGitRepo: true,
       branch: branch || undefined,
       uncommittedChanges,
       recentCommits,
       diffSummary: diffSummary || undefined,
     };
+    this.cache.set(cacheKey, { expiresAt: Date.now() + 1000, info });
+    return info;
   }
 }

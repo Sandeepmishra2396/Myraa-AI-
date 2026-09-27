@@ -3,4 +3,5 @@ export * from "./ActionContext.ts";
 export * from "./CapabilityRegistry.ts";
 export * from "./IntentResolver.ts";
 export * from "./ActionVerifier.ts";
+export * from "./DeviceAwareIntelligence.ts";
 export * from "./IntentCapabilityOrchestrator.ts";

@@ -16,9 +16,39 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import os from "os";
+
+function resolveDefaultDataDir(): string {
+  if (process.env.SORA_DATA_DIR) {
+    return process.env.SORA_DATA_DIR;
+  }
+  if (process.env.VITEST) {
+    const workerDir = path.join(
+      os.tmpdir(),
+      `myraa-vitest-worker-${process.pid}-${process.env.VITEST_POOL_ID || "0"}`,
+    );
+    try {
+      fs.mkdirSync(workerDir, { recursive: true });
+      const cwdSecrets = path.join(process.cwd(), "secrets.json");
+      const targetSecrets = path.join(workerDir, "secrets.json");
+      if (fs.existsSync(cwdSecrets) && !fs.existsSync(targetSecrets)) {
+        fs.copyFileSync(cwdSecrets, targetSecrets);
+      }
+      const cwdSettings = path.join(process.cwd(), "settings.json");
+      const targetSettings = path.join(workerDir, "settings.json");
+      if (fs.existsSync(cwdSettings) && !fs.existsSync(targetSettings)) {
+        fs.copyFileSync(cwdSettings, targetSettings);
+      }
+    } catch {
+      /* best-effort worker isolation */
+    }
+    return workerDir;
+  }
+  return process.cwd();
+}
 
 /** Writable per-user data directory. Falls back to cwd in development. */
-export const DATA_DIR: string = process.env.SORA_DATA_DIR || process.cwd();
+export const DATA_DIR: string = resolveDefaultDataDir();
 
 try {
   fs.mkdirSync(DATA_DIR, { recursive: true });

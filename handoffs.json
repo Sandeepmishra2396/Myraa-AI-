@@ -1,0 +1,76 @@
+[
+  {
+    "handoffId": "handoff_3680f3f3-7e11-47c4-9e61-a28e0841fd5b",
+    "handoffToken": "handoff_tok_f603952d26cd56ee626cdec815a8d6c57445bcab05a55363",
+    "status": "resumed",
+    "sourceDevice": {
+      "deviceId": "desktop_master_console",
+      "deviceType": "desktop",
+      "deviceName": "Desktop Core"
+    },
+    "targetDevice": {
+      "deviceId": "android_pixel_e2e_device",
+      "deviceType": "android"
+    },
+    "conversationContext": {
+      "summary": "AI Systems Engineering"
+    },
+    "taskPlanState": {
+      "planId": "06e0b159-0135-4f68-b998-f610d16398b2",
+      "currentStepIndex": 0,
+      "currentStepDescription": "Load project context, architecture, and recent session summary to understand the current state of the codebase."
+    },
+    "sharedMemoryRefs": [],
+    "createdAt": "2026-09-27T05:12:37.999Z",
+    "expiresAt": "2026-09-27T05:22:37.999Z",
+    "version": 3,
+    "acceptedAt": "2026-09-27T05:12:38.025Z",
+    "resumedAt": "2026-09-27T05:12:38.072Z"
+  },
+  {
+    "handoffId": "handoff_fd6b6dec-3117-4342-81e1-f25fec4c3354",
+    "handoffToken": "handoff_tok_15d63847d1b574963015bf0aabaa464e03405b9ecdd42453",
+    "status": "resumed",
+    "sourceDevice": {
+      "deviceId": "android_pixel_e2e_device",
+      "deviceType": "android",
+      "deviceName": "Android Companion"
+    },
+    "targetDevice": {
+      "deviceId": "desktop_master_console",
+      "deviceType": "desktop"
+    },
+    "conversationContext": {
+      "summary": "On-the-go research to be finished on Desktop"
+    },
+    "taskPlanState": {
+      "currentStepIndex": 2,
+      "goal": "Continue deep code refactoring on Desktop"
+    },
+    "sharedMemoryRefs": [],
+    "createdAt": "2026-09-27T05:12:38.655Z",
+    "expiresAt": "2026-09-27T05:22:38.655Z",
+    "version": 3,
+    "acceptedAt": "2026-09-27T05:12:38.663Z",
+    "resumedAt": "2026-09-27T05:12:38.670Z"
+  },
+  {
+    "handoffId": "handoff_1a66ae50-c0a6-441a-b4fe-d9cdffae9547",
+    "handoffToken": "handoff_tok_51f14426238891f62bd866943a7299c19ad5c8fee03b4c53",
+    "status": "resumed",
+    "sourceDevice": {
+      "deviceId": "desktop_master_console",
+      "deviceType": "desktop",
+      "deviceName": "Desktop Core"
+    },
+    "conversationContext": {
+      "summary": "Test handoff"
+    },
+    "sharedMemoryRefs": [],
+    "createdAt": "2026-09-27T05:12:48.963Z",
+    "expiresAt": "2026-09-27T05:22:48.963Z",
+    "version": 3,
+    "acceptedAt": "2026-09-27T05:12:48.966Z",
+    "resumedAt": "2026-09-27T05:12:48.969Z"
+  }
+]

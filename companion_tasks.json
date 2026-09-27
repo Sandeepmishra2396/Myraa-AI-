@@ -1,5 +1,527 @@
 [
   {
+    "id": "8487f8aa-f7cf-4de1-9e68-1779dd4a8538",
+    "name": "Safe Task Test",
+    "type": "custom_poll",
+    "schedule": {
+      "type": "delayed",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:12:32.751Z",
+    "updatedAt": "2026-09-27T05:12:33.223Z",
+    "nextRunAt": "2026-09-27T05:12:37.751Z"
+  },
+  {
+    "id": "9cb86498-e5d9-4c95-b840-c0c521b2c635",
+    "name": "Tampering Test",
+    "type": "custom_poll",
+    "schedule": {
+      "type": "delayed",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:12:32.729Z",
+    "updatedAt": "2026-09-27T05:12:32.740Z",
+    "nextRunAt": "2026-09-27T05:12:37.729Z"
+  },
+  {
+    "id": "378c7ff4-ab23-4e1d-990b-78b26f549370",
+    "name": "Modifying Approval Test",
+    "type": "custom_poll",
+    "schedule": {
+      "type": "delayed",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:12:32.702Z",
+    "updatedAt": "2026-09-27T05:12:32.715Z",
+    "nextRunAt": "2026-09-27T05:12:37.702Z"
+  },
+  {
+    "id": "680f7f6c-28d3-4e3d-82d0-3d523f6a557c",
+    "name": "Modifying Task Test",
+    "type": "custom_poll",
+    "schedule": {
+      "type": "delayed",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:12:32.678Z",
+    "updatedAt": "2026-09-27T05:12:32.691Z",
+    "nextRunAt": "2026-09-27T05:12:37.678Z"
+  },
+  {
+    "id": "0180579e-e641-4318-8a6c-9d38f42618d7",
+    "name": "Shutdown test task",
+    "type": "build_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:12:32.672Z",
+    "updatedAt": "2026-09-27T05:12:33.271Z",
+    "nextRunAt": "2026-09-27T05:12:37.672Z"
+  },
+  {
+    "id": "f4e5ee16-1c31-4406-9437-0d4c651e24e8",
+    "name": "Slow task",
+    "type": "custom_poll",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:12:32.653Z",
+    "updatedAt": "2026-09-27T05:12:33.310Z",
+    "nextRunAt": "2026-09-27T05:12:37.653Z"
+  },
+  {
+    "id": "f5f4a5d3-f739-483a-998d-ccf69b49e730",
+    "name": "Read only verification",
+    "type": "build_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:12:32.657Z",
+    "updatedAt": "2026-09-27T05:12:33.351Z",
+    "nextRunAt": "2026-09-27T05:12:37.657Z"
+  },
+  {
+    "id": "f0aa14d2-e3d6-49cf-9cf3-59b0d59b9d48",
+    "name": "Negative interval",
+    "type": "git_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:12:32.661Z",
+    "updatedAt": "2026-09-27T05:12:33.378Z",
+    "nextRunAt": "2026-09-27T05:12:37.661Z"
+  },
+  {
+    "id": "2c6d3229-4e38-436a-b030-2ff82cace0da",
+    "name": "Zero interval",
+    "type": "build_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:12:32.666Z",
+    "updatedAt": "2026-09-27T05:12:33.414Z",
+    "nextRunAt": "2026-09-27T05:12:37.666Z"
+  },
+  {
+    "id": "acf857a0-5fe1-4aea-bb7b-f7266357bb87",
+    "name": "Coordinator build monitor",
+    "type": "build_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 8000
+    },
+    "status": "cancelled",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:12:31.466Z",
+    "updatedAt": "2026-09-27T05:12:31.503Z",
+    "nextRunAt": "2026-09-27T05:12:39.466Z",
+    "completedAt": "2026-09-27T05:12:31.496Z"
+  },
+  {
+    "id": "8963cc3f-c487-46dc-bd29-95a165fafe65",
+    "name": "Task 2",
+    "type": "git_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:12:31.454Z",
+    "updatedAt": "2026-09-27T05:12:32.328Z",
+    "nextRunAt": "2026-09-27T05:12:36.454Z"
+  },
+  {
+    "id": "d4f395b9-3320-4cb4-80e7-4bf6a65caec4",
+    "name": "Task 1",
+    "type": "build_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:12:31.457Z",
+    "updatedAt": "2026-09-27T05:12:32.338Z",
+    "nextRunAt": "2026-09-27T05:12:36.457Z"
+  },
+  {
+    "id": "71287fab-3195-4854-bbe9-0366f7f24aa7",
+    "name": "Cancel test",
+    "type": "build_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "cancelled",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:12:30.424Z",
+    "updatedAt": "2026-09-27T05:12:30.431Z",
+    "nextRunAt": "2026-09-27T05:12:35.424Z",
+    "completedAt": "2026-09-27T05:12:30.429Z"
+  },
+  {
+    "id": "c2878613-9f72-4c06-a983-dc683e0772f1",
+    "name": "Pause/Resume task",
+    "type": "git_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 6000
+    },
+    "status": "cancelled",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:12:30.396Z",
+    "updatedAt": "2026-09-27T05:12:30.421Z",
+    "nextRunAt": "2026-09-27T05:12:36.410Z",
+    "completedAt": "2026-09-27T05:12:30.419Z"
+  },
+  {
+    "id": "0f12fc7a-bca9-4c50-8442-ae27e1b3e31f",
+    "name": "One-shot delayed check",
+    "type": "custom_poll",
+    "schedule": {
+      "type": "delayed",
+      "intervalMs": 5000
+    },
+    "status": "cancelled",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:12:30.390Z",
+    "updatedAt": "2026-09-27T05:12:30.394Z",
+    "nextRunAt": "2026-09-27T05:12:35.390Z",
+    "completedAt": "2026-09-27T05:12:30.393Z"
+  },
+  {
+    "id": "9246358a-b871-4377-8505-d6c9605e673b",
+    "name": "Fast poll attempt",
+    "type": "build_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "cancelled",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:12:30.377Z",
+    "updatedAt": "2026-09-27T05:12:30.387Z",
+    "nextRunAt": "2026-09-27T05:12:35.377Z",
+    "completedAt": "2026-09-27T05:12:30.385Z"
+  },
+  {
+    "id": "b0369206-d75f-4e53-9cae-19616bcbeb35",
+    "name": "Safe Task Test",
+    "type": "custom_poll",
+    "schedule": {
+      "type": "delayed",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:11:22.923Z",
+    "updatedAt": "2026-09-27T05:11:23.715Z",
+    "nextRunAt": "2026-09-27T05:11:27.923Z"
+  },
+  {
+    "id": "439fd782-9670-4dd6-ad09-3820c128cb50",
+    "name": "Tampering Test",
+    "type": "custom_poll",
+    "schedule": {
+      "type": "delayed",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:11:22.914Z",
+    "updatedAt": "2026-09-27T05:11:22.918Z",
+    "nextRunAt": "2026-09-27T05:11:27.914Z"
+  },
+  {
+    "id": "2853b776-36f0-49e8-bc5f-b7edaa17de5a",
+    "name": "Modifying Approval Test",
+    "type": "custom_poll",
+    "schedule": {
+      "type": "delayed",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:11:22.901Z",
+    "updatedAt": "2026-09-27T05:11:22.906Z",
+    "nextRunAt": "2026-09-27T05:11:27.901Z"
+  },
+  {
+    "id": "d3d70322-3469-4633-bf30-fc6b31743e28",
+    "name": "Modifying Task Test",
+    "type": "custom_poll",
+    "schedule": {
+      "type": "delayed",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:11:22.889Z",
+    "updatedAt": "2026-09-27T05:11:22.894Z",
+    "nextRunAt": "2026-09-27T05:11:27.889Z"
+  },
+  {
+    "id": "dcdefcdc-debd-4a47-8e5b-051b9c3261b5",
+    "name": "Shutdown test task",
+    "type": "build_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:11:22.886Z",
+    "updatedAt": "2026-09-27T05:11:23.719Z",
+    "nextRunAt": "2026-09-27T05:11:27.886Z"
+  },
+  {
+    "id": "b23178ff-b607-40ad-9cb5-35c8c5e43d53",
+    "name": "Slow task",
+    "type": "custom_poll",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:11:22.874Z",
+    "updatedAt": "2026-09-27T05:11:23.723Z",
+    "nextRunAt": "2026-09-27T05:11:27.874Z"
+  },
+  {
+    "id": "b7f4c74f-8f1f-4cc9-8e60-18e163753009",
+    "name": "Read only verification",
+    "type": "build_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:11:22.876Z",
+    "updatedAt": "2026-09-27T05:11:23.727Z",
+    "nextRunAt": "2026-09-27T05:11:27.876Z"
+  },
+  {
+    "id": "b29744d2-b48e-4be8-964e-4edfbe90ef33",
+    "name": "Negative interval",
+    "type": "git_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:11:22.878Z",
+    "updatedAt": "2026-09-27T05:11:23.731Z",
+    "nextRunAt": "2026-09-27T05:11:27.878Z"
+  },
+  {
+    "id": "37c086d6-5dfa-4545-b3d1-a537f184464d",
+    "name": "Zero interval",
+    "type": "build_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:11:22.880Z",
+    "updatedAt": "2026-09-27T05:11:23.735Z",
+    "nextRunAt": "2026-09-27T05:11:27.880Z"
+  },
+  {
+    "id": "d483f086-240d-4674-83dd-732b0144a92a",
+    "name": "Coordinator build monitor",
+    "type": "build_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 8000
+    },
+    "status": "cancelled",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:11:22.437Z",
+    "updatedAt": "2026-09-27T05:11:22.443Z",
+    "nextRunAt": "2026-09-27T05:11:30.437Z",
+    "completedAt": "2026-09-27T05:11:22.441Z"
+  },
+  {
+    "id": "66914bb0-9644-4775-9bed-a8b15944bdcb",
+    "name": "Task 2",
+    "type": "git_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:11:22.881Z",
+    "updatedAt": "2026-09-27T05:11:23.739Z",
+    "nextRunAt": "2026-09-27T05:11:27.881Z"
+  },
+  {
+    "id": "1d3512f3-c481-4a19-9f12-3cd17cf3c48e",
+    "name": "Task 1",
+    "type": "build_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "paused",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:11:22.883Z",
+    "updatedAt": "2026-09-27T05:11:23.743Z",
+    "nextRunAt": "2026-09-27T05:11:27.883Z"
+  },
+  {
+    "id": "09686662-15a5-4f0e-aa4b-f2dad73cc81b",
+    "name": "Cancel test",
+    "type": "build_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "cancelled",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:11:21.968Z",
+    "updatedAt": "2026-09-27T05:11:21.972Z",
+    "nextRunAt": "2026-09-27T05:11:26.968Z",
+    "completedAt": "2026-09-27T05:11:21.971Z"
+  },
+  {
+    "id": "9ee83485-4ff6-4e98-a6fe-d8fd2009fa78",
+    "name": "Pause/Resume task",
+    "type": "git_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 6000
+    },
+    "status": "cancelled",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:11:21.956Z",
+    "updatedAt": "2026-09-27T05:11:21.966Z",
+    "nextRunAt": "2026-09-27T05:11:27.962Z",
+    "completedAt": "2026-09-27T05:11:21.965Z"
+  },
+  {
+    "id": "200e63b3-0377-49e6-80a9-3f28f3cf3c4e",
+    "name": "One-shot delayed check",
+    "type": "custom_poll",
+    "schedule": {
+      "type": "delayed",
+      "intervalMs": 5000
+    },
+    "status": "cancelled",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:11:21.949Z",
+    "updatedAt": "2026-09-27T05:11:21.954Z",
+    "nextRunAt": "2026-09-27T05:11:26.949Z",
+    "completedAt": "2026-09-27T05:11:21.953Z"
+  },
+  {
+    "id": "88c9e53d-467b-4ffc-b2a7-a45136003765",
+    "name": "Fast poll attempt",
+    "type": "build_monitor",
+    "schedule": {
+      "type": "interval",
+      "intervalMs": 5000
+    },
+    "status": "cancelled",
+    "params": {},
+    "isReadOnly": true,
+    "iterationCount": 0,
+    "createdAt": "2026-09-27T05:11:21.941Z",
+    "updatedAt": "2026-09-27T05:11:21.948Z",
+    "nextRunAt": "2026-09-27T05:11:26.941Z",
+    "completedAt": "2026-09-27T05:11:21.947Z"
+  },
+  {
     "id": "006b719a-e844-4686-883e-c6670495a4ea",
     "name": "Safe Task Test",
     "type": "custom_poll",
@@ -1106,527 +1628,5 @@
     "createdAt": "2026-09-23T11:34:03.944Z",
     "updatedAt": "2026-09-23T11:34:03.953Z",
     "nextRunAt": "2026-09-23T11:34:08.944Z"
-  },
-  {
-    "id": "3900f817-e45b-4ca8-bb1e-a344160ceb4a",
-    "name": "Shutdown test task",
-    "type": "build_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:34:03.939Z",
-    "updatedAt": "2026-09-23T11:34:06.080Z",
-    "nextRunAt": "2026-09-23T11:34:08.939Z"
-  },
-  {
-    "id": "18182062-3b37-49d3-988b-48ae45463fb6",
-    "name": "Slow task",
-    "type": "custom_poll",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:34:03.919Z",
-    "updatedAt": "2026-09-23T11:34:06.086Z",
-    "nextRunAt": "2026-09-23T11:34:08.920Z"
-  },
-  {
-    "id": "8148a081-9581-42e9-bccf-1c0d9a91e1ec",
-    "name": "Read only verification",
-    "type": "build_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:34:03.923Z",
-    "updatedAt": "2026-09-23T11:34:06.091Z",
-    "nextRunAt": "2026-09-23T11:34:08.923Z"
-  },
-  {
-    "id": "95fc06bd-e6f4-41a9-8925-44b83240a0d5",
-    "name": "Negative interval",
-    "type": "git_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:34:03.926Z",
-    "updatedAt": "2026-09-23T11:34:06.097Z",
-    "nextRunAt": "2026-09-23T11:34:08.926Z"
-  },
-  {
-    "id": "d366117c-5e1e-4831-818f-1f0c7d791afd",
-    "name": "Zero interval",
-    "type": "build_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:34:03.930Z",
-    "updatedAt": "2026-09-23T11:34:06.102Z",
-    "nextRunAt": "2026-09-23T11:34:08.930Z"
-  },
-  {
-    "id": "f622aba6-2541-44c9-a6db-4fd4eb2bb484",
-    "name": "Coordinator build monitor",
-    "type": "build_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 8000
-    },
-    "status": "cancelled",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:34:03.451Z",
-    "updatedAt": "2026-09-23T11:34:03.457Z",
-    "nextRunAt": "2026-09-23T11:34:11.451Z",
-    "completedAt": "2026-09-23T11:34:03.456Z"
-  },
-  {
-    "id": "45858e19-d158-4193-809d-1b0b75956b36",
-    "name": "Task 2",
-    "type": "git_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:34:03.932Z",
-    "updatedAt": "2026-09-23T11:34:06.108Z",
-    "nextRunAt": "2026-09-23T11:34:08.932Z"
-  },
-  {
-    "id": "e350c98d-bbcf-4eec-82e2-521e77fbf019",
-    "name": "Task 1",
-    "type": "build_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:34:03.936Z",
-    "updatedAt": "2026-09-23T11:34:06.112Z",
-    "nextRunAt": "2026-09-23T11:34:08.936Z"
-  },
-  {
-    "id": "01cc0a16-2d46-4bb5-9297-132c2df42e79",
-    "name": "Cancel test",
-    "type": "build_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "cancelled",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:34:02.911Z",
-    "updatedAt": "2026-09-23T11:34:02.917Z",
-    "nextRunAt": "2026-09-23T11:34:07.911Z",
-    "completedAt": "2026-09-23T11:34:02.916Z"
-  },
-  {
-    "id": "ee67c6ff-860a-40ac-9f6d-b5d971482602",
-    "name": "Pause/Resume task",
-    "type": "git_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 6000
-    },
-    "status": "cancelled",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:34:02.895Z",
-    "updatedAt": "2026-09-23T11:34:02.909Z",
-    "nextRunAt": "2026-09-23T11:34:08.904Z",
-    "completedAt": "2026-09-23T11:34:02.908Z"
-  },
-  {
-    "id": "9789a1bf-1a2b-4974-ac34-25f6732b80f2",
-    "name": "One-shot delayed check",
-    "type": "custom_poll",
-    "schedule": {
-      "type": "delayed",
-      "intervalMs": 5000
-    },
-    "status": "cancelled",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:34:02.887Z",
-    "updatedAt": "2026-09-23T11:34:02.893Z",
-    "nextRunAt": "2026-09-23T11:34:07.887Z",
-    "completedAt": "2026-09-23T11:34:02.891Z"
-  },
-  {
-    "id": "ed8ba904-fdb8-4964-85e2-b7e8fcd9fc1d",
-    "name": "Fast poll attempt",
-    "type": "build_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "cancelled",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:34:02.878Z",
-    "updatedAt": "2026-09-23T11:34:02.885Z",
-    "nextRunAt": "2026-09-23T11:34:07.878Z",
-    "completedAt": "2026-09-23T11:34:02.884Z"
-  },
-  {
-    "id": "3a98bbf6-1e90-47da-a241-80602adb4e72",
-    "name": "Safe Task Test",
-    "type": "custom_poll",
-    "schedule": {
-      "type": "delayed",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:18:20.037Z",
-    "updatedAt": "2026-09-23T11:18:23.613Z",
-    "nextRunAt": "2026-09-23T11:18:25.037Z"
-  },
-  {
-    "id": "60093115-3fd4-47d1-a965-017978cc5057",
-    "name": "Tampering Test",
-    "type": "custom_poll",
-    "schedule": {
-      "type": "delayed",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:18:20.024Z",
-    "updatedAt": "2026-09-23T11:18:20.029Z",
-    "nextRunAt": "2026-09-23T11:18:25.024Z"
-  },
-  {
-    "id": "74c35671-241f-414a-9de8-9e85651dc73b",
-    "name": "Modifying Approval Test",
-    "type": "custom_poll",
-    "schedule": {
-      "type": "delayed",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:18:20.008Z",
-    "updatedAt": "2026-09-23T11:18:20.014Z",
-    "nextRunAt": "2026-09-23T11:18:25.008Z"
-  },
-  {
-    "id": "e0dc498e-2fc3-4428-bac1-901efec8b2c7",
-    "name": "Modifying Task Test",
-    "type": "custom_poll",
-    "schedule": {
-      "type": "delayed",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:18:19.993Z",
-    "updatedAt": "2026-09-23T11:18:20.000Z",
-    "nextRunAt": "2026-09-23T11:18:24.993Z"
-  },
-  {
-    "id": "7ba13c17-0138-4c23-a48b-e18506b999f0",
-    "name": "Shutdown test task",
-    "type": "build_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:18:19.989Z",
-    "updatedAt": "2026-09-23T11:18:23.616Z",
-    "nextRunAt": "2026-09-23T11:18:24.989Z"
-  },
-  {
-    "id": "38dced04-892c-4fda-a201-e50dba7616d3",
-    "name": "Slow task",
-    "type": "custom_poll",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:18:19.968Z",
-    "updatedAt": "2026-09-23T11:18:23.620Z",
-    "nextRunAt": "2026-09-23T11:18:24.968Z"
-  },
-  {
-    "id": "00c72348-549b-4d95-b9d2-304abca32e9d",
-    "name": "Read only verification",
-    "type": "build_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:18:19.971Z",
-    "updatedAt": "2026-09-23T11:18:23.625Z",
-    "nextRunAt": "2026-09-23T11:18:24.971Z"
-  },
-  {
-    "id": "1d30974d-68e0-4b1c-9b68-a59ce6ea9923",
-    "name": "Negative interval",
-    "type": "git_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:18:19.975Z",
-    "updatedAt": "2026-09-23T11:18:23.630Z",
-    "nextRunAt": "2026-09-23T11:18:24.975Z"
-  },
-  {
-    "id": "19eb8bea-278f-4b31-8b2d-0a20d01d8cfd",
-    "name": "Zero interval",
-    "type": "build_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:18:19.979Z",
-    "updatedAt": "2026-09-23T11:18:23.637Z",
-    "nextRunAt": "2026-09-23T11:18:24.979Z"
-  },
-  {
-    "id": "fe5fa8f0-2342-4b6f-8b91-d1a1aaff4224",
-    "name": "Coordinator build monitor",
-    "type": "build_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 8000
-    },
-    "status": "cancelled",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:18:19.453Z",
-    "updatedAt": "2026-09-23T11:18:19.459Z",
-    "nextRunAt": "2026-09-23T11:18:27.453Z",
-    "completedAt": "2026-09-23T11:18:19.458Z"
-  },
-  {
-    "id": "042a1b6e-5429-4d5a-811d-5c886a640436",
-    "name": "Task 2",
-    "type": "git_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:18:19.982Z",
-    "updatedAt": "2026-09-23T11:18:23.642Z",
-    "nextRunAt": "2026-09-23T11:18:24.982Z"
-  },
-  {
-    "id": "46a8c02e-68aa-4825-82a1-250a0ed5d18b",
-    "name": "Task 1",
-    "type": "build_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:18:19.985Z",
-    "updatedAt": "2026-09-23T11:18:23.648Z",
-    "nextRunAt": "2026-09-23T11:18:24.985Z"
-  },
-  {
-    "id": "b21bac38-5725-434d-9295-6ad640bb17b9",
-    "name": "Cancel test",
-    "type": "build_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "cancelled",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:18:18.916Z",
-    "updatedAt": "2026-09-23T11:18:18.921Z",
-    "nextRunAt": "2026-09-23T11:18:23.916Z",
-    "completedAt": "2026-09-23T11:18:18.920Z"
-  },
-  {
-    "id": "a36e2b2a-5706-4e85-b4ea-c30e6e55c87e",
-    "name": "Pause/Resume task",
-    "type": "git_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 6000
-    },
-    "status": "cancelled",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:18:18.901Z",
-    "updatedAt": "2026-09-23T11:18:18.914Z",
-    "nextRunAt": "2026-09-23T11:18:24.909Z",
-    "completedAt": "2026-09-23T11:18:18.913Z"
-  },
-  {
-    "id": "def0047c-eef9-4e4a-9c7c-08a081d8bca7",
-    "name": "One-shot delayed check",
-    "type": "custom_poll",
-    "schedule": {
-      "type": "delayed",
-      "intervalMs": 5000
-    },
-    "status": "cancelled",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:18:18.894Z",
-    "updatedAt": "2026-09-23T11:18:18.899Z",
-    "nextRunAt": "2026-09-23T11:18:23.894Z",
-    "completedAt": "2026-09-23T11:18:18.898Z"
-  },
-  {
-    "id": "2fe769ec-90e1-4ac1-98b3-7ade4e22e679",
-    "name": "Fast poll attempt",
-    "type": "build_monitor",
-    "schedule": {
-      "type": "interval",
-      "intervalMs": 5000
-    },
-    "status": "cancelled",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:18:18.885Z",
-    "updatedAt": "2026-09-23T11:18:18.892Z",
-    "nextRunAt": "2026-09-23T11:18:23.885Z",
-    "completedAt": "2026-09-23T11:18:18.891Z"
-  },
-  {
-    "id": "abf97e07-f551-40d5-899e-56ebe8fb7d3e",
-    "name": "Safe Task Test",
-    "type": "custom_poll",
-    "schedule": {
-      "type": "delayed",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:06:43.176Z",
-    "updatedAt": "2026-09-23T11:06:45.259Z",
-    "nextRunAt": "2026-09-23T11:06:48.176Z"
-  },
-  {
-    "id": "ae913961-114a-4344-9b7b-acc8bae4165f",
-    "name": "Tampering Test",
-    "type": "custom_poll",
-    "schedule": {
-      "type": "delayed",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:06:43.157Z",
-    "updatedAt": "2026-09-23T11:06:43.164Z",
-    "nextRunAt": "2026-09-23T11:06:48.157Z"
-  },
-  {
-    "id": "aa817365-9a37-462f-a86c-aad9ace56a36",
-    "name": "Modifying Approval Test",
-    "type": "custom_poll",
-    "schedule": {
-      "type": "delayed",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:06:43.141Z",
-    "updatedAt": "2026-09-23T11:06:43.148Z",
-    "nextRunAt": "2026-09-23T11:06:48.141Z"
-  },
-  {
-    "id": "29c14233-73d7-403e-89f7-469b2a4ca143",
-    "name": "Modifying Task Test",
-    "type": "custom_poll",
-    "schedule": {
-      "type": "delayed",
-      "intervalMs": 5000
-    },
-    "status": "paused",
-    "params": {},
-    "isReadOnly": true,
-    "iterationCount": 0,
-    "createdAt": "2026-09-23T11:06:43.125Z",
-    "updatedAt": "2026-09-23T11:06:43.133Z",
-    "nextRunAt": "2026-09-23T11:06:48.125Z"
   }
 ]

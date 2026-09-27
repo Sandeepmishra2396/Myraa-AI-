@@ -366,7 +366,7 @@
         "Google GenAI",
         "Three.js"
       ],
-      "summary": "Project **myraa** is a **polyglot** application (TypeScript) on branch 'main'.\nFrameworks/Tools: React, Vite, Express, Electron, TailwindCSS, Google GenAI, Three.js.\nScale: 386 files across 95 directories.\nKey Layers: Frontend UI & Interaction; Backend Gateway & Core Engine; Cognitive Memory & Project Intelligence; Desktop Control Agent.\nEntry Points: server.ts, src/main.tsx, src/app.tsx, index.html, desktop_agent/main.py, electron/main.cjs.",
+      "summary": "Project **myraa** is a **polyglot** application (TypeScript) on branch 'main'.\nFrameworks/Tools: React, Vite, Express, Electron, TailwindCSS, Google GenAI, Three.js.\nScale: 427 files across 101 directories.\nKey Layers: Frontend UI & Interaction; Backend Gateway & Core Engine; Cognitive Memory & Project Intelligence; Desktop Control Agent.\nEntry Points: server.ts, src/main.tsx, src/app.tsx, index.html, desktop_agent/main.py, electron/main.cjs.",
       "manifest": {
         "name": "myraa",
         "version": "1.0.0",
@@ -410,7 +410,8 @@
           "test": "vitest run --fileParallelism=false",
           "electron": "electron .",
           "app": "npm run build && electron .",
-          "dist": "npm run build && electron-builder --win nsis portable"
+          "dist": "npm run build && electron-builder --win nsis portable",
+          "build:windows": "npm run dist"
         }
       },
       "architectureMap": {
@@ -506,16 +507,40 @@
       "git": {
         "isGitRepo": true,
         "branch": "main",
-        "uncommittedChanges": 108,
+        "uncommittedChanges": 28,
         "recentCommits": [
           {
-            "hash": "98edfd5",
+            "hash": "703fe30",
             "author": "Sandeepmishra2396",
-            "date": "11 days ago",
-            "message": "CHECKPOINT: Before Goal C - 3D VRM Avatar implementation"
+            "date": "12 hours ago",
+            "message": "feat(device): multi-device architecture — MYRAA Mobile + Desktop as independent first-class products"
+          },
+          {
+            "hash": "0a909e2",
+            "author": "Sandeepmishra2396",
+            "date": "13 hours ago",
+            "message": "feat(orchestrator): canonical intent, capability routing & execution verification"
+          },
+          {
+            "hash": "52dd425",
+            "author": "Sandeepmishra2396",
+            "date": "25 hours ago",
+            "message": "feat(remote): permanent WebSocket session resilience, stateless Render recovery, and decoupled Gemini Live lifecycle"
+          },
+          {
+            "hash": "149a97b",
+            "author": "Sandeepmishra2396",
+            "date": "35 hours ago",
+            "message": "fix(desktop): package Windows installer, CJS backend entrypoint guard, and Gemini Live auth classification"
+          },
+          {
+            "hash": "a50763d",
+            "author": "Sandeepmishra2396",
+            "date": "2 days ago",
+            "message": "fix: WS keepalive ping every 25s + reconnect 5→10 attempts with 30s cap — survive Render redeploy"
           }
         ],
-        "diffSummary": ".claude/settings.local.json                        |     2 +-\n .gitignore                                         |     7 +\n Desktop/Myraa.txt                                  |     2 +-\n Desktop/MyraaNotes.txt                             |     4 +-\n Desktop/MyraaPuzzles.txt                           |     2 +-\n Desktop/MyraaPuzzles2.txt                          |     2 +-\n Desktop/notes.txt                                  |     2 +-\n Downloads/message.txt                              |     2 +-\n ShepamNotes.txt                                    |     1 -\n agent_build/desktop_agent/Analysis-00.toc          |  8985 ---\n agent_build/desktop_agent/COLLECT-00.toc           |  2143 -\n agent_build/desktop_agent/EXE-00.toc               |    86 -\n agent_build/desktop_agent/PKG-00.toc               |    64 -\n agent_build/desktop_agent/PYZ-00.pyz               |   Bin 13903805 -> 0 bytes\n agent_build/desktop_agent/PYZ-00.toc               |  6209 --\n agent_build/desktop_agent/base_library.zip         |   Bin 1443565 -> 0 bytes\n .../desktop_agent/localpycs/pyimod01_archive.pyc   |   Bin 5437 -> 0 bytes\n .../desktop_agent/localpycs/pyimod02_importers.pyc |   Bin 34019 -> 0 bytes\n .../desktop_agent/localpycs/pyimod03_ctypes.pyc    |   Bin 7032 -> 0 bytes\n .../desktop_agent/localpycs/pyimod04_pywin32.pyc   |   Bin 1939 -> 0 bytes\n agent_build/desktop_agent/localpycs/struct.pyc     |   Bin 360 -> 0 bytes\n agent_build/desktop_agent/myraa-agent.exe          |   Bin 14280014 -> 0 bytes\n agent_build/desktop_agent/myraa-agent.pkg          |   Bin 13937486 -> 0 bytes\n agent_build/desktop_agent/warn-desktop_agent.txt   |   171 -\n agent_build/desktop_agent/xref-desktop_agent.html  | 67853 -------------------\n desktop_agent.spec                                 |     8 +-\n desktop_agent/README.md                            |     4 +-\n desktop_agent/__init__.py                          |     2 +-\n desktop_agent/__pycache__/__init__.cpython-314.pyc |   Bin 529 -> 466 bytes\n desktop_agent/__pycache__/main.cpython-314.pyc     |   Bin 8092 -> 8152 bytes\n desktop_agent/__pycache__/registry.cpython-314.pyc |   Bin 6574 -> 6630 bytes\n .../__pycache__/tools_applications.cpython-314.pyc |   Bin 7301 -> 12565 bytes\n .../__pycache__/tools_coding.cpython-314.pyc       |   Bin 11703 -> 14279 bytes\n .../__pycache__/tools_confirmation.cpython-314.pyc |   Bin 5023 -> 4960 bytes\n .../__pycache__/tools_files.cpython-314.pyc        |   Bin 15697 -> 28779 bytes\n .../__pycache__/tools_screenshot.cpython-314.pyc   |   Bin 11281 -> 11217 bytes\n .../__pycache__/tools_startup.cpython-314.pyc      |   Bin 9809 -> 9746 bytes\n desktop_agent/main.py                              |    19 +-\n desktop_agent/registry.py                          |     4 +\n desktop_agent/requirements.txt                     |     2 +-\n desktop_agent/tools_applications.py                |    96 +-\n desktop_agent/tools_coding.py                      |    99 +-\n desktop_agent/tools_confirmation.py                |     2 +-\n desktop_agent/tools_files.py                       |   277 +-\n desktop_agent/tools_screenshot.py                  |     4 +-\n desktop_agent/tools_startup.py                     |     2 +-\n electron-builder.yml                               |     4 +-\n electron/main.cjs                                  |   224 +-\n electron/preload.cjs                               |    43 +-\n electron/splash.html                               |     2 +-\n index.html                                         |     2 +-\n local-agent.js                                     |    26 +-\n memories.json                                      |   279 +-\n package-lock.json                                  |   488 +-\n package.json                                       |    12 +-\n public/mic-processor.worklet.js                    |    21 +-\n release/builder-debug.yml                          |     4 +-\n .../win-unpacked/resources/app/electron/main.cjs   |    32 +-\n .../resources/app/electron/preload.cjs             |     4 +-\n .../resources/app/electron/splash.html             |     4 +-\n release/win-unpacked/resources/app/package.json    |     6 +-\n run_agent.py                                       |    14 +-\n secrets.json                                       |     2 +-\n server.ts                                          |  1787 +-\n server_memory.ts                                   |   118 +-\n server_paths.ts                                    |     6 +-\n settings.json                                      |     6 +-\n src/App.tsx                                        |   261 +-\n src/components/ApiKeyGate.tsx                      |     2 +-\n src/components/AvatarRenderer.tsx                  |   354 +-\n src/components/BrowserAgent.tsx                    |   160 +-\n src/components/HolographicProjector.tsx            |     2 +-\n src/components/MemoryDashboard.tsx                 |    29 +-\n src/components/MyraaCoreVisualizer.tsx             |    12 +-\n src/components/SettingsPanel.tsx                   |    24 +-\n src/lib/audio.ts                                   |   591 +-\n src/lib/memoryTypes.ts                             |    21 +-\n src/lib/settingsStore.ts                           |     2 +-\n src/lib/wakeWord.ts                                |     2 +-\n src/main.tsx                                       |    22 +-\n start-myraa-silent.bat                             |     2 +-\n start-myraa.bat                                    |     2 +-\n vite.config.ts                                     |    16 +-\n 83 files changed, 3072 insertions(+), 87568 deletions(-)"
+        "diffSummary": "agent_plans.json                                   | 11931 ++++++++++++++++++-\n companion_notifications.json                       |   408 +-\n companion_preferences.json                         |     2 +-\n companion_tasks.json                               |   860 +-\n memories.json                                      |    67 +-\n projects.json                                      |    41 +-\n remote_devices.json                                |    26 +-\n remote_emergency_stop.json                         |     4 +-\n src/backend/device/RemoteBridge.ts                 |  1700 ++-\n src/backend/device/index.ts                        |    87 +-\n src/backend/orchestrator/CapabilityRegistry.ts     |    53 +-\n .../orchestrator/IntentCapabilityOrchestrator.ts   |   211 +-\n src/backend/orchestrator/IntentResolver.ts         |    88 +-\n src/backend/orchestrator/OrchestratorTypes.ts      |     9 +\n src/backend/orchestrator/index.ts                  |     1 +\n study_progress.json                                |    10 +-\n 16 files changed, 14578 insertions(+), 920 deletions(-)"
       },
       "tasks": [
         {
@@ -527,7 +552,7 @@
           "updatedAt": "2026-09-20T14:21:22.266Z"
         }
       ],
-      "lastAnalyzedAt": "2026-09-23T13:42:37.703Z"
+      "lastAnalyzedAt": "2026-09-27T05:12:46.870Z"
     }
   ]
 }

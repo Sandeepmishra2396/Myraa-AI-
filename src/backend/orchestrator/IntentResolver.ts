@@ -29,6 +29,7 @@ import type {
   CanonicalIntent,
   ExecutionContext,
   IntentType,
+  SmartTargetMode,
   TargetDevice,
 } from "./OrchestratorTypes.ts";
 
@@ -52,14 +53,13 @@ const GENERIC_PLACEHOLDER_QUERIES = new Set([
 
 export class IntentResolver {
   /**
-   * Detect explicit target device from natural language utterance or arguments.
+   * Detect whether the user explicitly specified a target device in the utterance or arguments.
+   * Returns the explicit target ("PHONE" | "DESKTOP" | "REMOTE_DESKTOP" | "BROWSER") or null if implicit.
    */
-  resolveTargetDevice(
+  detectExplicitTargetCue(
     text: string,
-    defaultDevice: TargetDevice = "DESKTOP",
-    secContext?: SecurityContext,
     explicitArgDevice?: string,
-  ): TargetDevice {
+  ): "PHONE" | "DESKTOP" | "REMOTE_DESKTOP" | "BROWSER" | null {
     if (explicitArgDevice) {
       const upper = explicitArgDevice.trim().toUpperCase();
       if (upper === "PHONE" || upper === "MOBILE" || upper === "ANDROID") return "PHONE";
@@ -70,35 +70,85 @@ export class IntentResolver {
 
     const lower = (text || "").toLowerCase();
 
-    // 1. Explicit Phone / Mobile cues
     if (
-      /\b(phone\s+par|phone\s+me|phone\s+pe|mere\s+mobile|mobile\s+me|mobile\s+par|on\s+my\s+phone|on\s+phone|on\s+mobile|in\s+mobile|android\s+par|android\s+me)\b/i.test(
+      /\b(phone\s+par|phone\s+me|phone\s+mein|phone\s+pe|mere\s+mobile|mere\s+phone|mobile\s+me|mobile\s+mein|mobile\s+par|mobile\s+pe|on\s+my\s+phone|on\s+phone|in\s+my\s+phone|in\s+phone|on\s+mobile|in\s+mobile|android\s+par|android\s+me|android\s+mein)\b/i.test(
         lower,
       )
     ) {
       return "PHONE";
     }
 
-    // 2. Explicit Remote Desktop cues
     if (/\b(remote\s+desktop|remote\s+pc)\b/i.test(lower)) {
       return "REMOTE_DESKTOP";
     }
 
-    // 3. Explicit Desktop / Laptop / PC / VS Code cues
     if (
-      /\b(laptop\s+par|laptop\s+me|laptop\s+pe|pc\s+par|pc\s+me|desktop\s+par|desktop\s+me|computer\s+par|on\s+laptop|on\s+pc|on\s+desktop|vs\s*code\s+me|vscode\s+me|in\s+vs\s*code|in\s+vscode|file\s+explorer)\b/i.test(
+      /\b(laptop\s+par|laptop\s+me|laptop\s+mein|laptop\s+pe|pc\s+par|pc\s+me|pc\s+mein|pc\s+pe|desktop\s+par|desktop\s+me|desktop\s+mein|desktop\s+pe|computer\s+par|computer\s+me|computer\s+mein|on\s+laptop|in\s+laptop|on\s+pc|on\s+desktop|in\s+desktop|vs\s*code\s+me|vs\s*code\s+mein|vscode\s+me|vscode\s+mein|in\s+vs\s*code|in\s+vscode)\b/i.test(
         lower,
       )
     ) {
-      return secContext && !secContext.isLocal ? "DESKTOP" : "DESKTOP";
+      return "DESKTOP";
     }
 
-    // 4. Explicit Browser / YouTube cues
-    if (/\b(browser\s+me|browser\s+par|in\s+browser|youtube\s+par|youtube\s+pe|on\s+youtube)\b/i.test(lower)) {
+    if (/\b(browser\s+me|browser\s+mein|browser\s+par|in\s+browser|youtube\s+par|youtube\s+pe|on\s+youtube)\b/i.test(lower)) {
       return "BROWSER";
     }
 
+    return null;
+  }
+
+  /**
+   * Detect explicit target device from natural language utterance or arguments.
+   */
+  resolveTargetDevice(
+    text: string,
+    defaultDevice: TargetDevice = "DESKTOP",
+    secContext?: SecurityContext,
+    explicitArgDevice?: string,
+  ): TargetDevice {
+    if (explicitArgDevice && explicitArgDevice.trim().toUpperCase() === "CURRENT_DEVICE") {
+      return "CURRENT_DEVICE";
+    }
+
+    const explicitCue = this.detectExplicitTargetCue(text, explicitArgDevice);
+    if (explicitCue) {
+      return explicitCue;
+    }
+
+    const lower = (text || "").toLowerCase();
+    if (/\b(file\s+explorer)\b/i.test(lower)) {
+      return secContext && !secContext.isLocal ? "DESKTOP" : "DESKTOP";
+    }
+
     return defaultDevice;
+  }
+
+  /**
+   * Phase 5 — Smart Target Mode resolver:
+   * Resolves every request into PHONE | DESKTOP | CURRENT_DEVICE | REMOTE_DESKTOP.
+   *   - "Phone mein WhatsApp kholo" -> "PHONE"
+   *   - "Laptop par VS Code kholo"  -> "DESKTOP"
+   *   - "Remote desktop par..."     -> "REMOTE_DESKTOP"
+   *   - "YouTube kholo" / "VS Code kholo" -> "CURRENT_DEVICE"
+   */
+  resolveSmartTargetMode(
+    text: string,
+    explicitArgDevice?: string,
+  ): SmartTargetMode {
+    if (explicitArgDevice) {
+      const upper = explicitArgDevice.trim().toUpperCase();
+      if (upper === "CURRENT_DEVICE") return "CURRENT_DEVICE";
+      if (upper === "PHONE" || upper === "MOBILE" || upper === "ANDROID") return "PHONE";
+      if (upper === "REMOTE_DESKTOP") return "REMOTE_DESKTOP";
+      if (upper === "DESKTOP" || upper === "PC" || upper === "LAPTOP") return "DESKTOP";
+    }
+
+    const explicitCue = this.detectExplicitTargetCue(text, explicitArgDevice);
+    if (explicitCue === "PHONE") return "PHONE";
+    if (explicitCue === "REMOTE_DESKTOP") return "REMOTE_DESKTOP";
+    if (explicitCue === "DESKTOP") return "DESKTOP";
+
+    return "CURRENT_DEVICE";
   }
 
   /**
@@ -132,7 +182,7 @@ export class IntentResolver {
       /\b(best\s+approach|best\s+practice|compare|net\s+par|web\s+research|search\s+karo.*compare)\b/i.test(lower);
     if (hasInspectCue && hasCompareOrResearchCue) {
       const targetDevice = this.resolveTargetDevice(raw, "DESKTOP", secContext);
-      const fileMatch = raw.match(/(?:file\s+|open\s+)([a-zA-Z0-9_./\\-]+\.[a-zA-Z0-9]+)/i);
+      const fileMatch = raw.match(/(?:file\s+|open\s+)((?:[a-zA-Z]:[\\/])?[a-zA-Z0-9_./\\-]+\.[a-zA-Z0-9]+)/i);
       const targetFile = fileMatch?.[1] || ctx.currentFile || "src/App.tsx";
       const wantsUpdate = /\b(update\s+kar\s+do|modify|apply|update\s+it|fix\s+kar\s+do)\b/i.test(lower);
       return {
@@ -423,7 +473,7 @@ export class IntentResolver {
       /\b(ye\s+file\s+open\s+karo|open\s+this\s+file)\b/i.test(lower)
     ) {
       const targetDevice = this.resolveTargetDevice(raw, "DESKTOP", secContext);
-      const explicitFileMatch = raw.match(/([a-zA-Z0-9_./\\-]+\.[a-zA-Z0-9]{1,8})/);
+      const explicitFileMatch = raw.match(/((?:[a-zA-Z]:[\\/])?[a-zA-Z0-9_./\\-]+\.[a-zA-Z0-9]{1,8})/);
       const resolvedFile = explicitFileMatch?.[1] || ctx.currentFile;
       if (resolvedFile) {
         return {
@@ -447,8 +497,12 @@ export class IntentResolver {
     //    "Chrome open karo", "YouTube open karo", "ye app open karo", "laptop par VS Code kholo")
     // -------------------------------------------------------------------------
     const openAppMatch =
-      raw.match(/^(?:laptop\s+par\s+|pc\s+par\s+|desktop\s+par\s+|phone\s+par\s+|mere\s+mobile\s+me\s+)?(.+?)\s+(?:open\s+karo|open\s+kar\s+do|kholo|khol\s+do|chalu\s+karo|launch\s+karo)$/i) ||
-      raw.match(/^(?:open|launch|start)\s+(.+?)(?:\s+on\s+laptop|\s+on\s+pc|\s+on\s+desktop|\s+on\s+phone|\s+on\s+mobile)?$/i);
+      raw.match(
+        /^(?:(?:laptop|pc|desktop|computer|phone|mobile|android|mere\s+mobile|mere\s+phone|remote\s+desktop|remote\s+pc)\s+(?:par|pe|me|mein)\s+)?(.+?)\s+(?:open\s+karo|open\s+kar\s+do|kholo|khol\s+do|chalu\s+karo|launch\s+karo)$/i,
+      ) ||
+      raw.match(
+        /^(?:open|launch|start)\s+(.+?)(?:\s+(?:on|in)\s+(?:my\s+)?(?:laptop|pc|desktop|phone|mobile|remote\s+desktop))?$/i,
+      );
 
     if (openAppMatch) {
       const rawTarget = openAppMatch[1].trim();
