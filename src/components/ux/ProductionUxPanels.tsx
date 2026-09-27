@@ -140,6 +140,9 @@ export const RemoteBridgeStatusCard: React.FC<RemoteBridgeStatusCardProps> = ({
       {!isConnected && onConfirmPairPin && (
         <div className="mt-2.5 flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 p-2 text-xs">
           <input
+            id="remote-bridge-pin-input"
+            name="remoteBridgePin"
+            aria-label="6-digit pairing PIN"
             type="text"
             data-testid="remote-bridge-pin-input"
             value={pinInput}
@@ -383,6 +386,9 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
             </div>
             <div className="flex gap-2">
               <input
+                id="mobile-voice-input"
+                name="mobileVoiceCommand"
+                aria-label="Mobile voice or text command"
                 type="text"
                 data-testid="mobile-voice-input"
                 value={commandInput}
@@ -613,6 +619,9 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
               <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-2.5 space-y-2">
                 <div className="flex items-center gap-2">
                   <select
+                    id="mobile-memory-scope-select"
+                    name="mobileMemoryScope"
+                    aria-label="Memory scope"
                     data-testid="mobile-memory-scope-select"
                     value={memScope}
                     onChange={(e) => setMemScope(e.target.value as "SHARED" | "DEVICE_LOCAL")}
@@ -622,6 +631,9 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                     <option value="DEVICE_LOCAL">DEVICE_LOCAL (Phone Only)</option>
                   </select>
                   <input
+                    id="mobile-memory-key-input"
+                    name="mobileMemoryKey"
+                    aria-label="Memory key"
                     type="text"
                     data-testid="mobile-memory-key-input"
                     value={memKey}
@@ -632,6 +644,9 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                 </div>
                 <div className="flex gap-2">
                   <input
+                    id="mobile-memory-value-input"
+                    name="mobileMemoryValue"
+                    aria-label="Memory value"
                     type="text"
                     data-testid="mobile-memory-value-input"
                     value={memValue}
@@ -961,6 +976,9 @@ export const DesktopProductionUxSurface: React.FC<DesktopProductionUxSurfaceProp
           )}
           <div className="flex gap-2">
             <input
+              id="desktop-voice-input"
+              name="desktopVoiceCommand"
+              aria-label="Desktop voice or text command"
               type="text"
               data-testid="desktop-voice-input"
               value={commandInput}
@@ -1262,6 +1280,9 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <input
+                      id="handoff-utterance-input"
+                      name="handoffUtterance"
+                      aria-label="Cross-device handoff utterance"
                       type="text"
                       data-testid="handoff-utterance-input"
                       value={handoffUtterance}

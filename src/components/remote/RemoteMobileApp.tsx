@@ -534,11 +534,16 @@ export const RemoteMobileApp: React.FC = () => {
           {/* Pairing Form */}
           <form onSubmit={handlePairSubmit} className="space-y-5 relative">
             <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+              <label
+                htmlFor="remote-mobile-pin-code"
+                className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2"
+              >
                 6-Character Pairing Code
               </label>
               <div className="relative">
                 <input
+                  id="remote-mobile-pin-code"
+                  name="pinCode"
                   type="text"
                   maxLength={6}
                   value={pinCode}
@@ -555,10 +560,15 @@ export const RemoteMobileApp: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+              <label
+                htmlFor="remote-mobile-device-name"
+                className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2"
+              >
                 Device Name
               </label>
               <input
+                id="remote-mobile-device-name"
+                name="deviceName"
                 type="text"
                 value={deviceName}
                 onChange={(e) => setDeviceName(e.target.value)}
@@ -921,6 +931,9 @@ export const RemoteMobileApp: React.FC = () => {
         {/* Text Input Form */}
         <form onSubmit={handleSendText} className="flex items-center gap-2">
           <input
+            id="remote-mobile-text-input"
+            name="remoteMobileTextCommand"
+            aria-label="Send instruction or ask Myraa"
             type="text"
             value={textInput}
             onChange={(e) => setTextInput(e.target.value)}

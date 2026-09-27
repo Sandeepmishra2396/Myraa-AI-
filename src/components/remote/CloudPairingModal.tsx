@@ -216,10 +216,15 @@ export const CloudPairingModal: React.FC<CloudPairingModalProps> = ({
         {/* Pairing Form */}
         <form onSubmit={handlePairSubmit} className="space-y-4">
           <div>
-            <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+            <label
+              htmlFor="cloud-pairing-pin-code"
+              className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5"
+            >
               6-Character Pairing Code
             </label>
             <input
+              id="cloud-pairing-pin-code"
+              name="pinCode"
               type="text"
               maxLength={6}
               value={pinCode}
@@ -232,10 +237,15 @@ export const CloudPairingModal: React.FC<CloudPairingModalProps> = ({
           </div>
 
           <div>
-            <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+            <label
+              htmlFor="cloud-pairing-device-name"
+              className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5"
+            >
               Device Name
             </label>
             <input
+              id="cloud-pairing-device-name"
+              name="deviceName"
               type="text"
               value={deviceName}
               onChange={(e) => setDeviceName(e.target.value)}
