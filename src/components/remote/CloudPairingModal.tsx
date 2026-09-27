@@ -27,12 +27,14 @@ interface CloudPairingModalProps {
   isOpen: boolean;
   onPairSuccess: (session: StoredRemoteSession) => void;
   onClose?: () => void;
+  onOpenControlHub?: () => void;
 }
 
 export const CloudPairingModal: React.FC<CloudPairingModalProps> = ({
   isOpen,
   onPairSuccess,
   onClose,
+  onOpenControlHub,
 }) => {
   const [pinCode, setPinCode] = useState("");
   const [deviceName, setDeviceName] = useState(() => {
@@ -263,7 +265,7 @@ export const CloudPairingModal: React.FC<CloudPairingModalProps> = ({
         </form>
 
         {/* Informational Footer */}
-        <div className="mt-6 pt-4 border-t border-slate-800 text-[11px] text-slate-400 space-y-1">
+        <div className="mt-6 pt-4 border-t border-slate-800 text-[11px] text-slate-400 space-y-2">
           <div className="font-semibold text-slate-300 flex items-center gap-1.5">
             <Lock className="h-3 w-3 text-indigo-400" />
             <span>Transport & Session Security</span>
@@ -272,6 +274,16 @@ export const CloudPairingModal: React.FC<CloudPairingModalProps> = ({
             All non-localhost audio streaming routes exclusively via{" "}
             <span className="font-mono text-slate-300">/remote-live</span> over encrypted WSS.
           </p>
+          {onOpenControlHub && (
+            <button
+              type="button"
+              data-testid="cloud-pairing-open-control-hub-btn"
+              onClick={onOpenControlHub}
+              className="mt-2 w-full rounded-xl border border-cyan-500/40 bg-cyan-950/30 py-2 px-3 text-center font-mono text-[11px] uppercase tracking-wider text-cyan-200 hover:bg-cyan-900/40 transition-colors cursor-pointer"
+            >
+              Open MYRAA Production Control Hub (Standalone Mode)
+            </button>
+          )}
         </div>
       </div>
     </div>

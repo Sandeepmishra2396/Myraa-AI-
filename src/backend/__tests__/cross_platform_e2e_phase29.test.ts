@@ -87,6 +87,8 @@ describe("Phase 29 — Full Cross-Platform Testing Suite", () => {
   afterEach(async () => {
     await emergencyStopCoordinator.reset("phase29_test_teardown");
     securityPolicyEngine.setMode("BALANCED");
+    await remoteStore.clearStore();
+    await crossDeviceHandoffManager.clearCaches();
   });
 
   // ===========================================================================

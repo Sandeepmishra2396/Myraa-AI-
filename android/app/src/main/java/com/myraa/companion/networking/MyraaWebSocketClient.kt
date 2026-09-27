@@ -45,6 +45,34 @@ class MyraaWebSocketClient(
         private const val PROTOCOL_PREFIX = "myraa-auth, "
         private const val INITIAL_RECONNECT_DELAY_MS = 1000L
         private const val MAX_RECONNECT_DELAY_MS = 16000L
+
+        fun buildWsUrl(host: String, port: Int, path: String = "/remote-live"): String {
+            val trimmed = host.trim().removeSuffix("/")
+            if (trimmed.startsWith("wss://", ignoreCase = true) || trimmed.startsWith("ws://", ignoreCase = true)) {
+                return "$trimmed$path"
+            }
+            if (trimmed.startsWith("https://", ignoreCase = true)) {
+                return "wss://${trimmed.substring(8)}$path"
+            }
+            if (trimmed.startsWith("http://", ignoreCase = true)) {
+                return "ws://${trimmed.substring(7)}$path"
+            }
+            val isLocalOrLan = trimmed == "localhost" ||
+                trimmed == "127.0.0.1" ||
+                trimmed == "10.0.2.2" ||
+                trimmed.startsWith("192.168.") ||
+                trimmed.startsWith("10.") ||
+                trimmed.endsWith(".local") ||
+                Regex("^172\\.(1[6-9]|2[0-9]|3[0-1])\\..*").matches(trimmed)
+            val useWss = port == 443 || !isLocalOrLan
+            val scheme = if (useWss) "wss" else "ws"
+            val includePort = if (useWss) {
+                port != 443 && port != 80 && port != 3000
+            } else {
+                port != 80
+            }
+            return if (includePort) "$scheme://$trimmed:$port$path" else "$scheme://$trimmed$path"
+        }
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + Job())
@@ -95,7 +123,7 @@ class MyraaWebSocketClient(
 
     private fun initiateConnection() {
         _connectionStatus.value = ConnectionStatus.CONNECTING
-        val wsUrl = "ws://$currentHost:$currentPort/remote-live"
+        val wsUrl = buildWsUrl(currentHost, currentPort, "/remote-live")
         Log.i(TAG, "Initiating WebSocket connection to: $wsUrl")
 
         val request = Request.Builder()

@@ -32,6 +32,31 @@ class MyraaApiClient(
     companion object {
         private const val TAG = "MyraaApiClient"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
+        fun buildBaseUrl(host: String, port: Int): String {
+            val trimmed = host.trim().removeSuffix("/")
+            if (trimmed.startsWith("https://", ignoreCase = true) || trimmed.startsWith("http://", ignoreCase = true)) {
+                return trimmed
+            }
+            val cleanHost = trimmed
+                .removePrefix("wss://")
+                .removePrefix("ws://")
+            val isLocalOrLan = cleanHost == "localhost" ||
+                cleanHost == "127.0.0.1" ||
+                cleanHost == "10.0.2.2" ||
+                cleanHost.startsWith("192.168.") ||
+                cleanHost.startsWith("10.") ||
+                cleanHost.endsWith(".local") ||
+                Regex("^172\\.(1[6-9]|2[0-9]|3[0-1])\\..*").matches(cleanHost)
+            val useHttps = port == 443 || !isLocalOrLan
+            val scheme = if (useHttps) "https" else "http"
+            val includePort = if (useHttps) {
+                port != 443 && port != 80 && port != 3000
+            } else {
+                port != 80
+            }
+            return if (includePort) "$scheme://$cleanHost:$port" else "$scheme://$cleanHost"
+        }
     }
 
     /**
@@ -43,7 +68,7 @@ class MyraaApiClient(
         host: String,
         port: Int
     ): PairingResult = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/pair"
+        val url = "${buildBaseUrl(host, port)}/api/remote/pair"
 
         val meta = JSONObject().apply {
             put("model", "${Build.MANUFACTURER} ${Build.MODEL}")
@@ -123,7 +148,7 @@ class MyraaApiClient(
         host: String,
         port: Int
     ): Boolean = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/revoke"
+        val url = "${buildBaseUrl(host, port)}/api/remote/revoke"
         val bodyJson = JSONObject().apply {
             put("deviceId", deviceId)
             put("reason", "Revoked by user from Android Companion")
@@ -148,15 +173,21 @@ class MyraaApiClient(
 
     /**
      * Rotate short-lived session access and refresh tokens.
+     * Optionally includes durable deviceToken (sora_dev_...) so server restarts
+     * on Render can re-establish the token family seamlessly.
      */
     suspend fun rotateSessionToken(
         compositeRefreshToken: String,
         host: String,
-        port: Int
+        port: Int,
+        deviceToken: String? = null
     ): TokenRefreshResult = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/token/refresh"
+        val url = "${buildBaseUrl(host, port)}/api/remote/token/refresh"
         val bodyJson = JSONObject().apply {
             put("refreshToken", compositeRefreshToken)
+            if (!deviceToken.isNullOrBlank()) {
+                put("deviceToken", deviceToken)
+            }
         }
 
         val request = Request.Builder()
@@ -203,7 +234,7 @@ class MyraaApiClient(
         host: String,
         port: Int
     ): Boolean = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/emergency-stop"
+        val url = "${buildBaseUrl(host, port)}/api/remote/emergency-stop"
         val bodyJson = JSONObject().apply {
             put("reason", reason)
         }
@@ -235,7 +266,7 @@ class MyraaApiClient(
         host: String,
         port: Int
     ): Boolean = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/emergency-stop/reset"
+        val url = "${buildBaseUrl(host, port)}/api/remote/emergency-stop/reset"
         val bodyJson = JSONObject().apply {
             put("reason", "Reset by authorized Android Companion operator")
         }
@@ -264,7 +295,7 @@ class MyraaApiClient(
         host: String,
         port: Int
     ): EmergencyStopState? = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/emergency-stop"
+        val url = "${buildBaseUrl(host, port)}/api/remote/emergency-stop"
         val request = Request.Builder().url(url).get().build()
 
         try {
@@ -295,7 +326,7 @@ class MyraaApiClient(
         category: String? = null
     ): List<com.myraa.companion.capabilities.SharedMemoryItem> = withContext(Dispatchers.IO) {
         val queryPart = if (category != null) "?category=$category" else ""
-        val url = "http://$host:$port/api/remote/memory$queryPart"
+        val url = "${buildBaseUrl(host, port)}/api/remote/memory$queryPart"
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $bearerToken")
@@ -335,7 +366,7 @@ class MyraaApiClient(
         importance: String = "medium",
         confidence: String = "medium"
     ): com.myraa.companion.capabilities.SharedMemoryItem? = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/memory"
+        val url = "${buildBaseUrl(host, port)}/api/remote/memory"
         val bodyJson = JSONObject().apply {
             put("category", category)
             put("text", text)
@@ -373,7 +404,7 @@ class MyraaApiClient(
         bearerToken: String,
         batch: com.myraa.companion.capabilities.MemorySyncBatchRequest
     ): com.myraa.companion.capabilities.MemorySyncBatchResponse? = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/memory/sync"
+        val url = "${buildBaseUrl(host, port)}/api/remote/memory/sync"
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $bearerToken")
@@ -401,7 +432,7 @@ class MyraaApiClient(
         port: Int,
         bearerToken: String
     ): List<com.myraa.companion.capabilities.HandoffSnapshotItem> = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/handoff"
+        val url = "${buildBaseUrl(host, port)}/api/remote/handoff"
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $bearerToken")
@@ -435,7 +466,7 @@ class MyraaApiClient(
         handoffId: String,
         token: String
     ): Boolean = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/handoff/$handoffId/accept"
+        val url = "${buildBaseUrl(host, port)}/api/remote/handoff/$handoffId/accept"
         val bodyJson = JSONObject().apply {
             put("token", token)
         }
@@ -466,7 +497,7 @@ class MyraaApiClient(
         token: String,
         confirmResume: Boolean = false
     ): Boolean = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/handoff/$handoffId/resume"
+        val url = "${buildBaseUrl(host, port)}/api/remote/handoff/$handoffId/resume"
         val bodyJson = JSONObject().apply {
             put("token", token)
             put("confirmResume", confirmResume)
@@ -501,7 +532,7 @@ class MyraaApiClient(
         deviceId: String,
         preferences: JSONObject? = null
     ): Boolean = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/proactive/subscribe"
+        val url = "${buildBaseUrl(host, port)}/api/remote/proactive/subscribe"
         val bodyJson = JSONObject().apply {
             put("deviceId", deviceId)
             if (preferences != null) put("preferences", preferences)
@@ -531,7 +562,7 @@ class MyraaApiClient(
         bearerToken: String,
         deviceId: String
     ): JSONObject? = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/proactive/preferences?deviceId=$deviceId"
+        val url = "${buildBaseUrl(host, port)}/api/remote/proactive/preferences?deviceId=$deviceId"
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $bearerToken")
@@ -559,7 +590,7 @@ class MyraaApiClient(
         bearerToken: String,
         patch: JSONObject
     ): Boolean = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/proactive/preferences"
+        val url = "${buildBaseUrl(host, port)}/api/remote/proactive/preferences"
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $bearerToken")
@@ -585,7 +616,7 @@ class MyraaApiClient(
         bearerToken: String,
         deviceId: String
     ): List<com.myraa.companion.capabilities.MobileProactiveEvent> = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/proactive/pending?deviceId=$deviceId"
+        val url = "${buildBaseUrl(host, port)}/api/remote/proactive/pending?deviceId=$deviceId"
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $bearerToken")
@@ -624,7 +655,7 @@ class MyraaApiClient(
         preferredLanguage: String = "hinglish",
         autoExecute: Boolean = true
     ): com.myraa.companion.capabilities.WorkflowResponse? = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/workflow/execute"
+        val url = "${buildBaseUrl(host, port)}/api/remote/workflow/execute"
         val bodyJson = JSONObject().apply {
             put("query", query)
             put("preferredLanguage", preferredLanguage)
@@ -657,7 +688,7 @@ class MyraaApiClient(
         bearerToken: String,
         planId: String
     ): com.myraa.companion.capabilities.WorkflowResponse? = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/workflow/$planId"
+        val url = "${buildBaseUrl(host, port)}/api/remote/workflow/$planId"
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $bearerToken")
@@ -688,7 +719,7 @@ class MyraaApiClient(
         approved: Boolean,
         userFeedback: String? = null
     ): com.myraa.companion.capabilities.WorkflowResponse? = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/workflow/$planId/confirm"
+        val url = "${buildBaseUrl(host, port)}/api/remote/workflow/$planId/confirm"
         val bodyJson = JSONObject().apply {
             put("checkpointId", checkpointId)
             put("approved", approved)
@@ -719,7 +750,7 @@ class MyraaApiClient(
         port: Int,
         bearerToken: String
     ): com.myraa.companion.capabilities.SecurityStatusData? = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/security/status"
+        val url = "${buildBaseUrl(host, port)}/api/remote/security/status"
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $bearerToken")
@@ -745,7 +776,7 @@ class MyraaApiClient(
         bearerToken: String,
         reason: String? = null
     ): com.myraa.companion.capabilities.SecurityControlOutcome? = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/security/lockdown"
+        val url = "${buildBaseUrl(host, port)}/api/remote/security/lockdown"
         val bodyJson = JSONObject().apply {
             if (reason != null) put("reason", reason)
         }
@@ -771,7 +802,7 @@ class MyraaApiClient(
         port: Int,
         bearerToken: String
     ): com.myraa.companion.capabilities.SecurityControlOutcome? = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/security/lockdown/recover"
+        val url = "${buildBaseUrl(host, port)}/api/remote/security/lockdown/recover"
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $bearerToken")
@@ -796,7 +827,7 @@ class MyraaApiClient(
         deviceId: String,
         reason: String? = null
     ): com.myraa.companion.capabilities.SecurityControlOutcome? = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/security/lost-device/enable"
+        val url = "${buildBaseUrl(host, port)}/api/remote/security/lost-device/enable"
         val bodyJson = JSONObject().apply {
             put("deviceId", deviceId)
             if (reason != null) put("reason", reason)
@@ -824,7 +855,7 @@ class MyraaApiClient(
         bearerToken: String,
         deviceId: String
     ): com.myraa.companion.capabilities.SecurityControlOutcome? = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/security/lost-device/recover"
+        val url = "${buildBaseUrl(host, port)}/api/remote/security/lost-device/recover"
         val bodyJson = JSONObject().apply {
             put("deviceId", deviceId)
         }
@@ -851,7 +882,7 @@ class MyraaApiClient(
         bearerToken: String,
         reason: String? = null
     ): com.myraa.companion.capabilities.SecurityControlOutcome? = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/security/logout-all"
+        val url = "${buildBaseUrl(host, port)}/api/remote/security/logout-all"
         val bodyJson = JSONObject().apply {
             if (reason != null) put("reason", reason)
         }
@@ -877,7 +908,7 @@ class MyraaApiClient(
         port: Int,
         bearerToken: String
     ): List<com.myraa.companion.capabilities.ActiveSessionItem> = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/security/sessions"
+        val url = "${buildBaseUrl(host, port)}/api/remote/security/sessions"
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $bearerToken")
@@ -911,7 +942,7 @@ class MyraaApiClient(
         sessionId: String,
         reason: String? = null
     ): com.myraa.companion.capabilities.SecurityControlOutcome? = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/security/sessions/$sessionId"
+        val url = "${buildBaseUrl(host, port)}/api/remote/security/sessions/$sessionId"
         val bodyJson = JSONObject().apply {
             if (reason != null) put("reason", reason)
         }
@@ -938,7 +969,7 @@ class MyraaApiClient(
         bearerToken: String,
         reason: String? = null
     ): com.myraa.companion.capabilities.SecurityControlOutcome? = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/api/remote/security/sessions"
+        val url = "${buildBaseUrl(host, port)}/api/remote/security/sessions"
         val bodyJson = JSONObject().apply {
             if (reason != null) put("reason", reason)
         }

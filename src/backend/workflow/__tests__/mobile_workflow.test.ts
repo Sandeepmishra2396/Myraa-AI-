@@ -81,6 +81,7 @@ describe("Phase 27 — Mobile Autonomous Workflow Engine", () => {
   afterEach(async () => {
     emergencyStopCoordinator.reset("test_cleanup");
     securityPolicyEngine.setMode("BALANCED");
+    await remoteStore.clearStore();
   });
 
   // ── 1. Schedule & Tasks Query Workflow ────────────────────────────────────

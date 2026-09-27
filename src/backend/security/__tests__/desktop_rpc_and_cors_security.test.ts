@@ -162,7 +162,7 @@ describe("Cross-Device Desktop RPC & Desktop Agent Security Suite", () => {
       });
 
       // Wait a tick for async executeOnDesktopCompanion to reach ws.send
-      await new Promise((r) => setTimeout(r, 20));
+      await vi.waitFor(() => expect(mockWs.send).toHaveBeenCalledTimes(1), { timeout: 2000 });
 
       expect(mockWs.send).toHaveBeenCalledTimes(1);
       const sentPayload = JSON.parse(mockWs.send.mock.calls[0][0]);
@@ -225,7 +225,7 @@ describe("Cross-Device Desktop RPC & Desktop Agent Security Suite", () => {
         200 // short timeout
       );
 
-      await new Promise((r) => setTimeout(r, 20));
+      await vi.waitFor(() => expect(mockWs.send).toHaveBeenCalledTimes(1), { timeout: 2000 });
 
       const sentPayload = JSON.parse(mockWs.send.mock.calls[0][0]);
 
@@ -282,7 +282,7 @@ describe("Cross-Device Desktop RPC & Desktop Agent Security Suite", () => {
         name: "explorer",
       });
 
-      await new Promise((r) => setTimeout(r, 20));
+      await vi.waitFor(() => expect(mockWs.send).toHaveBeenCalledTimes(1), { timeout: 2000 });
 
       const sentPayload = JSON.parse(mockWs.send.mock.calls[0][0]);
 

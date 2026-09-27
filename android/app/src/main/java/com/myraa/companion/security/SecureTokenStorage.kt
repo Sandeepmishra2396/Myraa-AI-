@@ -34,8 +34,8 @@ class SecureTokenStorage(context: Context) {
         private const val KEY_SERVER_HOST = "key_server_host"
         private const val KEY_SERVER_PORT = "key_server_port"
 
-        const val DEFAULT_PORT = 3000
-        const val DEFAULT_HOST = "10.0.2.2" // Default Android Emulator host IP, customizable
+        const val DEFAULT_PORT = 443
+        const val DEFAULT_HOST = "myraa-ai-q0h3.onrender.com" // Default Production Render Cloud host, customizable for LAN/Emulator
     }
 
     private val prefs: SharedPreferences

@@ -171,8 +171,9 @@ fun MyraaCompanionApp(
             // Wire automatic token rotation on WebSocket reconnect
             wsClient.tokenRefreshProvider = {
                 val rf = tokenStorage.getRefreshToken()
+                val devTok = tokenStorage.getBearerToken()
                 if (tokenStorage.isAccessTokenExpired() && !rf.isNullOrBlank()) {
-                    val refreshResult = apiClient.rotateSessionToken(rf, host, port)
+                    val refreshResult = apiClient.rotateSessionToken(rf, host, port, devTok)
                     when (refreshResult) {
                         is TokenRefreshResult.Success -> {
                             tokenStorage.saveSessionTokens(
@@ -186,19 +187,22 @@ fun MyraaCompanionApp(
                             if (refreshResult.isReplayDetected) {
                                 tokenStorage.clearSession()
                                 currentScreen = Screen.PAIRING
+                                null
+                            } else {
+                                devTok
                             }
-                            null
                         }
                     }
                 } else {
-                    tokenStorage.getPreferredAuthToken()
+                    tokenStorage.getPreferredAuthToken() ?: devTok
                 }
             }
 
             // Proactive token rotation before initial connection if expired
             val rf = tokenStorage.getRefreshToken()
+            val devTok = tokenStorage.getBearerToken()
             if (tokenStorage.isAccessTokenExpired() && !rf.isNullOrBlank()) {
-                val refreshResult = apiClient.rotateSessionToken(rf, host, port)
+                val refreshResult = apiClient.rotateSessionToken(rf, host, port, devTok)
                 when (refreshResult) {
                     is TokenRefreshResult.Success -> {
                         tokenStorage.saveSessionTokens(

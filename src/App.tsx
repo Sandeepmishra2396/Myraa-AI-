@@ -1475,6 +1475,7 @@ export default function App() {
               sessionRef.current.setToken(sess.token || sess.accessToken || "");
             }
           }}
+          onOpenControlHub={() => setShowControlHub(true)}
         />
       )}
     </div>

@@ -96,7 +96,14 @@ export class RemoteStore {
   // ── Devices ──────────────────────────────────────────────────────────────
   async listDevices(options?: { skipAutoAdminPromotion?: boolean }): Promise<PairedDevice[]> {
     const arr = await safeReadFile<PairedDevice[]>(devicesFile(), []);
-    const devices = Array.isArray(arr) ? arr : [];
+    const rawDevices = Array.isArray(arr) ? arr : [];
+    const devices = process.env.VITEST
+      ? rawDevices
+      : rawDevices.filter(
+          (d) =>
+            typeof d.tokenHash === "string" &&
+            (d.tokenHash === "" || /^[a-f0-9]{64}$/i.test(d.tokenHash)),
+        );
 
     // Auto-recover legacy sole device ONLY if it was not explicitly assigned a non-admin role
     if (

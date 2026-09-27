@@ -1077,7 +1077,7 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
   return (
     <div
       data-testid="production-control-hub-modal"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md overflow-y-auto"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md overflow-y-auto"
     >
       <div className="relative my-auto w-full max-w-5xl rounded-3xl border border-slate-800 bg-slate-950 p-6 text-slate-100 shadow-2xl max-h-[92vh] overflow-y-auto">
         {/* Top Bar */}
