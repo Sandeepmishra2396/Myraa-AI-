@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld('myraa', {
   isDesktop: true,
   platform: process.platform,
   version: process.versions.electron,
+  appId: 'com.myraa.desktop',
+  productName: 'MYRAA',
+  publisher: 'Mishtron Labs',
   appVersion: '1.0.0',
   productionBackendUrl: 'https://myraa-ai-q0h3.onrender.com',
 

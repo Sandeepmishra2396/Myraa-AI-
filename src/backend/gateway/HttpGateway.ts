@@ -4370,17 +4370,19 @@ export function createHttpApp(): express.Application {
       const {
         deviceId = DEFAULT_MOBILE_UX_ID,
         utterance,
+        transcript,
         explicitTargetOverride,
         targetDesktopDeviceId,
       } = req.body || {};
-      if (!utterance || !String(utterance).trim()) {
+      const resolvedUtterance = utterance || transcript;
+      if (!resolvedUtterance || !String(resolvedUtterance).trim()) {
         res.status(400).json({ error: "Utterance is required." });
         return;
       }
       const { productionUxController } = await import("../device/index.ts");
       const turn = await productionUxController.submitMobileVoiceCommand({
         deviceId,
-        utterance: String(utterance).trim(),
+        utterance: String(resolvedUtterance).trim(),
         explicitTargetOverride,
         targetDesktopDeviceId: targetDesktopDeviceId || DEFAULT_DESKTOP_UX_ID,
       });

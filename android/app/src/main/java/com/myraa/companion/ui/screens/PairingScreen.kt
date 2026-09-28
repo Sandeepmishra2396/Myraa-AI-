@@ -19,9 +19,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,7 +31,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -44,7 +45,6 @@ import com.myraa.companion.ui.theme.EmergencyRed
 import com.myraa.companion.ui.theme.MyraaCyan
 import com.myraa.companion.ui.theme.MyraaDarkBg
 import com.myraa.companion.ui.theme.MyraaPurple
-import com.myraa.companion.ui.theme.MyraaSurface
 import com.myraa.companion.ui.theme.TextMuted
 import com.myraa.companion.ui.theme.TextPrimary
 import com.myraa.companion.ui.theme.TextSecondary
@@ -56,6 +56,7 @@ fun PairingScreen(
     isLoading: Boolean,
     errorMessage: String?,
     onPairRequested: (code: String, host: String, port: Int, deviceName: String) -> Unit,
+    onNavigateBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var pinCode by remember { mutableStateOf("") }
@@ -63,189 +64,225 @@ fun PairingScreen(
     var portStr by remember { mutableStateOf(initialPort.toString()) }
     var deviceName by remember { mutableStateOf("${Build.MANUFACTURER} ${Build.MODEL}") }
 
-    Box(
+    Column(
         modifier = modifier
             .fillMaxSize()
             .background(MyraaDarkBg)
-            .padding(24.dp),
-        contentAlignment = Alignment.Center
+            .padding(20.dp)
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            AvatarVisualizer(
-                isVoiceActive = false,
-                isEmergencyStop = false
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text(
-                text = "MYRAA",
-                color = MyraaCyan,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 2.sp,
-                fontFamily = FontFamily.Monospace
-            )
-
-            Text(
-                text = "Mobile Companion Pairing",
-                color = TextSecondary,
-                fontSize = 14.sp
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // PIN Code Field
-            OutlinedTextField(
-                value = pinCode,
-                onValueChange = {
-                    if (it.length <= 6) pinCode = it.uppercase()
-                },
-                label = { Text("6-CHARACTER PIN CODE") },
-                placeholder = { Text("e.g. SR8492") },
-                singleLine = true,
-                maxLines = 1,
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.Characters,
-                    keyboardType = KeyboardType.Ascii,
-                    imeAction = ImeAction.Done
-                ),
-                keyboardActions = KeyboardActions(
-                    onDone = {
-                        val port = portStr.toIntOrNull() ?: initialPort
-                        if (pinCode.length == 6) {
-                            onPairRequested(pinCode, host, port, deviceName)
-                        }
-                    }
-                ),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MyraaCyan,
-                    unfocusedBorderColor = MyraaPurple,
-                    focusedTextColor = TextPrimary,
-                    unfocusedTextColor = TextPrimary,
-                    focusedLabelColor = MyraaCyan,
-                    unfocusedLabelColor = TextMuted,
-                    cursorColor = MyraaCyan
-                ),
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Host & Port Row
-            Row(modifier = Modifier.fillMaxWidth()) {
-                OutlinedTextField(
-                    value = host,
-                    onValueChange = { host = it },
-                    label = { Text("Host IP") },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MyraaCyan,
-                        unfocusedBorderColor = Color(0xFF2A2D40),
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary,
-                        focusedLabelColor = MyraaCyan,
-                        unfocusedLabelColor = TextMuted
-                    ),
-                    modifier = Modifier.weight(2f)
-                )
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                OutlinedTextField(
-                    value = portStr,
-                    onValueChange = { portStr = it },
-                    label = { Text("Port") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MyraaCyan,
-                        unfocusedBorderColor = Color(0xFF2A2D40),
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary,
-                        focusedLabelColor = MyraaCyan,
-                        unfocusedLabelColor = TextMuted
-                    ),
-                    modifier = Modifier.weight(1f)
+        if (onNavigateBack != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onNavigateBack) {
+                    Text("←", color = TextPrimary, fontSize = 24.sp)
+                }
+                Text(
+                    text = "Back to Standalone MYRAA Mobile",
+                    color = MyraaCyan,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(start = 4.dp)
                 )
             }
+        }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Device Name
-            OutlinedTextField(
-                value = deviceName,
-                onValueChange = { deviceName = it },
-                label = { Text("Device Name") },
-                singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MyraaCyan,
-                    unfocusedBorderColor = Color(0xFF2A2D40),
-                    focusedTextColor = TextPrimary,
-                    unfocusedTextColor = TextPrimary,
-                    focusedLabelColor = MyraaCyan,
-                    unfocusedLabelColor = TextMuted
-                ),
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
                 modifier = Modifier.fillMaxWidth()
-            )
+            ) {
+                AvatarVisualizer(
+                    isVoiceActive = false,
+                    isEmergencyStop = false
+                )
 
-            if (!errorMessage.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(12.dp))
+
                 Text(
-                    text = errorMessage,
-                    color = EmergencyRed,
-                    fontSize = 13.sp,
-                    textAlign = TextAlign.Center,
+                    text = "MYRAA",
+                    color = MyraaCyan,
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 2.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+
+                Text(
+                    text = "Optional Desktop Remote Bridge Pairing",
+                    color = TextSecondary,
+                    fontSize = 14.sp
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // PIN Code Field
+                OutlinedTextField(
+                    value = pinCode,
+                    onValueChange = {
+                        if (it.length <= 6) pinCode = it.uppercase()
+                    },
+                    label = { Text("6-CHARACTER PIN CODE") },
+                    placeholder = { Text("e.g. SR8492") },
+                    singleLine = true,
+                    maxLines = 1,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Characters,
+                        keyboardType = KeyboardType.Ascii,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            val port = portStr.toIntOrNull() ?: initialPort
+                            if (pinCode.length == 6) {
+                                onPairRequested(pinCode, host, port, deviceName)
+                            }
+                        }
+                    ),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MyraaCyan,
+                        unfocusedBorderColor = MyraaPurple,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedLabelColor = MyraaCyan,
+                        unfocusedLabelColor = TextMuted,
+                        cursorColor = MyraaCyan
+                    ),
                     modifier = Modifier.fillMaxWidth()
                 )
-            }
 
-            Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-            Button(
-                onClick = {
-                    val port = portStr.toIntOrNull() ?: initialPort
-                    onPairRequested(pinCode, host, port, deviceName)
-                },
-                enabled = pinCode.isNotBlank() && !isLoading,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MyraaCyan,
-                    disabledContainerColor = Color(0xFF1E2833)
-                ),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
-            ) {
-                if (isLoading) {
-                    CircularProgressIndicator(
-                        color = MyraaDarkBg,
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.5.dp
+                // Host & Port Row
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = host,
+                        onValueChange = { host = it },
+                        label = { Text("Host IP") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MyraaCyan,
+                            unfocusedBorderColor = Color(0xFF2A2D40),
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedLabelColor = MyraaCyan,
+                            unfocusedLabelColor = TextMuted
+                        ),
+                        modifier = Modifier.weight(2f)
                     )
-                } else {
-                    Text(
-                        text = "CONNECT & PAIR",
-                        color = MyraaDarkBg,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        letterSpacing = 1.sp
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    OutlinedTextField(
+                        value = portStr,
+                        onValueChange = { portStr = it },
+                        label = { Text("Port") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MyraaCyan,
+                            unfocusedBorderColor = Color(0xFF2A2D40),
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedLabelColor = MyraaCyan,
+                            unfocusedLabelColor = TextMuted
+                        ),
+                        modifier = Modifier.weight(1f)
                     )
                 }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Device Name
+                OutlinedTextField(
+                    value = deviceName,
+                    onValueChange = { deviceName = it },
+                    label = { Text("Device Name") },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MyraaCyan,
+                        unfocusedBorderColor = Color(0xFF2A2D40),
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedLabelColor = MyraaCyan,
+                        unfocusedLabelColor = TextMuted
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                if (!errorMessage.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = errorMessage,
+                        color = EmergencyRed,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                Button(
+                    onClick = {
+                        val port = portStr.toIntOrNull() ?: initialPort
+                        onPairRequested(pinCode, host, port, deviceName)
+                    },
+                    enabled = pinCode.isNotBlank() && !isLoading,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MyraaCyan,
+                        disabledContainerColor = Color(0xFF1E2833)
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            color = MyraaDarkBg,
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.5.dp
+                        )
+                    } else {
+                        Text(
+                            text = "CONNECT & PAIR",
+                            color = MyraaDarkBg,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            letterSpacing = 1.sp
+                        )
+                    }
+                }
+
+                if (onNavigateBack != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(onClick = onNavigateBack) {
+                        Text(
+                            text = "Continue using MYRAA Mobile without Desktop →",
+                            color = MyraaCyan,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "Desktop pairing is optional. Generate a 6-character PIN on Desktop MYRAA via Settings → Devices → Pair Mobile.",
+                    color = TextMuted,
+                    fontSize = 11.sp,
+                    textAlign = TextAlign.Center
+                )
             }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text(
-                text = "Generate a pairing PIN on Desktop MYRAA via Settings or REST endpoint.",
-                color = TextMuted,
-                fontSize = 12.sp,
-                textAlign = TextAlign.Center
-            )
         }
     }
 }

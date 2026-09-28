@@ -1,8 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for the SORA Desktop Control Agent.
+PyInstaller spec for the MYRAA Native Desktop Control Agent (Mishtron Labs).
 
-Produces a self-contained onedir bundle (sora-agent/sora-agent.exe) with an
+Produces a self-contained onedir bundle (myraa-agent/myraa-agent.exe) with an
 embedded Python runtime — the target machine needs no Python installed.
 
 Notes:

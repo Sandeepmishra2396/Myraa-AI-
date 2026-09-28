@@ -33,6 +33,14 @@ class SecureTokenStorage(context: Context) {
         private const val KEY_DEVICE_ROLE = "key_device_role"
         private const val KEY_SERVER_HOST = "key_server_host"
         private const val KEY_SERVER_PORT = "key_server_port"
+        private const val KEY_ONBOARDING_COMPLETED = "key_onboarding_completed"
+        private const val KEY_STANDALONE_DEVICE_ID = "key_standalone_device_id"
+        private const val KEY_PRIVACY_SHIELD_ENABLED = "key_privacy_shield_enabled"
+        private const val KEY_SCREEN_CONTEXT_APPROVED = "key_screen_context_approved"
+        private const val KEY_LOCAL_ONLY_MODE = "key_local_only_mode"
+        private const val KEY_PREFERRED_LANGUAGE = "key_preferred_language"
+        private const val KEY_ACCOUNT_ID = "key_account_id"
+        private const val KEY_SECURITY_LOCKDOWN = "key_security_lockdown"
 
         const val DEFAULT_PORT = 443
         const val DEFAULT_HOST = "myraa-ai-q0h3.onrender.com" // Default Production Render Cloud host, customizable for LAN/Emulator
@@ -75,6 +83,7 @@ class SecureTokenStorage(context: Context) {
             .putString(KEY_DEVICE_ROLE, deviceRole)
             .putString(KEY_SERVER_HOST, host)
             .putInt(KEY_SERVER_PORT, port)
+            .putBoolean(KEY_ONBOARDING_COMPLETED, true)
 
         if (!accessToken.isNullOrBlank()) {
             editor.putString(KEY_ACCESS_TOKEN, accessToken)
@@ -131,6 +140,68 @@ class SecureTokenStorage(context: Context) {
         return !token.isNullOrBlank()
     }
 
+    fun isOnboardingCompleted(): Boolean {
+        return prefs.getBoolean(KEY_ONBOARDING_COMPLETED, false) || hasSession()
+    }
+
+    fun setOnboardingCompleted(completed: Boolean) {
+        prefs.edit().putBoolean(KEY_ONBOARDING_COMPLETED, completed).apply()
+    }
+
+    fun getOrCreateStandaloneDeviceId(): String {
+        val pairedId = getDeviceId()
+        if (!pairedId.isNullOrBlank()) return pairedId
+
+        val existingStandalone = prefs.getString(KEY_STANDALONE_DEVICE_ID, null)
+        if (!existingStandalone.isNullOrBlank()) return existingStandalone
+
+        val generated = "mob_standalone_" + java.util.UUID.randomUUID().toString().replace("-", "").take(12)
+        prefs.edit().putString(KEY_STANDALONE_DEVICE_ID, generated).apply()
+        return generated
+    }
+
+    fun isPrivacyShieldEnabled(): Boolean = prefs.getBoolean(KEY_PRIVACY_SHIELD_ENABLED, true)
+
+    fun setPrivacyShieldEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_PRIVACY_SHIELD_ENABLED, enabled).apply()
+    }
+
+    fun isScreenContextApproved(): Boolean = prefs.getBoolean(KEY_SCREEN_CONTEXT_APPROVED, false)
+
+    fun setScreenContextApproved(approved: Boolean) {
+        prefs.edit().putBoolean(KEY_SCREEN_CONTEXT_APPROVED, approved).apply()
+    }
+
+    fun isLocalOnlyMode(): Boolean = prefs.getBoolean(KEY_LOCAL_ONLY_MODE, false)
+
+    fun setLocalOnlyMode(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_LOCAL_ONLY_MODE, enabled).apply()
+    }
+
+    fun getPreferredLanguage(): String = prefs.getString(KEY_PREFERRED_LANGUAGE, "en-IN") ?: "en-IN"
+
+    fun setPreferredLanguage(language: String) {
+        prefs.edit().putString(KEY_PREFERRED_LANGUAGE, language).apply()
+    }
+
+    fun getAccountId(): String? = prefs.getString(KEY_ACCOUNT_ID, null)
+
+    fun setAccountId(accountId: String?) {
+        val editor = prefs.edit()
+        if (accountId.isNullOrBlank()) {
+            editor.remove(KEY_ACCOUNT_ID)
+        } else {
+            editor.putString(KEY_ACCOUNT_ID, accountId.trim())
+        }
+        editor.apply()
+    }
+
+    fun isSecurityLockdownActive(): Boolean = prefs.getBoolean(KEY_SECURITY_LOCKDOWN, false)
+
+    fun setSecurityLockdownActive(active: Boolean) {
+        prefs.edit().putBoolean(KEY_SECURITY_LOCKDOWN, active).apply()
+    }
+
     fun getBearerToken(): String? {
         return prefs.getString(KEY_BEARER_TOKEN, null)
     }
@@ -166,10 +237,40 @@ class SecureTokenStorage(context: Context) {
     }
 
     /**
+     * Disconnects the optional Desktop Remote Bridge session while preserving
+     * standalone mobile assistant onboarding, preferences, and local identity.
+     */
+    fun disconnectDesktopSession() {
+        prefs.edit()
+            .remove(KEY_BEARER_TOKEN)
+            .remove(KEY_ACCESS_TOKEN)
+            .remove(KEY_REFRESH_TOKEN)
+            .remove(KEY_TOKEN_EXPIRES_AT)
+            .remove(KEY_DEVICE_ID)
+            .remove(KEY_DEVICE_ROLE)
+            .putBoolean(KEY_ONBOARDING_COMPLETED, true)
+            .apply()
+        Log.i(TAG, "Desktop remote session disconnected; standalone mobile assistant remains active.")
+    }
+
+    /**
      * Completely clear and revoke session credentials on logout or device revocation.
+     * Preserves standalone onboarding state so the phone remains usable as a standalone AI assistant.
      */
     fun clearSession() {
-        prefs.edit().clear().apply()
-        Log.i(TAG, "Secure session credentials cleared.")
+        val onboardingCompleted = prefs.getBoolean(KEY_ONBOARDING_COMPLETED, true)
+        val standaloneId = prefs.getString(KEY_STANDALONE_DEVICE_ID, null)
+        val privacyShield = prefs.getBoolean(KEY_PRIVACY_SHIELD_ENABLED, true)
+        val preferredLang = prefs.getString(KEY_PREFERRED_LANGUAGE, "en-IN")
+        prefs.edit()
+            .clear()
+            .putBoolean(KEY_ONBOARDING_COMPLETED, onboardingCompleted)
+            .putBoolean(KEY_PRIVACY_SHIELD_ENABLED, privacyShield)
+            .apply {
+                if (!standaloneId.isNullOrBlank()) putString(KEY_STANDALONE_DEVICE_ID, standaloneId)
+                if (!preferredLang.isNullOrBlank()) putString(KEY_PREFERRED_LANGUAGE, preferredLang)
+            }
+            .apply()
+        Log.i(TAG, "Secure desktop session credentials cleared (standalone state preserved).")
     }
 }

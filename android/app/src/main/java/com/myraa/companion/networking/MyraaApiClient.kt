@@ -978,5 +978,129 @@ class MyraaApiClient(
             null
         }
     }
+
+    // ── Phase 13A — Standalone Mobile AI Assistant Cloud UX Endpoints ──────
+
+    data class StandaloneVoiceResponse(
+        val sessionId: String,
+        val deviceId: String,
+        val transcript: String,
+        val responseText: String,
+        val language: String,
+        val requiresDesktopPairing: Boolean,
+        val activeMode: String
+    )
+
+    /**
+     * Execute a standalone mobile AI voice/text turn via HTTPS without requiring Desktop pairing.
+     */
+    suspend fun submitStandaloneMobileVoice(
+        host: String,
+        port: Int,
+        deviceId: String,
+        transcript: String,
+        language: String = "en-IN"
+    ): StandaloneVoiceResponse? = withContext(Dispatchers.IO) {
+        val url = "${buildBaseUrl(host, port)}/api/ux/mobile/voice"
+        val bodyJson = JSONObject().apply {
+            put("deviceId", deviceId)
+            put("utterance", transcript)
+            put("transcript", transcript)
+            put("language", language)
+        }
+        val request = Request.Builder()
+            .url(url)
+            .post(bodyJson.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use null
+                val raw = response.body?.string() ?: return@use null
+                val json = JSONObject(raw)
+                val turnObj = json.optJSONObject("turn") ?: json.optJSONObject("session") ?: json
+                StandaloneVoiceResponse(
+                    sessionId = turnObj.optString("turnId", turnObj.optString("sessionId", "mob_voice_local")),
+                    deviceId = turnObj.optString("originDeviceId", turnObj.optString("deviceId", deviceId)),
+                    transcript = turnObj.optString("utterance", turnObj.optString("transcript", transcript)),
+                    responseText = turnObj.optString("responseText", ""),
+                    language = turnObj.optString("language", language),
+                    requiresDesktopPairing = false,
+                    activeMode = "standalone"
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Standalone cloud voice fallback (offline/unreachable): ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Record standalone mobile onboarding completion with MYRAA Cloud (optional/non-blocking).
+     */
+    suspend fun completeMobileOnboarding(
+        host: String,
+        port: Int,
+        deviceId: String,
+        accountId: String? = null,
+        permissionsGranted: Map<String, Boolean> = emptyMap()
+    ): Boolean = withContext(Dispatchers.IO) {
+        val url = "${buildBaseUrl(host, port)}/api/ux/mobile/onboarding"
+        val permsJson = JSONObject()
+        permissionsGranted.forEach { (k, v) -> permsJson.put(k, v) }
+        val bodyJson = JSONObject().apply {
+            put("deviceId", deviceId)
+            put("completeAll", true)
+            if (!accountId.isNullOrBlank()) put("accountId", accountId)
+            put("permissionsGranted", permsJson)
+        }
+        val request = Request.Builder()
+            .url(url)
+            .post(bodyJson.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        try {
+            client.newCall(request).execute().use { response ->
+                response.isSuccessful
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Mobile onboarding sync deferred (offline): ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Sync standalone mobile privacy & assistant settings with MYRAA Cloud.
+     */
+    suspend fun syncMobileSettings(
+        host: String,
+        port: Int,
+        deviceId: String,
+        privacyShieldEnabled: Boolean,
+        localOnlyMode: Boolean,
+        preferredLanguage: String
+    ): Boolean = withContext(Dispatchers.IO) {
+        val url = "${buildBaseUrl(host, port)}/api/ux/mobile/settings"
+        val bodyJson = JSONObject().apply {
+            put("deviceId", deviceId)
+            put("privacyShieldEnabled", privacyShieldEnabled)
+            put("localOnlyMode", localOnlyMode)
+            put("preferredLanguage", preferredLanguage)
+        }
+        val request = Request.Builder()
+            .url(url)
+            .post(bodyJson.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        try {
+            client.newCall(request).execute().use { response ->
+                response.isSuccessful
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Mobile settings sync deferred: ${e.message}")
+            false
+        }
+    }
 }
+
 

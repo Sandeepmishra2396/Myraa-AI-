@@ -15,8 +15,8 @@ android {
         applicationId = "com.myraa.companion"
         minSdk = 26   // Android 8.0 — required for AudioRecord.Builder and modern crypto APIs
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -92,6 +92,10 @@ android {
     buildFeatures {
         compose = true
     }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -125,6 +129,7 @@ dependencies {
 
     // Tests
     testImplementation(libs.junit)
+    testImplementation("org.json:json:20231013")
     androidTestImplementation(libs.junit.ext)
     androidTestImplementation(libs.espresso.core)
     androidTestImplementation(platform(libs.compose.bom))
@@ -139,8 +144,7 @@ dependencies {
 gradle.taskGraph.whenReady {
     val hasProductionReleaseTask = allTasks.any { task ->
         val name = task.name.lowercase()
-        (name.contains("assemblerelease") || name.contains("bundlerelease") || name.contains("packagerelease")) &&
-        !name.contains("releasetest")
+        name == "assemblerelease" || name == "bundlerelease" || name == "packagerelease"
     }
     if (hasProductionReleaseTask) {
         val relConfig = android.signingConfigs.getByName("release")

@@ -1,4 +1,4 @@
-﻿"""
+"""
 MYRAA Desktop Control Agent — frozen entrypoint.
 
 This is the script PyInstaller freezes into `myraa-agent.exe`. It runs the
@@ -23,7 +23,7 @@ from pathlib import Path
 
 
 def _resolve_data_dir() -> Path:
-    data = os.environ.get("SORA_DATA_DIR") or os.getcwd()
+    data = os.environ.get("MYRAA_DATA_DIR") or os.environ.get("SORA_DATA_DIR") or os.getcwd()
     logs = Path(data) / "logs"
     try:
         logs.mkdir(parents=True, exist_ok=True)
@@ -38,9 +38,8 @@ def _configure_logging(data_dir: Path) -> None:
         handlers.append(logging.FileHandler(data_dir / "logs" / "agent.log", encoding="utf-8"))
     except Exception:
         pass
-    # When frozen with console=False there is no real stdout, but keeping a
-    # stream handler is harmless and helps when run from a terminal in dev.
-    handlers.append(logging.StreamHandler(sys.stdout))
+    if sys.stdout is not None:
+        handlers.append(logging.StreamHandler(sys.stdout))
     logging.basicConfig(
         level=logging.INFO,
         format="[%(asctime)s] [%(levelname)s] %(name)s: %(message)s",
@@ -55,8 +54,8 @@ def main() -> None:
     _configure_logging(data_dir)
     log = logging.getLogger("myraa.agent.boot")
 
-    host = os.environ.get("SORA_AGENT_HOST", "127.0.0.1")
-    port = int(os.environ.get("SORA_AGENT_PORT", "8765"))
+    host = os.environ.get("MYRAA_AGENT_HOST") or os.environ.get("SORA_AGENT_HOST", "127.0.0.1")
+    port = int(os.environ.get("MYRAA_AGENT_PORT") or os.environ.get("SORA_AGENT_PORT", "8765"))
     frozen = getattr(sys, "frozen", False)
     log.info("Starting MYRAA agent (frozen=%s) on %s:%d", frozen, host, port)
 

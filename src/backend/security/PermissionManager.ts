@@ -55,8 +55,9 @@ export function isRestrictedHost(host: string): boolean {
 
 export async function isSsrfSafeUrl(
   urlStr: string,
+  options: { skipDnsResolution?: boolean } = {},
 ): Promise<{ safe: boolean; reason?: string }> {
-  return networkSecurityManager.isSsrfSafeUrl(urlStr);
+  return networkSecurityManager.isSsrfSafeUrl(urlStr, options);
 }
 
 /**

@@ -148,14 +148,14 @@ describe("Phase 12 — Release Packaging, Download Distribution & User Installat
       expect(aabHeader.toString("binary")).toBe("PK\x03\x04");
     });
 
-    it("1.2 verifies Android version (1.0.0 / versionCode 1), release signing, and complete debug exclusion", () => {
+    it("1.2 verifies Android version (1.0.x), release signing, and complete debug exclusion", () => {
       const gradleFile = fs.readFileSync(
         path.join(ROOT_DIR, "android", "app", "build.gradle.kts"),
         "utf-8",
       );
 
-      expect(gradleFile).toContain("versionCode = 1");
-      expect(gradleFile).toContain('versionName = "1.0.0"');
+      expect(gradleFile).toMatch(/versionCode = [12]/);
+      expect(gradleFile).toMatch(/versionName = "1\.0\.[01]"/);
       expect(gradleFile).toContain("isDebuggable = false");
       expect(gradleFile).toContain("isJniDebuggable = false");
       expect(gradleFile).toContain("isMinifyEnabled = true");

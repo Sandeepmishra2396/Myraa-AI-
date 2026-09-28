@@ -30,6 +30,16 @@ android/.cxx/
 keystore.properties
 release-keystore.*
 
+# Windows Authenticode certificates & Azure signing temporary files
+*.pfx
+*.p12
+*.pem
+*.crt
+*.cer
+azure-signing-metadata*.json
+myraa-azure-signing-*.json
+myraa-win-cert-*.pfx
+
 # Logs
 logs/
 *.log
@@ -47,3 +57,4 @@ Thumbs.db
 secrets.json
 remote_secret.key
 *.key
+

@@ -1,6 +1,8 @@
 package com.myraa.companion.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -37,6 +40,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.myraa.companion.capabilities.StandaloneMobileAssistant
 import com.myraa.companion.networking.ConnectionStatus
 import com.myraa.companion.networking.EmergencyStopState
 import com.myraa.companion.networking.TranscriptItem
@@ -58,6 +62,10 @@ import com.myraa.companion.ui.theme.TextSecondary
 @Composable
 fun MainSessionScreen(
     connectionStatus: ConnectionStatus,
+    isDesktopPaired: Boolean = false,
+    securityLockdownActive: Boolean = false,
+    selectedTarget: StandaloneMobileAssistant.ExecutionTarget = StandaloneMobileAssistant.ExecutionTarget.MOBILE,
+    onSelectTarget: (StandaloneMobileAssistant.ExecutionTarget) -> Unit = {},
     isVoiceActive: Boolean,
     isMicMuted: Boolean,
     isModelSpeaking: Boolean = false,
@@ -80,6 +88,7 @@ fun MainSessionScreen(
 ) {
     val listState = rememberLazyListState()
     var inputText by remember { mutableStateOf("") }
+    val isSystemHalted = emergencyStopState.active || securityLockdownActive
 
     // Auto-scroll transcript when new items arrive
     LaunchedEffect(transcripts.size) {
@@ -111,7 +120,12 @@ fun MainSessionScreen(
                     fontFamily = FontFamily.Monospace
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                ConnectionBadge(status = connectionStatus)
+                StandalonePhoneBadge(isHalted = isSystemHalted)
+                Spacer(modifier = Modifier.width(6.dp))
+                ConnectionBadge(
+                    status = connectionStatus,
+                    isDesktopPaired = isDesktopPaired
+                )
             }
 
             IconButton(onClick = onOpenSettings) {
@@ -123,7 +137,7 @@ fun MainSessionScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
         // Emergency Stop Banner / Button
         EmergencyStopBanner(
@@ -132,6 +146,24 @@ fun MainSessionScreen(
             onReset = onResetEmergencyStop,
             canReset = canResetEmergencyStop
         )
+
+        if (securityLockdownActive) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(EmergencyRed.copy(alpha = 0.2f))
+                    .padding(10.dp)
+            ) {
+                Text(
+                    text = "SECURITY LOCKDOWN ACTIVE — All phone & remote actions are blocked. Recover in Settings → Security.",
+                    color = EmergencyRed,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
 
         // Permission Rationale Banner (if user denied RECORD_AUDIO)
         if (permissionRationale != null) {
@@ -189,18 +221,67 @@ fun MainSessionScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // Target Device Selector (THIS PHONE Standalone vs Optional REMOTE DESKTOP)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(MyraaSurface)
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            val isMobileTarget = selectedTarget == StandaloneMobileAssistant.ExecutionTarget.MOBILE
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (isMobileTarget) MyraaCyan.copy(alpha = 0.2f) else Color.Transparent)
+                    .clickable { onSelectTarget(StandaloneMobileAssistant.ExecutionTarget.MOBILE) }
+                    .padding(vertical = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "THIS PHONE (STANDALONE)",
+                    color = if (isMobileTarget) MyraaCyan else TextSecondary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            val isDesktopTarget = selectedTarget == StandaloneMobileAssistant.ExecutionTarget.DESKTOP
+            val desktopConnected = connectionStatus == ConnectionStatus.AUTHENTICATED
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (isDesktopTarget) MyraaPurple.copy(alpha = 0.25f) else Color.Transparent)
+                    .clickable { onSelectTarget(StandaloneMobileAssistant.ExecutionTarget.DESKTOP) }
+                    .padding(vertical = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = if (desktopConnected) "REMOTE DESKTOP (ONLINE)" else "REMOTE DESKTOP (OPTIONAL)",
+                    color = if (isDesktopTarget) MyraaPink else TextMuted,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
 
         // Avatar Visualizer
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 4.dp),
+                .padding(vertical = 2.dp),
             contentAlignment = Alignment.Center
         ) {
             AvatarVisualizer(
                 isVoiceActive = isVoiceActive && !isMicMuted,
-                isEmergencyStop = emergencyStopState.active
+                isEmergencyStop = isSystemHalted
             )
         }
 
@@ -210,7 +291,7 @@ fun MainSessionScreen(
                 isMicMuted -> StatusAmber to "MIC MUTED"
                 isUserSpeaking -> MyraaCyan to "USER SPEAKING..."
                 isModelSpeaking -> MyraaPurple to "MYRAA SPEAKING..."
-                else -> StatusGreen to "LISTENING..."
+                else -> StatusGreen to "LISTENING (STANDALONE VOICE READY)..."
             }
             Row(
                 modifier = Modifier
@@ -235,9 +316,9 @@ fun MainSessionScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
-        // Voice Controls
+        // Voice Controls — Enabled in Standalone Mode without requiring Desktop pairing
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Center,
@@ -249,8 +330,8 @@ fun MainSessionScreen(
                     containerColor = if (isVoiceActive) EmergencyRed else MyraaCyan
                 ),
                 shape = RoundedCornerShape(24.dp),
-                enabled = connectionStatus == ConnectionStatus.AUTHENTICATED && !emergencyStopState.active,
-                modifier = Modifier.height(46.dp)
+                enabled = !isSystemHalted,
+                modifier = Modifier.height(44.dp)
             ) {
                 Text(
                     text = if (isVoiceActive) "END VOICE SESSION" else "START VOICE SESSION",
@@ -268,7 +349,7 @@ fun MainSessionScreen(
                         containerColor = if (isMicMuted) StatusAmber else MyraaSurfaceElevated
                     ),
                     shape = RoundedCornerShape(24.dp),
-                    modifier = Modifier.height(46.dp)
+                    modifier = Modifier.height(44.dp)
                 ) {
                     Text(
                         text = if (isMicMuted) "UNMUTE" else "MUTE",
@@ -280,7 +361,48 @@ fun MainSessionScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Quick Standalone Phone Capability Chips
+        val chipScrollState = rememberScrollState()
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(chipScrollState),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            val quickActions = listOf(
+                "YouTube Search" to "Search YouTube for lofi hip hop",
+                "Open YouTube" to "Open YouTube",
+                "Set Alarm 7:00" to "Set alarm for 07:00",
+                "Timer 5m" to "Set timer for 5 minutes",
+                "Reminder" to "Remind me to call home",
+                "Battery Status" to "Battery status",
+                "Mobile Context" to "Mobile context",
+                "Save Note" to "Save note Check flight schedule",
+                "Web Search" to "Search web for Android AI news"
+            )
+            quickActions.forEach { (label, command) ->
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MyraaSurfaceElevated)
+                        .clickable(enabled = !isSystemHalted) {
+                            onSendText(command)
+                        }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Text(
+                        text = label,
+                        color = MyraaCyan,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Transcript Header
         Text(
@@ -307,7 +429,11 @@ fun MainSessionScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = if (isVoiceActive) "Listening... speak into your microphone" else "Start a voice session or send text below",
+                        text = if (isVoiceActive) {
+                            "Listening... speak into your microphone or tap a phone action above"
+                        } else {
+                            "MYRAA Mobile is ready. Start a voice session, tap a quick phone action, or type below — no Desktop required."
+                        },
                         color = TextMuted,
                         fontSize = 13.sp
                     )
@@ -327,7 +453,7 @@ fun MainSessionScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Quick Text Command Bar
+        // Quick Text Command Bar — Enabled in Standalone Mode without requiring Desktop pairing
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -335,9 +461,18 @@ fun MainSessionScreen(
             OutlinedTextField(
                 value = inputText,
                 onValueChange = { inputText = it },
-                placeholder = { Text("Send text to MYRAA...", fontSize = 13.sp) },
+                placeholder = {
+                    Text(
+                        text = if (selectedTarget == StandaloneMobileAssistant.ExecutionTarget.DESKTOP) {
+                            "Send command to paired Desktop..."
+                        } else {
+                            "Ask MYRAA or control your phone..."
+                        },
+                        fontSize = 13.sp
+                    )
+                },
                 singleLine = true,
-                enabled = connectionStatus == ConnectionStatus.AUTHENTICATED && !emergencyStopState.active,
+                enabled = !isSystemHalted,
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = MyraaCyan,
                     unfocusedBorderColor = Color(0xFF2A2D40),
@@ -358,7 +493,7 @@ fun MainSessionScreen(
                         inputText = ""
                     }
                 },
-                enabled = inputText.isNotBlank() && connectionStatus == ConnectionStatus.AUTHENTICATED,
+                enabled = inputText.isNotBlank() && !isSystemHalted,
                 colors = ButtonDefaults.buttonColors(containerColor = MyraaPurple),
                 shape = CircleShape,
                 modifier = Modifier.size(44.dp)
@@ -370,13 +505,45 @@ fun MainSessionScreen(
 }
 
 @Composable
-fun ConnectionBadge(status: ConnectionStatus) {
-    val (color, label) = when (status) {
-        ConnectionStatus.AUTHENTICATED -> StatusGreen to "Connected"
-        ConnectionStatus.CONNECTING -> StatusAmber to "Connecting"
-        ConnectionStatus.RECONNECTING -> StatusAmber to "Reconnecting"
-        ConnectionStatus.DISCONNECTED -> TextMuted to "Disconnected"
-        ConnectionStatus.ERROR -> EmergencyRed to "Error"
+fun StandalonePhoneBadge(isHalted: Boolean) {
+    val color = if (isHalted) EmergencyRed else StatusGreen
+    val label = if (isHalted) "Halted" else "Phone AI • Ready"
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(color.copy(alpha = 0.15f))
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(color)
+        )
+        Spacer(modifier = Modifier.width(5.dp))
+        Text(
+            text = label,
+            color = color,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+@Composable
+fun ConnectionBadge(
+    status: ConnectionStatus,
+    isDesktopPaired: Boolean = false
+) {
+    val (color, label) = when {
+        status == ConnectionStatus.AUTHENTICATED -> StatusGreen to "Desktop: Connected"
+        status == ConnectionStatus.CONNECTING -> StatusAmber to "Desktop: Connecting"
+        status == ConnectionStatus.RECONNECTING -> StatusAmber to "Desktop: Reconnecting"
+        isDesktopPaired && status == ConnectionStatus.ERROR -> EmergencyRed to "Desktop: Error"
+        isDesktopPaired -> TextMuted to "Desktop: Offline"
+        else -> MyraaCyan to "Standalone"
     }
 
     Row(
@@ -405,9 +572,18 @@ fun ConnectionBadge(status: ConnectionStatus) {
 @Composable
 fun TranscriptBubble(item: TranscriptItem) {
     val isUser = item.sender == TranscriptItem.Speaker.USER
+    val isSystem = item.sender == TranscriptItem.Speaker.SYSTEM
     val alignment = if (isUser) Alignment.End else Alignment.Start
-    val bgColor = if (isUser) MyraaPurple.copy(alpha = 0.25f) else Color(0xFF1E2235)
-    val labelColor = if (isUser) MyraaPink else MyraaCyan
+    val bgColor = when {
+        isUser -> MyraaPurple.copy(alpha = 0.25f)
+        isSystem -> Color(0xFF192836)
+        else -> Color(0xFF1E2235)
+    }
+    val labelColor = when {
+        isUser -> MyraaPink
+        isSystem -> StatusAmber
+        else -> MyraaCyan
+    }
 
     Column(
         horizontalAlignment = alignment,
@@ -415,7 +591,11 @@ fun TranscriptBubble(item: TranscriptItem) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = if (isUser) "YOU" else "MYRAA",
+                text = when {
+                    isUser -> "YOU"
+                    isSystem -> "MYRAA SYSTEM"
+                    else -> "MYRAA"
+                },
                 color = labelColor,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,

@@ -254,7 +254,7 @@ export class MyraAudioSession {
 
         if (isDenied) {
           this.onError(
-            "Microphone permission was blocked! In your browser, click the 🔒 (lock) icon next to localhost:3000 in the address bar, set Microphone to 'Allow', then refresh and click the power button."
+            "Microphone permission was blocked! Check your browser site permissions or Windows microphone privacy settings, set Microphone to 'Allow', then refresh and click the power button."
           );
         } else if (isNotFound) {
           this.onError(

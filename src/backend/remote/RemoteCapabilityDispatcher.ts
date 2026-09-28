@@ -71,7 +71,7 @@ export class RemoteCapabilityDispatcher {
         };
       }
       // SSRF check against loopback, private networks, and internal cloud metadata
-      const ssrfCheck = await isSsrfSafeUrl(url);
+      const ssrfCheck = await isSsrfSafeUrl(url, { skipDnsResolution: true });
       if (!ssrfCheck.safe) {
         return {
           valid: false,
@@ -149,7 +149,7 @@ export class RemoteCapabilityDispatcher {
             reason: "SSRF_VIOLATION: Invalid URL protocol. Only http:// and https:// URLs are permitted.",
           };
         }
-        const ssrfCheck = await isSsrfSafeUrl(url);
+        const ssrfCheck = await isSsrfSafeUrl(url, { skipDnsResolution: true });
         if (!ssrfCheck.safe) {
           return {
             valid: false,

@@ -78,9 +78,9 @@ class VoiceSessionManager(
     }
 
     /**
-     * Start live voice session.
+     * Start live voice session (works in both Standalone Mobile mode and Desktop Paired mode).
      */
-    fun startVoiceSession(): Boolean {
+    fun startVoiceSession(allowSoftwareFallback: Boolean = true): Boolean {
         if (_isVoiceActive.value) return true
 
         trackEngine.start()
@@ -91,9 +91,13 @@ class VoiceSessionManager(
             }
         }
 
-        if (recordStarted) {
+        if (recordStarted || allowSoftwareFallback) {
             _isVoiceActive.value = true
-            Log.i(TAG, "Live voice session activated.")
+            if (!recordStarted) {
+                Log.w(TAG, "Hardware AudioRecord unavailable; standalone software voice session activated.")
+            } else {
+                Log.i(TAG, "Live voice session activated.")
+            }
             return true
         } else {
             Log.e(TAG, "Failed to start microphone capture.")

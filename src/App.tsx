@@ -1186,7 +1186,7 @@ export default function App() {
                   )}
                   {/microphone|permission/i.test(errorText) && (
                     <p className="text-[11px] text-amber-300 font-mono mt-2 bg-amber-950/40 p-2 rounded-lg border border-amber-500/20 leading-relaxed">
-                      💡 <strong>Fix in 5 seconds:</strong> In your browser address bar (top-left, next to localhost:3000), click the <strong>🔒 lock or site settings icon</strong>, switch <strong>Microphone</strong> from &quot;Block&quot; to <strong>&quot;Allow&quot;</strong>, then refresh the page.
+                      💡 <strong>Fix in 5 seconds:</strong> In your address bar or Windows Microphone Privacy Settings, click the <strong>🔒 site settings icon</strong>, switch <strong>Microphone</strong> from &quot;Block&quot; to <strong>&quot;Allow&quot;</strong>, then refresh the page.
                     </p>
                   )}
                 </div>
