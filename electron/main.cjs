@@ -19,18 +19,35 @@
 const { app, BrowserWindow, Menu, shell, dialog, screen, ipcMain, session, desktopCapturer } = require('electron');
 const path = require('path');
 const http = require('http');
+const https = require('https');
 const net = require('net');
 const { spawn } = require('child_process');
 const fs = require('fs');
 
-// --- Constants & Dynamic Port State ----------------------------------------
+// Support custom isolated userData directory for fresh-install / upgrade testing
+if (process.env.MYRAA_USER_DATA_DIR) {
+  try {
+    fs.mkdirSync(process.env.MYRAA_USER_DATA_DIR, { recursive: true });
+    app.setPath('userData', process.env.MYRAA_USER_DATA_DIR);
+  } catch {
+    /* best-effort override */
+  }
+}
+
+// --- Constants & Production Backend Configuration ---------------------------
+const PRODUCTION_BACKEND_URL = (
+  process.env.MYRAA_BACKEND_URL || 'https://myraa-ai-q0h3.onrender.com'
+).replace(/\/+$/, '');
+const USE_LOCAL_BACKEND = process.env.MYRAA_USE_LOCAL_BACKEND === '1';
 const DEFAULT_SERVER_PORT = 3000;
 let serverPort = DEFAULT_SERVER_PORT;
-let serverOrigin = `http://localhost:${serverPort}`;
+let serverOrigin = USE_LOCAL_BACKEND
+  ? `http://127.0.0.1:${serverPort}`
+  : PRODUCTION_BACKEND_URL;
 const SERVER_READY_TIMEOUT_MS = 40_000;
 
 // In development we run from the repo root; when packaged the app files live in
-// resources/app (asar-unpacked handling is added in the packaging phase).
+// resources/app (asar-unpacked).
 const APP_ROOT = app.isPackaged
   ? path.join(process.resourcesPath, 'app')
   : path.join(__dirname, '..');
@@ -40,6 +57,8 @@ const APP_ICON = path.join(APP_ROOT, 'assets', 'icon.ico');
 
 /** @type {import('child_process').ChildProcess | null} */
 let serverProcess = null;
+/** @type {import('child_process').ChildProcess | null} */
+let agentProcess = null;
 /** @type {string[]} */
 const recentBackendLogs = [];
 /** @type {BrowserWindow | null} */
@@ -80,13 +99,9 @@ function logElectron(message) {
 
 /**
  * Checks whether a TCP port is completely unused on both 127.0.0.1 and 0.0.0.0.
- * First probes with a TCP client connection (because on Windows SO_REUSEADDR can
- * allow binding 127.0.0.1 even when 0.0.0.0:port is already listening), then
- * verifies exclusive bind capability.
  */
 function isPortAvailable(port) {
   return new Promise((resolve) => {
-    // Step 1: Check if anything is already accepting connections on 127.0.0.1:port
     const probe = net.connect({ port, host: '127.0.0.1' });
     let settled = false;
     const finish = (free) => {
@@ -98,7 +113,6 @@ function isPortAvailable(port) {
 
     probe.setTimeout(250);
     probe.once('connect', () => {
-      // A process is actively listening on this port!
       finish(false);
     });
     probe.once('timeout', () => {
@@ -106,7 +120,6 @@ function isPortAvailable(port) {
       verifyBind();
     });
     probe.once('error', () => {
-      // ECONNREFUSED means nothing is listening on 127.0.0.1:port; now verify bind
       verifyBind();
     });
 
@@ -136,8 +149,7 @@ async function findAvailablePort(startPort = DEFAULT_SERVER_PORT, maxAttempts = 
 }
 
 // ---------------------------------------------------------------------------
-// Single-instance guard — second launches focus the existing window instead of
-// starting a second backend on the same port.
+// Single-instance guard — second launches focus the existing window
 // ---------------------------------------------------------------------------
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
@@ -154,8 +166,66 @@ if (!gotSingleInstanceLock) {
 }
 
 // ---------------------------------------------------------------------------
-// Backend lifecycle
+// Bundled Native Desktop Agent & Backend Lifecycle
 // ---------------------------------------------------------------------------
+function startBundledDesktopAgent() {
+  const agentExe = app.isPackaged
+    ? path.join(process.resourcesPath, 'agent', 'myraa-agent.exe')
+    : path.join(APP_ROOT, 'agent_dist', 'myraa-agent', 'myraa-agent.exe');
+
+  if (!fs.existsSync(agentExe)) {
+    logElectron(`Bundled desktop agent not found at ${agentExe}; skipping standalone agent spawn.`);
+    return;
+  }
+
+  try {
+    agentProcess = spawn(agentExe, [], {
+      cwd: path.dirname(agentExe),
+      env: {
+        ...process.env,
+        SORA_AGENT_HOST: '127.0.0.1',
+        SORA_AGENT_PORT: '8765',
+      },
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    logElectron(`Bundled desktop agent spawned (PID=${agentProcess.pid}, path="${agentExe}")`);
+  } catch (err) {
+    logElectron(`Failed to spawn bundled desktop agent: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function waitForProductionBackend(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  const targetUrl = `${PRODUCTION_BACKEND_URL}/health`;
+  const client = targetUrl.startsWith('https:') ? https : http;
+
+  return new Promise((resolve, reject) => {
+    const tryOnce = () => {
+      const req = client.get(targetUrl, (res) => {
+        res.resume();
+        if (res.statusCode === 200) {
+          logElectron(`Production backend health verified at ${targetUrl}`);
+          resolve();
+        } else if (Date.now() > deadline) {
+          reject(new Error(`Production backend returned HTTP ${res.statusCode}`));
+        } else {
+          setTimeout(tryOnce, 500);
+        }
+      });
+      req.on('error', (err) => {
+        if (Date.now() > deadline) {
+          reject(new Error(`Production backend unreachable at ${targetUrl}: ${err.message}`));
+        } else {
+          setTimeout(tryOnce, 500);
+        }
+      });
+      req.setTimeout(5000, () => req.destroy());
+    };
+    tryOnce();
+  });
+}
+
 function startBackend(port) {
   if (!fs.existsSync(SERVER_ENTRY)) {
     throw new Error(
@@ -164,17 +234,9 @@ function startBackend(port) {
   }
 
   serverPort = port;
-  serverOrigin = `http://localhost:${serverPort}`;
+  serverOrigin = `http://127.0.0.1:${serverPort}`;
 
-  // Use the Node runtime bundled with Electron (ELECTRON_RUN_AS_NODE) so the
-  // machine does not need a separate Node install once packaged.
-  // Data (memories, settings, secrets, logs) must live in a writable per-user
-  // folder — the install dir under Program Files is read-only.
   const dataDir = app.getPath('userData');
-
-  // Frozen Python desktop agent (bundled as an extraResource when packaged).
-  // In development this file won't exist, so the backend falls back to running
-  // the agent from source with a local Python interpreter.
   const agentExe = app.isPackaged
     ? path.join(process.resourcesPath, 'agent', 'myraa-agent.exe')
     : path.join(APP_ROOT, 'agent_dist', 'myraa-agent', 'myraa-agent.exe');
@@ -194,7 +256,7 @@ function startBackend(port) {
   }
 
   logElectron(
-    `Spawning backend: execPath="${process.execPath}" entry="${SERVER_ENTRY}" cwd="${APP_ROOT}" port=${serverPort} isPackaged=${app.isPackaged} agentExeExists=${fs.existsSync(agentExe)}`,
+    `Spawning local fallback backend: execPath="${process.execPath}" entry="${SERVER_ENTRY}" cwd="${APP_ROOT}" port=${serverPort} isPackaged=${app.isPackaged} agentExeExists=${fs.existsSync(agentExe)}`,
   );
 
   serverProcess = spawn(process.execPath, [SERVER_ENTRY], {
@@ -235,12 +297,23 @@ function startBackend(port) {
 }
 
 function stopBackend() {
+  if (agentProcess && !agentProcess.killed) {
+    try {
+      if (process.platform === 'win32') {
+        spawn('taskkill', ['/pid', String(agentProcess.pid), '/T', '/F'], { windowsHide: true });
+      } else {
+        agentProcess.kill('SIGTERM');
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+  agentProcess = null;
+
   if (serverProcess && !serverProcess.killed) {
     try {
       if (process.platform === 'win32') {
-        // Kill the whole tree so the auto-spawned Python agent goes too.
         spawn('taskkill', ['/pid', String(serverProcess.pid), '/T', '/F'], { windowsHide: true });
-        spawn('taskkill', ['/IM', 'myraa-agent.exe', '/F'], { windowsHide: true });
       } else {
         serverProcess.kill('SIGTERM');
       }
@@ -248,10 +321,17 @@ function stopBackend() {
       /* best-effort */
     }
   }
+  if (process.platform === 'win32') {
+    try {
+      spawn('taskkill', ['/IM', 'myraa-agent.exe', '/F'], { windowsHide: true });
+    } catch {
+      /* best-effort */
+    }
+  }
   serverProcess = null;
 }
 
-/** Poll the backend until our spawned child answers /api/health, or reject on exit/timeout. */
+/** Poll the local fallback backend until /api/health answers 200. */
 function waitForBackend(timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
@@ -328,7 +408,7 @@ function createMainWindow() {
 
   Menu.setApplicationMenu(null);
 
-  // Open external links (http/https to non-local hosts) in the real browser
+  // Open external links (http/https to non-backend hosts) in the real browser
   // instead of navigating the app window.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http') && !url.startsWith(serverOrigin)) {
@@ -340,13 +420,72 @@ function createMainWindow() {
 
   mainWindow.once('ready-to-show', () => {
     if (splashWindow) splashWindow.close();
-    mainWindow?.show();
-    mainWindow?.focus();
+    if (!process.env.MYRAA_HEADLESS_SMOKE) {
+      mainWindow?.show();
+      mainWindow?.focus();
+    }
   });
 
+  if (process.env.MYRAA_SMOKE_TEST_OUT) {
+    const outFile = process.env.MYRAA_SMOKE_TEST_OUT;
+    mainWindow.webContents.once('did-finish-load', () => {
+      setTimeout(async () => {
+        try {
+          const report = await mainWindow.webContents.executeJavaScript(`
+            (async () => {
+              const healthRes = await fetch('/health').then(r => r.json()).catch(e => ({ error: String(e) }));
+              const pairStatus = await fetch('/api/remote/pair-code/status').then(r => r.json()).catch(e => ({ error: String(e) }));
+              let agentResult = null;
+              for (let i = 0; i < 10; i++) {
+                if (window.myraa && window.myraa.executeDesktopTool) {
+                  const res = await window.myraa.executeDesktopTool('systemInfo', {});
+                  if (res && !res.error) {
+                    agentResult = res;
+                    break;
+                  }
+                  agentResult = res;
+                }
+                await new Promise(r => setTimeout(r, 800));
+              }
+              return {
+                href: window.location.href,
+                origin: window.location.origin,
+                protocol: window.location.protocol,
+                title: document.title,
+                isDesktop: Boolean(window.myraa && window.myraa.isDesktop),
+                appVersion: window.myraa ? window.myraa.appVersion : null,
+                productionBackendUrl: window.myraa ? window.myraa.productionBackendUrl : null,
+                hasPairingModalOrUi: document.body.innerText.includes('Pairing') || document.body.innerText.includes('MYRAA'),
+                storedSessionPresent: Boolean(localStorage.getItem('sora_remote_session')),
+                health: healthRes,
+                pairStatus,
+                desktopAgentSystemInfo: agentResult,
+              };
+            })();
+          `);
+          fs.writeFileSync(outFile, JSON.stringify({
+            ok: true,
+            timestamp: new Date().toISOString(),
+            execPath: process.execPath,
+            userDataDir: app.getPath('userData'),
+            isPackaged: app.isPackaged,
+            serverOrigin,
+            ...report,
+          }, null, 2), 'utf-8');
+        } catch (err) {
+          fs.writeFileSync(outFile, JSON.stringify({
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          }, null, 2), 'utf-8');
+        } finally {
+          isQuitting = true;
+          app.quit();
+        }
+      }, 2500);
+    });
+  }
+
   mainWindow.on('close', (event) => {
-    // If the floating companion is active on the desktop, hide mainWindow instead
-    // of terminating the process so the Gemini Live voice session continues!
     if (!isQuitting && floatingWindow && !floatingWindow.isDestroyed() && floatingWindow.isVisible()) {
       event.preventDefault();
       mainWindow?.hide();
@@ -594,10 +733,10 @@ function setupIpcHandlers() {
 async function bootstrap() {
   app.setAppUserModelId('com.myraa.desktop');
 
-  // Grant microphone, camera, and display-capture permissions to the local MYRAA origin
+  // Grant microphone, camera, and display-capture permissions to the MYRAA production origin
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
     const url = webContents.getURL() || '';
-    if (url.startsWith(serverOrigin) || url.startsWith('http://localhost:') || url.startsWith('http://127.0.0.1')) {
+    if (url.startsWith(serverOrigin) || url.startsWith(PRODUCTION_BACKEND_URL)) {
       if (['media', 'MediaKeySystem', 'geolocation', 'notifications', 'fullscreen', 'pointerLock', 'display-capture'].includes(permission)) {
         return callback(true);
       }
@@ -624,9 +763,15 @@ async function bootstrap() {
   setupIpcHandlers();
 
   try {
-    const port = await findAvailablePort(DEFAULT_SERVER_PORT, 20);
-    startBackend(port);
-    await waitForBackend(SERVER_READY_TIMEOUT_MS);
+    if (USE_LOCAL_BACKEND) {
+      const port = await findAvailablePort(DEFAULT_SERVER_PORT, 20);
+      startBackend(port);
+      await waitForBackend(SERVER_READY_TIMEOUT_MS);
+    } else {
+      serverOrigin = PRODUCTION_BACKEND_URL;
+      startBundledDesktopAgent();
+      await waitForProductionBackend(SERVER_READY_TIMEOUT_MS);
+    }
     createMainWindow();
   } catch (err) {
     logElectron(`Bootstrap error: ${err instanceof Error ? err.stack || err.message : String(err)}`);

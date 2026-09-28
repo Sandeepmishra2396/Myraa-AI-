@@ -60,6 +60,8 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            isDebuggable = false
+            isJniDebuggable = false
             signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -106,9 +108,9 @@ dependencies {
     implementation(libs.compose.material3)
 
     // OkHttp3 — WebSocket streaming to MYRAA Core /remote-live endpoint
-    // Full-duplex: 16kHz PCM16 up / 24kHz PCM16 down over ws(s)://<desktop>:3000/remote-live
+    // Full-duplex: 16kHz PCM16 up / 24kHz PCM16 down over wss://<host>/remote-live
     implementation(libs.okhttp)
-    implementation(libs.okhttp.logging)
+    debugImplementation(libs.okhttp.logging)
 
     // AndroidX Security Crypto — Keystore-backed EncryptedSharedPreferences
     // Stores sora_dev_... bearer tokens with Android Keystore AES-256-GCM

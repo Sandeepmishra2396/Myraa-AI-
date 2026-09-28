@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('myraa', {
   isDesktop: true,
   platform: process.platform,
   version: process.versions.electron,
+  appVersion: '1.0.0',
+  productionBackendUrl: 'https://myraa-ai-q0h3.onrender.com',
 
   // Window controls
   openFloating: () => ipcRenderer.send('floating:open'),

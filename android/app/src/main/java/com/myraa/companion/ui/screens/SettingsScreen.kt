@@ -127,7 +127,11 @@ fun SettingsScreen(
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SettingsRow(label = "Host IP", value = serverHost)
                 SettingsRow(label = "Port", value = serverPort.toString())
-                SettingsRow(label = "WebSocket URL", value = "ws://$serverHost:$serverPort/remote-live", monospace = true)
+                SettingsRow(
+                    label = "WebSocket URL",
+                    value = com.myraa.companion.networking.MyraaWebSocketClient.buildWsUrl(serverHost, serverPort),
+                    monospace = true
+                )
             }
         }
 

@@ -28,9 +28,9 @@ if (Test-Path $KeystoreName) {
     exit 0
 }
 
-$StorePass = if ($env:MYRAA_STAGING_PASSWORD) { $env:MYRAA_STAGING_PASSWORD } else { "MyraaReleaseStagingPass2026!" }
+$StorePass = if ($env:MYRAA_RELEASE_STORE_PASSWORD) { $env:MYRAA_RELEASE_STORE_PASSWORD } elseif ($env:MYRAA_STAGING_PASSWORD) { $env:MYRAA_STAGING_PASSWORD } else { "MyraaReleaseStagingPass2026!" }
 
-Write-Host "[MYRAA KeyGen] Generating staging release keystore: $KeystoreName..."
+Write-Host "[MYRAA KeyGen] Generating production release keystore: $KeystoreName..."
 
 & $KeytoolPath -genkeypair -v `
   -keystore $KeystoreName `
@@ -41,11 +41,12 @@ Write-Host "[MYRAA KeyGen] Generating staging release keystore: $KeystoreName...
   -storetype PKCS12 `
   -storepass $StorePass `
   -keypass $StorePass `
-  -dname "CN=MYRAA Companion Staging, OU=Engineering, O=MYRAA, L=Bengaluru, ST=Karnataka, C=IN"
+  -dname "CN=MYRAA Production Release, OU=Mobile Engineering, O=Mishtron Labs, L=Bengaluru, ST=Karnataka, C=IN"
 
 if ($LASTEXITCODE -eq 0) {
-    Write-Host "[MYRAA KeyGen] Staging release keystore created successfully: $KeystoreName"
+    Write-Host "[MYRAA KeyGen] Production release keystore created successfully: $KeystoreName"
     Write-Host "[MYRAA KeyGen] Note: Keystores are excluded in .gitignore to prevent credential leakage."
 } else {
     Write-Error "[MYRAA KeyGen] Failed to generate keystore. Exit code: $LASTEXITCODE"
 }
+

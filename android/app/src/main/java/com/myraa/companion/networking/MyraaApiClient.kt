@@ -35,27 +35,16 @@ class MyraaApiClient(
 
         fun buildBaseUrl(host: String, port: Int): String {
             val trimmed = host.trim().removeSuffix("/")
-            if (trimmed.startsWith("https://", ignoreCase = true) || trimmed.startsWith("http://", ignoreCase = true)) {
+            if (trimmed.startsWith("https://", ignoreCase = true)) {
                 return trimmed
             }
             val cleanHost = trimmed
+                .removePrefix("https://")
+                .removePrefix("http://")
                 .removePrefix("wss://")
                 .removePrefix("ws://")
-            val isLocalOrLan = cleanHost == "localhost" ||
-                cleanHost == "127.0.0.1" ||
-                cleanHost == "10.0.2.2" ||
-                cleanHost.startsWith("192.168.") ||
-                cleanHost.startsWith("10.") ||
-                cleanHost.endsWith(".local") ||
-                Regex("^172\\.(1[6-9]|2[0-9]|3[0-1])\\..*").matches(cleanHost)
-            val useHttps = port == 443 || !isLocalOrLan
-            val scheme = if (useHttps) "https" else "http"
-            val includePort = if (useHttps) {
-                port != 443 && port != 80 && port != 3000
-            } else {
-                port != 80
-            }
-            return if (includePort) "$scheme://$cleanHost:$port" else "$scheme://$cleanHost"
+            val includePort = port != 443 && port != 80 && port != 3000
+            return if (includePort) "https://$cleanHost:$port" else "https://$cleanHost"
         }
     }
 
@@ -73,7 +62,7 @@ class MyraaApiClient(
         val meta = JSONObject().apply {
             put("model", "${Build.MANUFACTURER} ${Build.MODEL}")
             put("androidVersion", Build.VERSION.RELEASE)
-            put("appVersion", "0.16.0")
+            put("appVersion", "1.0.0")
         }
 
         val bodyJson = JSONObject().apply {
