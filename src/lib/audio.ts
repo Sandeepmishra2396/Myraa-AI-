@@ -132,6 +132,8 @@ export class MyraAudioSession {
   private onNotification?: (notification: any) => void;
   private onSessionUpdate?: (updated: StoredRemoteSession) => void;
   private onConnectionStateChange?: (state: CanonicalConnectionState) => void;
+  private onProsodyChange?: (prosody: any) => void;
+  private currentProsody: any = null;
   private token?: string;
 
   constructor(handlers: {
@@ -143,6 +145,7 @@ export class MyraAudioSession {
     onNotification?: (notification: any) => void;
     onSessionUpdate?: (updated: StoredRemoteSession) => void;
     onConnectionStateChange?: (state: CanonicalConnectionState) => void;
+    onProsodyChange?: (prosody: any) => void;
     token?: string;
   }) {
     this.onStateChange = handlers.onStateChange;
@@ -153,6 +156,7 @@ export class MyraAudioSession {
     this.onNotification = handlers.onNotification;
     this.onSessionUpdate = handlers.onSessionUpdate;
     this.onConnectionStateChange = handlers.onConnectionStateChange;
+    this.onProsodyChange = handlers.onProsodyChange;
     this.token = handlers.token;
 
     this.reconnectController = new RemoteReconnectController({
@@ -654,6 +658,16 @@ export class MyraAudioSession {
       const source = this.outputAudioCtx.createBufferSource();
       source.buffer = buffer;
 
+      // Apply dynamic speaking rate if prosody profile exists
+      if (
+        this.currentProsody?.rate &&
+        typeof this.currentProsody.rate === "number" &&
+        this.currentProsody.rate >= 0.8 &&
+        this.currentProsody.rate <= 1.3
+      ) {
+        source.playbackRate.value = this.currentProsody.rate;
+      }
+
       // Connect source to gain which is routed to analyser & speakers
       source.connect(this.outputGainNode);
 
@@ -873,6 +887,16 @@ export class MyraAudioSession {
       // Handle interruption signal (e.g. user talked over Myraa)
       if (data.type === "interrupted") {
         this.handleInterruption();
+      }
+
+      // Handle speech prosody metadata event
+      if (data.type === "speech_prosody" && data.prosody) {
+        this.currentProsody = data.prosody;
+        if (this.onProsodyChange) {
+          try {
+            this.onProsodyChange(data.prosody);
+          } catch {}
+        }
       }
 
       // Turn complete

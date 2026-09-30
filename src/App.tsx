@@ -642,6 +642,20 @@ export default function App() {
           setUserCaption("");
         }
       },
+      onProsodyChange: (prosody: any) => {
+        if (prosody?.emotion) {
+          const map: Record<string, MyraaEmotion> = {
+            happy: "happy",
+            excited: "excited",
+            curious: "curious",
+            concerned: "confused",
+            calm: "idle",
+            neutral: "idle",
+          };
+          const mapped = map[prosody.emotion];
+          if (mapped) setActiveEmotion(mapped);
+        }
+      },
       onNotification: (data: any) => {
         if (data.type === "companion_notification" && data.notification) {
           const notif = data.notification;

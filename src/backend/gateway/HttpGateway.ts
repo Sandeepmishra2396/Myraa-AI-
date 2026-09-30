@@ -4963,6 +4963,85 @@ export function createHttpApp(): express.Application {
     }
   });
 
+  // ── Voice & Speech Prosody Layer Endpoints ──────────────────────────────
+  app.post("/api/voice/prosody", async (req, res) => {
+    try {
+      const { text, context } = req.body || {};
+      if (!text || typeof text !== "string") {
+        res.status(400).json({ error: "Missing required string 'text'" });
+        return;
+      }
+      const { speechProsodyEngine } = await import("../voice/index.ts");
+      const result = speechProsodyEngine.transformSpeech(text, context);
+      res.status(200).json({ ok: true, ...result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Prosody transform failed") });
+    }
+  });
+
+  app.post("/api/voice/synthesize", async (req, res) => {
+    try {
+      const { text, context, options } = req.body || {};
+      if (!text || typeof text !== "string") {
+        res.status(400).json({ error: "Missing required string 'text'" });
+        return;
+      }
+      const { voiceSynthesizer } = await import("../voice/index.ts");
+      const keyMeta = resolveApiKeyWithMetadata();
+      const result = await voiceSynthesizer.synthesize(text, context, options, keyMeta.key);
+      res.status(200).json({
+        ok: true,
+        prosody: result.prosody,
+        audio: {
+          format: result.audio.format,
+          sampleRate: result.audio.sampleRate,
+          channels: result.audio.channels,
+          durationMs: result.audio.durationMs,
+          pcm16Base64: result.audio.pcm16Base64,
+          byteLength: result.audio.byteLength,
+        },
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Speech synthesis failed") });
+    }
+  });
+
+  app.get("/api/voice/synthesize", async (req, res) => {
+    try {
+      const text = typeof req.query.text === "string" ? req.query.text : "";
+      if (!text) {
+        res.status(400).json({ error: "Missing required query 'text'" });
+        return;
+      }
+      const emotion = typeof req.query.emotion === "string" ? (req.query.emotion as any) : undefined;
+      const { voiceSynthesizer } = await import("../voice/index.ts");
+      const keyMeta = resolveApiKeyWithMetadata();
+      const result = await voiceSynthesizer.synthesize(text, { forceEmotion: emotion }, { format: "wav" }, keyMeta.key);
+
+      if (result.audio.wavBuffer) {
+        res.setHeader("Content-Type", "audio/wav");
+        res.setHeader("Content-Length", result.audio.wavBuffer.length);
+        res.setHeader("Cache-Control", "no-cache");
+        res.status(200).send(result.audio.wavBuffer);
+      } else {
+        res.status(500).json({ error: "Audio buffer generation failed" });
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Audio stream generation failed") });
+    }
+  });
+
+  app.get("/api/voice/quick-ack", async (req, res) => {
+    try {
+      const text = typeof req.query.text === "string" ? req.query.text : "";
+      const { speechProsodyEngine } = await import("../voice/index.ts");
+      const ack = speechProsodyEngine.getQuickAcknowledgement(text);
+      res.status(200).json({ ok: true, acknowledgement: ack });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Quick ack failed") });
+    }
+  });
+
   // ── Global Sanitized Error Handling Middleware ───────────────────────────
   // Guarantees fail-closed error responses and zero stack trace / path leakage to clients
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

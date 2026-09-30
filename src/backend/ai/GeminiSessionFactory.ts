@@ -24,6 +24,7 @@ import { memoryStore } from "../memory/MemoryStore.ts";
 import { buildSystemInstructions, buildCompleteSystemInstructions } from "../projects/ContextManager.ts";
 import { ToolOrchestrator } from "../tools/ToolOrchestrator.ts";
 import type { SecurityContext } from "../security/index.ts";
+import { speechProsodyEngine } from "../voice/SpeechProsodyEngine.ts";
 
 
 // Logger placeholders — injected at startup via initGeminiLoggers()
@@ -2438,6 +2439,17 @@ export class GeminiSessionFactory {
             sendToClient({ type: "turnComplete" });
 
             if (currentModelResponseRef.text.trim()) {
+              const lastUserTurn = [...dialogueHistory].reverse().find((t) => t.role === "user")?.text;
+              const prosodyResult = speechProsodyEngine.transformSpeech(
+                currentModelResponseRef.text,
+                { userPrompt: lastUserTurn }
+              );
+              sendToClient({
+                type: "speech_prosody",
+                prosody: prosodyResult.profile,
+                audioHints: prosodyResult.audioHints,
+              });
+
               dialogueHistory.push({
                 role: "model",
                 text: currentModelResponseRef.text,
