@@ -208,6 +208,17 @@ export async function buildCompleteSystemInstructions(
   if (studyCard) {
     instructions += "\n\n" + studyCard;
   }
+
+  try {
+    const { languageManager } = await import("../voice/index.ts");
+    const langCard = languageManager.getSystemPromptDirective();
+    if (langCard) {
+      instructions += "\n\n" + langCard;
+    }
+  } catch {
+    /* language directive is best-effort */
+  }
+
   return instructions;
 }
 

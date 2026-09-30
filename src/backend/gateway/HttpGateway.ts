@@ -2699,6 +2699,12 @@ export function createHttpApp(): express.Application {
         ).catch(() => {});
       }
 
+      // If language preference changed, sync to languageManager immediately
+      if ("languagePreference" in patch && typeof patch.languagePreference === "string") {
+        const { languageManager } = await import("../voice/index.ts");
+        languageManager.setPreferredLanguage(patch.languagePreference as any);
+      }
+
       logCommand(`SETTINGS_UPDATED ${JSON.stringify(patch)}`);
       logJson("info", "settings_updated", { patch });
       res.json(next);
@@ -4964,15 +4970,99 @@ export function createHttpApp(): express.Application {
   });
 
   // ── Voice & Speech Prosody Layer Endpoints ──────────────────────────────
+  app.get("/api/voice/languages", async (_req, res) => {
+    try {
+      const { languageManager } = await import("../voice/index.ts");
+      const profiles = languageManager.getAllProfiles().map((p) => ({
+        id: p.id,
+        name: p.name,
+        nativeName: p.nativeName,
+        locale: p.locale,
+        script: p.script,
+        sttLocale: p.sttConfig.locale,
+        sttFallback: p.sttConfig.fallbackLocale,
+        ttsLocale: p.ttsConfig.locale,
+        ttsFallback: p.ttsConfig.fallbackLocale,
+        geminiVoice: p.ttsConfig.geminiVoice,
+        hasNativeTts: p.ttsConfig.providerNativeSupport,
+        hasNativeStt: p.sttConfig.providerNativeSupport,
+      }));
+      res.status(200).json({
+        ok: true,
+        preferredLanguage: languageManager.getPreferredLanguage(),
+        activeLanguage: languageManager.getActiveLanguage(),
+        languages: profiles,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to list languages") });
+    }
+  });
+
+  app.get("/api/voice/language", async (req, res) => {
+    try {
+      const conversationId = typeof req.query.conversationId === "string" ? req.query.conversationId : "default";
+      const { languageManager } = await import("../voice/index.ts");
+      res.status(200).json({
+        ok: true,
+        preferredLanguage: languageManager.getPreferredLanguage(),
+        activeLanguage: languageManager.getActiveLanguage(conversationId),
+        switchHistory: languageManager.getSwitchHistory(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get language state") });
+    }
+  });
+
+  app.post("/api/voice/language", async (req, res) => {
+    try {
+      const { language, conversationId } = req.body || {};
+      if (!language || typeof language !== "string") {
+        res.status(400).json({ error: "Missing required string 'language'" });
+        return;
+      }
+      const { languageManager } = await import("../voice/index.ts");
+      languageManager.setPreferredLanguage(language as any);
+      if (conversationId && typeof conversationId === "string" && language !== "auto") {
+        languageManager.setActiveLanguage(language as any, conversationId, "api_manual");
+      }
+      res.status(200).json({
+        ok: true,
+        preferredLanguage: languageManager.getPreferredLanguage(),
+        activeLanguage: languageManager.getActiveLanguage(conversationId || "default"),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to set language preference") });
+    }
+  });
+
+  app.post("/api/voice/detect-language", async (req, res) => {
+    try {
+      const { text } = req.body || {};
+      if (!text || typeof text !== "string") {
+        res.status(400).json({ error: "Missing required string 'text'" });
+        return;
+      }
+      const { languageManager } = await import("../voice/index.ts");
+      const detection = languageManager.detectLanguage(text);
+      res.status(200).json({ ok: true, ...detection });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Language detection failed") });
+    }
+  });
+
   app.post("/api/voice/prosody", async (req, res) => {
     try {
-      const { text, context } = req.body || {};
+      const { text, context, language } = req.body || {};
       if (!text || typeof text !== "string") {
         res.status(400).json({ error: "Missing required string 'text'" });
         return;
       }
       const { speechProsodyEngine } = await import("../voice/index.ts");
-      const result = speechProsodyEngine.transformSpeech(text, context);
+      const mergedContext = {
+        ...context,
+        forceLanguage: language || context?.forceLanguage,
+      };
+      const result = speechProsodyEngine.transformSpeech(text, mergedContext);
       res.status(200).json({ ok: true, ...result });
     } catch (err: any) {
       res.status(500).json({ error: sanitizeError(err?.message || "Prosody transform failed") });
@@ -4981,14 +5071,18 @@ export function createHttpApp(): express.Application {
 
   app.post("/api/voice/synthesize", async (req, res) => {
     try {
-      const { text, context, options } = req.body || {};
+      const { text, context, options, language } = req.body || {};
       if (!text || typeof text !== "string") {
         res.status(400).json({ error: "Missing required string 'text'" });
         return;
       }
       const { voiceSynthesizer } = await import("../voice/index.ts");
       const keyMeta = resolveApiKeyWithMetadata();
-      const result = await voiceSynthesizer.synthesize(text, context, options, keyMeta.key);
+      const mergedContext = {
+        ...context,
+        forceLanguage: language || context?.forceLanguage,
+      };
+      const result = await voiceSynthesizer.synthesize(text, mergedContext, options, keyMeta.key);
       res.status(200).json({
         ok: true,
         prosody: result.prosody,
@@ -5014,9 +5108,15 @@ export function createHttpApp(): express.Application {
         return;
       }
       const emotion = typeof req.query.emotion === "string" ? (req.query.emotion as any) : undefined;
+      const language = typeof req.query.language === "string" ? (req.query.language as any) : undefined;
       const { voiceSynthesizer } = await import("../voice/index.ts");
       const keyMeta = resolveApiKeyWithMetadata();
-      const result = await voiceSynthesizer.synthesize(text, { forceEmotion: emotion }, { format: "wav" }, keyMeta.key);
+      const result = await voiceSynthesizer.synthesize(
+        text,
+        { forceEmotion: emotion, forceLanguage: language },
+        { format: "wav" },
+        keyMeta.key
+      );
 
       if (result.audio.wavBuffer) {
         res.setHeader("Content-Type", "audio/wav");
@@ -5034,8 +5134,9 @@ export function createHttpApp(): express.Application {
   app.get("/api/voice/quick-ack", async (req, res) => {
     try {
       const text = typeof req.query.text === "string" ? req.query.text : "";
+      const language = typeof req.query.language === "string" ? (req.query.language as any) : undefined;
       const { speechProsodyEngine } = await import("../voice/index.ts");
-      const ack = speechProsodyEngine.getQuickAcknowledgement(text);
+      const ack = speechProsodyEngine.getQuickAcknowledgement(text, language);
       res.status(200).json({ ok: true, acknowledgement: ack });
     } catch (err: any) {
       res.status(500).json({ error: sanitizeError(err?.message || "Quick ack failed") });

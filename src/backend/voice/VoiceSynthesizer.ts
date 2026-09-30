@@ -22,6 +22,8 @@ import type {
   AudioSynthesisResult,
   ProsodyTransformationResult,
 } from "./ProsodyTypes.ts";
+import { languageManager } from "./LanguageManager.ts";
+import type { ActiveLanguage } from "./LanguageProfile.ts";
 
 export class VoiceSynthesizer {
   private static readonly DEFAULT_SAMPLE_RATE = 24000; // 24 kHz Gemini Live standard
@@ -69,7 +71,8 @@ export class VoiceSynthesizer {
         sampleRate,
         rateMultiplier,
         pitchMultiplier,
-        prosody.profile.emotion
+        prosody.profile.emotion,
+        prosody.profile.language
       );
     }
 
@@ -97,14 +100,15 @@ export class VoiceSynthesizer {
    * High-fidelity Formant Synthesizer:
    * Generates genuine 24,000 Hz 16-bit mono Little-Endian PCM audio.
    * Modulates vocal formants (F1, F2), natural pitch vibrato, pause silences,
-   * and amplitude envelopes based on emotion.
+   * and amplitude envelopes based on emotion and language phonology.
    */
   public generateProceduralPcm(
     text: string,
     sampleRate = 24000,
     rateMultiplier = 1.0,
     pitchMultiplier = 1.0,
-    emotion = "neutral"
+    emotion = "neutral",
+    language: ActiveLanguage = "english"
   ): Buffer {
     const words = text.split(/\s+/).filter(Boolean);
     const totalWords = Math.max(1, words.length);
@@ -123,9 +127,11 @@ export class VoiceSynthesizer {
     if (emotion === "calm") f0 *= 0.94;
     if (emotion === "concerned") f0 *= 0.96;
 
-    // Resonant formants for sweet warm voice (F1=600Hz, F2=1700Hz, F3=2700Hz)
-    const f1 = 600.0;
-    const f2 = 1700.0;
+    // Resonant formants customized by target language phonetics
+    const langProfile = languageManager.getLanguageProfile(language);
+    const formants = langProfile.ttsConfig.vowelFormants;
+    const f1 = (formants.a.f1 + formants.e.f1) / 2;
+    const f2 = (formants.a.f2 + formants.e.f2) / 2;
     const f3 = 2700.0;
 
     let currentSampleIndex = 0;

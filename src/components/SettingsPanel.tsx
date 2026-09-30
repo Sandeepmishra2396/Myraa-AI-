@@ -17,9 +17,10 @@ import {
   EyeOff,
   ExternalLink,
   Shield,
+  Globe,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { MyraaSettings, DEFAULT_SETTINGS, loadSettings, saveSettings } from "../lib/settingsStore";
+import { MyraaSettings, SupportedLanguageSetting, DEFAULT_SETTINGS, loadSettings, saveSettings } from "../lib/settingsStore";
 import { StoredRemoteSession, STORAGE_KEY } from "./remote/CloudPairingModal";
 import { authenticatedRemoteFetch } from "../lib/remoteAuth";
 
@@ -718,7 +719,64 @@ export function SettingsPanel({
               {/* ---------------- VOICE ---------------- */}
               {activeTab === "voice" && (
                 <div className="space-y-4">
-                  <div className="text-[10px] font-mono uppercase tracking-widest text-slate-500">
+                  {/* --- Multilingual Voice Engine Section --- */}
+                  <div className="space-y-3">
+                    <div className="text-[10px] font-mono uppercase tracking-widest text-slate-500 flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Globe size={13} className="text-cyan-400" />
+                        <span>Language &amp; Voice Engine</span>
+                      </div>
+                      <span className="text-[9px] text-cyan-300 font-mono">10 Languages</span>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label htmlFor="language-select" className="block text-[10px] font-mono tracking-wider text-slate-300 uppercase">
+                        Conversation Language
+                      </label>
+                      <select
+                        id="language-select"
+                        name="languagePreference"
+                        aria-label="Conversation Language"
+                        value={settings.languagePreference || "auto"}
+                        onChange={(e) => {
+                          const lang = e.target.value as SupportedLanguageSetting;
+                          onChange({ languagePreference: lang });
+                          void fetch("/api/voice/language", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ language: lang }),
+                          }).catch(() => {});
+                        }}
+                        className="w-full px-3 py-2 rounded-xl border border-white/10 bg-white/5 text-sm text-white font-mono focus:outline-none focus:border-cyan-400/50 transition cursor-pointer"
+                      >
+                        <option value="auto">🌐 Auto Detect (Real-Time)</option>
+                        <option value="hindi">🇮🇳 Hindi (हिन्दी)</option>
+                        <option value="english">🇺🇸 English</option>
+                        <option value="hinglish">🇮🇳 Hinglish (Hindi + English)</option>
+                        <option value="bengali">🇮🇳 Bengali (বাংলা)</option>
+                        <option value="bhojpuri">🇮🇳 Bhojpuri (भोजपुरी)</option>
+                        <option value="maithili">🇮🇳 Maithili (मैथिली)</option>
+                        <option value="japanese">🇯🇵 Japanese (日本語)</option>
+                        <option value="tamil">🇮🇳 Tamil (தமிழ்)</option>
+                        <option value="telugu">🇮🇳 Telugu (తెలుగు)</option>
+                        <option value="russian">🇷🇺 Russian (Русский)</option>
+                      </select>
+                      <div className="text-[9px] font-mono text-slate-400 flex items-center justify-between">
+                        <span>
+                          {settings.languagePreference === "auto" || !settings.languagePreference
+                            ? "Auto-detects spoken language dynamically"
+                            : `Locked to ${settings.languagePreference.toUpperCase()}`}
+                        </span>
+                        <span className="text-cyan-400 font-semibold">
+                          {settings.languagePreference === "bhojpuri" || settings.languagePreference === "maithili"
+                            ? "Dialectal Prosody Active"
+                            : "Native Voice Engine Active"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-white/10 text-[10px] font-mono uppercase tracking-widest text-slate-500">
                     Wake Word &amp; Microphone
                   </div>
 

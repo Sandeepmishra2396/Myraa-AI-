@@ -24,7 +24,7 @@ import { memoryStore } from "../memory/MemoryStore.ts";
 import { buildSystemInstructions, buildCompleteSystemInstructions } from "../projects/ContextManager.ts";
 import { ToolOrchestrator } from "../tools/ToolOrchestrator.ts";
 import type { SecurityContext } from "../security/index.ts";
-import { speechProsodyEngine } from "../voice/SpeechProsodyEngine.ts";
+import { speechProsodyEngine, languageManager } from "../voice/index.ts";
 
 
 // Logger placeholders — injected at startup via initGeminiLoggers()
@@ -2440,9 +2440,15 @@ export class GeminiSessionFactory {
 
             if (currentModelResponseRef.text.trim()) {
               const lastUserTurn = [...dialogueHistory].reverse().find((t) => t.role === "user")?.text;
+              const liveSessionId = "live-session";
+              let targetLanguage = languageManager.getActiveLanguage(liveSessionId);
+              if (lastUserTurn) {
+                const turnAnalysis = languageManager.processUserTurn(lastUserTurn, liveSessionId);
+                targetLanguage = turnAnalysis.activeLanguage;
+              }
               const prosodyResult = speechProsodyEngine.transformSpeech(
                 currentModelResponseRef.text,
-                { userPrompt: lastUserTurn }
+                { userPrompt: lastUserTurn, forceLanguage: targetLanguage, conversationId: liveSessionId }
               );
               sendToClient({
                 type: "speech_prosody",

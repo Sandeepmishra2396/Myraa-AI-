@@ -14,7 +14,10 @@ export type EmotionState =
   | "concerned"
   | "calm";
 
-export type DetectedLanguage = "hindi" | "hinglish" | "english";
+import type { ActiveLanguage, SupportedLanguage } from "./LanguageProfile.ts";
+
+export type { ActiveLanguage, SupportedLanguage };
+export type DetectedLanguage = ActiveLanguage;
 
 export interface PauseMarker {
   index: number;

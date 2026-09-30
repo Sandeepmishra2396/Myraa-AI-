@@ -991,4 +991,18 @@ export class MyraAudioSession {
     }
     return false;
   }
+
+  /**
+   * Returns current active prosody metadata including language and speaking rate.
+   */
+  public getCurrentProsody(): any {
+    return this.currentProsody;
+  }
+
+  /**
+   * Returns active language identified by the speech engine.
+   */
+  public getCurrentLanguage(): string {
+    return this.currentProsody?.language || "english";
+  }
 }

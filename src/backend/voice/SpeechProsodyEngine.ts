@@ -33,6 +33,7 @@ import type {
   ProsodyTransformationResult,
   PauseMarker,
 } from "./ProsodyTypes.ts";
+import { languageManager } from "./LanguageManager.ts";
 
 export interface ProsodyContext {
   userPrompt?: string;
@@ -44,6 +45,8 @@ export interface ProsodyContext {
   isFactual?: boolean;
   forceEmotion?: EmotionState;
   forceNoFiller?: boolean;
+  forceLanguage?: DetectedLanguage;
+  conversationId?: string;
 }
 
 export class SpeechProsodyEngine {
@@ -63,37 +66,11 @@ export class SpeechProsodyEngine {
   }
 
   /**
-   * Detect language: Hindi, Hinglish, or English.
+   * Detect language across all 10 supported languages via LanguageManager.
    */
   public detectLanguage(text: string): DetectedLanguage {
     if (!text) return "english";
-
-    // 1. Devanagari script detection (Hindi)
-    if (/[\u0900-\u097F]/.test(text)) {
-      return "hindi";
-    }
-
-    // 2. Hinglish token detection (Latin script Hindi vocabulary)
-    const lower = text.toLowerCase();
-    const hinglishMarkers = [
-      /\b(kya|hai|hain|karo|karein|kaise|achha|acha|achhi|suno|batao|thik|theek|yaar|mera|meri|mere)\b/,
-      /\b(mujhe|tum|aap|hum|karna|hoga|hogi|nahi|nahin|haan|han|dekho|dekhein|chalo|bohot|bahut)\b/,
-      /\b(waah|arre|are|oho|shukriya|dhanyawad|mat|kripya|bana|rakho|chal|raha|rahi|samjho|ruko|roko|ruk)\b/,
-      /\b(bhai|dost|kaam|karega|karegi|karke|lekin|magar|kyunki|isko|usko|yahan|wahan|bolo|boliye|suniye)\b/,
-    ];
-
-    let matchCount = 0;
-    for (const regex of hinglishMarkers) {
-      if (regex.test(lower)) {
-        matchCount++;
-      }
-    }
-
-    if (matchCount >= 1) {
-      return "hinglish";
-    }
-
-    return "english";
+    return languageManager.detectLanguage(text).language;
   }
 
   /**
@@ -224,9 +201,10 @@ export class SpeechProsodyEngine {
    */
   public decideProsody(
     text: string,
-    context?: ProsodyContext
+    context?: ProsodyContext,
+    forcedLanguage?: DetectedLanguage
   ): ProsodyDecision {
-    const language = this.detectLanguage(text);
+    const language = forcedLanguage || context?.forceLanguage || this.detectLanguage(text);
     const emotion = this.detectEmotion(text, context);
     const isTechnical = context?.isCode || this.isPurelyTechnicalOrFactual(text, context?.userPrompt);
     const isUrgent = context?.isEmergency || false;
@@ -270,16 +248,16 @@ export class SpeechProsodyEngine {
       !isTechnical &&
       !context?.isError
     ) {
-      const playfulCues = /(haha|joke|funny|kidding|lol|mazaak|chutkula|hasi|giggle|playful|clever|hilarious|चुटकुला|मजेदार|हाहा|हंसी)/i;
+      const playfulCues = /(haha|joke|funny|kidding|lol|mazaak|chutkula|hasi|giggle|playful|clever|hilarious|चुटकुला|मजेदार|हाहा|हंसी|কা কথা বা|হাসি|মজার|はは|ふふ|面白い|ジョーク|சிரிப்பு|హాస్యం|шутка|смешно|ха-ха)/i;
       const combined = `${context?.userPrompt || ""} ${text}`;
       if (playfulCues.test(combined)) {
         shouldAddLaughter = true;
-        laughterToken = language === "hindi" ? "हाहा..." : "haha...";
+        laughterToken = languageManager.getLanguageProfile(language).laughterToken;
       }
     }
 
     // ── 3. Speaking Speed & Pitch ───────────────────────────────────────────
-    const { rate, pitch } = this.computeRateAndPitch(emotion, isUrgent);
+    const { rate, pitch } = this.computeRateAndPitch(emotion, isUrgent, language);
 
     // ── 4. Contextual Pauses & Sentence Rhythm ──────────────────────────────
     const pauses = this.calculatePauseMarkers(text, emotion);
@@ -310,24 +288,26 @@ export class SpeechProsodyEngine {
   ): ProsodyTransformationResult {
     // Preserve factual text: never mangle code blocks, URLs, or commands
     const cleanRaw = this.sanitizeRoleplayIfAny(rawText);
-    const language = this.detectLanguage(cleanRaw);
+    const language = context?.forceLanguage || this.detectLanguage(cleanRaw);
     const emotion = this.detectEmotion(cleanRaw, context);
-    const decision = this.decideProsody(cleanRaw, context);
+    const decision = this.decideProsody(cleanRaw, context, language);
 
     let expressiveText = cleanRaw;
 
     // Apply laughter if appropriate and not already present
     if (decision.shouldAddLaughter && decision.laughterToken) {
-      if (!/haha|hehe|\*giggles\*/i.test(expressiveText)) {
+      if (!/haha|hehe|हाहा|हंसी|হাহা|はは|ふふ|ஹாஹா|హాహా|ха-ха|\*giggles\*/i.test(expressiveText)) {
         expressiveText = `${decision.laughterToken} ${expressiveText}`;
       }
     }
 
     // Apply short natural reaction at beginning if appropriate and not already present
     if (decision.shouldAddReaction && decision.reaction) {
-      const startsWithReaction = /^(hmm|ohh|oh|aha|haha|wait|oho|achha|acha|are waah|arre)\b/i.test(
-        expressiveText
-      );
+      const startsWithReaction =
+        expressiveText.startsWith(decision.reaction) ||
+        /^(hmm|ohh|oh|aha|haha|wait|oho|achha|acha|are waah|arre|हम्म|अच्छा|अरे वाह|বাহ|হুম|わあ|えーと|ஆஹா|ஆமாம்|ఆహా|సరే|Ого|Хм)\b/iu.test(
+          expressiveText
+        );
       if (!startsWithReaction) {
         expressiveText = `${decision.reaction} ${expressiveText}`;
       }
@@ -352,6 +332,8 @@ export class SpeechProsodyEngine {
       emphasisWords: decision.emphasisWords,
     };
 
+    const langProfile = languageManager.getLanguageProfile(language);
+
     return {
       originalText: rawText,
       expressiveText,
@@ -359,40 +341,42 @@ export class SpeechProsodyEngine {
       profile,
       decision,
       audioHints: {
-        voice: "Aoede",
+        voice: langProfile.ttsConfig.geminiVoice,
         rate: decision.rate,
         pitch: decision.pitch,
-        stylePrompt: `Speak in a warm, natural, ${emotion} tone with expressive pacing.`,
+        stylePrompt: `Speak in a warm, natural, ${emotion} tone in ${langProfile.name} with expressive pacing.`,
       },
     };
   }
 
   /**
    * Quick natural backchannel / acknowledgement for user speech barge-in.
+   * Fully supports all 10 languages with authentic cultural phrases.
    */
   public getQuickAcknowledgement(
     userUtterance: string,
     preferredLanguage?: DetectedLanguage
   ): string {
     const lang = preferredLanguage || this.detectLanguage(userUtterance);
+    const profile = languageManager.getLanguageProfile(lang);
     const lower = userUtterance.toLowerCase();
 
-    if (lang === "hindi") {
-      if (/रुको|रुकिए|stop|wait/i.test(lower)) return "जी, रुक गई।";
-      if (/मदद|help|error/i.test(lower)) return "हाँ सुनो, बताइए क्या हुआ?";
-      return "हाँ, सुन रही हूँ...";
+    // Stop / Interruption cues across languages (native script and romanized)
+    if (/stop|wait|pause|ruko|roko|rukiye|रुको|रुकिए|रुकीं|रुकु|रुकि जाउ|दাঁড়ান|நில்லுங்கள்|ఆగండి|стоп|подождите|ちょっと待って|待って/i.test(lower)) {
+      return profile.quickAcknowledgements.stopAck;
     }
 
-    if (lang === "hinglish") {
-      if (/ruko|wait|stop/i.test(lower)) return "Wait, main ruk gayi.";
-      if (/help|error|problem/i.test(lower)) return "Haan bolo, let's fix it.";
-      return "Haan, sun rahi hoon...";
+    // Help / Error / Crash cues across languages
+    if (/help|error|problem|crash|madad|galti|मदद|सहायता|সাহায্য|உதவி|సహాయం|помощь|ошибка|助けて|困った/i.test(lower)) {
+      return profile.quickAcknowledgements.helpAck;
     }
 
-    // English
-    if (/stop|wait|pause/i.test(lower)) return "Holding on, go ahead.";
-    if (/error|issue|problem/i.test(lower)) return "I hear you, let's look at it.";
-    return "Listening, go ahead...";
+    // Greeting cues across languages
+    if (/hi|hello|hey|namaste|pranam|নমস্কার|வணக்கம்|నమస్కారం|привет|こんにちは/i.test(lower)) {
+      return profile.quickAcknowledgements.greetingAck;
+    }
+
+    return profile.quickAcknowledgements.defaultAck;
   }
 
   // ── Private Helpers ────────────────────────────────────────────────────────
@@ -401,62 +385,14 @@ export class SpeechProsodyEngine {
     emotion: EmotionState,
     language: DetectedLanguage
   ): string[] {
-    switch (language) {
-      case "hindi":
-        switch (emotion) {
-          case "happy":
-            return ["अरे वाह!", "हाहा!", "बहुत बढ़िया!"];
-          case "excited":
-            return ["अरे वाह!", "कमाल है!", "वाह!"];
-          case "curious":
-            return ["हम्म...", "अच्छा...", "देखते हैं..."];
-          case "concerned":
-            return ["ओहो...", "अरे...", "रुकिए..."];
-          case "calm":
-            return ["हाँ...", "बिल्कुल...", "ठीक है..."];
-          default:
-            return [];
-        }
-
-      case "hinglish":
-        switch (emotion) {
-          case "happy":
-            return ["Aha!", "Haha!", "Arre waah!", "Nice!"];
-          case "excited":
-            return ["Oh wow!", "Aha!", "Super!", "Waah!"];
-          case "curious":
-            return ["Hmm...", "Achha...", "Wait ek second...", "Dekhte hain..."];
-          case "concerned":
-            return ["Oho...", "Wait...", "Arre...", "Hmm, let me check..."];
-          case "calm":
-            return ["Haan...", "Bilkul...", "Sure...", "I see..."];
-          default:
-            return [];
-        }
-
-      case "english":
-      default:
-        switch (emotion) {
-          case "happy":
-            return ["Aha!", "Haha!", "Oh wonderful!", "Nice!"];
-          case "excited":
-            return ["Oh wow!", "Aha!", "Awesome!"];
-          case "curious":
-            return ["Hmm...", "Oh?", "Let's see...", "Wait..."];
-          case "concerned":
-            return ["Oh...", "Wait...", "Hmm, let me check..."];
-          case "calm":
-            return ["I see...", "Alright...", "Sure...", "Understood..."];
-          default:
-            return [];
-        }
-    }
+    const profile = languageManager.getLanguageProfile(language);
+    return profile.fillersByEmotion[emotion] || [];
   }
 
   private isFillerEligible(filler: string): boolean {
-    const normalized = filler.toLowerCase().replace(/[^a-z\u0900-\u097F]/g, "");
+    const normalized = filler.toLowerCase().replace(/[^\p{L}]/gu, "");
     const recent = this.recentFillers.slice(-this.fillerCooldownTurns);
-    return !recent.some((r) => r.toLowerCase().replace(/[^a-z\u0900-\u097F]/g, "") === normalized);
+    return !recent.some((r) => r.toLowerCase().replace(/[^\p{L}]/gu, "") === normalized);
   }
 
   private recordFillerUsage(filler: string): void {
@@ -474,26 +410,51 @@ export class SpeechProsodyEngine {
 
   private computeRateAndPitch(
     emotion: EmotionState,
-    isUrgent: boolean
+    isUrgent: boolean,
+    language?: DetectedLanguage
   ): { rate: number; pitch: number } {
+    let rate = 1.0;
+    let pitch = 1.0;
+
     if (isUrgent) {
-      return { rate: 1.05, pitch: 1.0 };
+      rate = 1.05;
+      pitch = 1.0;
+    } else {
+      switch (emotion) {
+        case "calm":
+          rate = 0.92;
+          pitch = 0.98;
+          break;
+        case "concerned":
+          rate = 0.95;
+          pitch = 0.97;
+          break;
+        case "neutral":
+          rate = 1.0;
+          pitch = 1.0;
+          break;
+        case "curious":
+          rate = 1.0;
+          pitch = 1.03;
+          break;
+        case "happy":
+          rate = 1.06;
+          pitch = 1.07;
+          break;
+        case "excited":
+          rate = 1.14;
+          pitch = 1.11;
+          break;
+      }
     }
 
-    switch (emotion) {
-      case "calm":
-        return { rate: 0.92, pitch: 0.98 };
-      case "concerned":
-        return { rate: 0.95, pitch: 0.97 };
-      case "neutral":
-        return { rate: 1.0, pitch: 1.0 };
-      case "curious":
-        return { rate: 1.0, pitch: 1.03 };
-      case "happy":
-        return { rate: 1.06, pitch: 1.07 };
-      case "excited":
-        return { rate: 1.14, pitch: 1.11 };
+    if (language) {
+      const profile = languageManager.getLanguageProfile(language);
+      rate = Math.round(rate * profile.ttsConfig.rateMultiplier * 100) / 100;
+      pitch = Math.round(pitch * profile.ttsConfig.pitchMultiplier * 100) / 100;
     }
+
+    return { rate, pitch };
   }
 
   private calculatePauseMarkers(text: string, emotion: EmotionState): PauseMarker[] {

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MYRAA Settings Store — persistent user preferences (V2).
  *
  * Establishes the persistence pattern for MYRAA: settings are mirrored to
@@ -9,6 +9,19 @@
  * Pattern follows the existing codebase conventions: plain state + ref mirrors.
  * No Context/Zustand — this is deliberately lightweight to match audio.ts/memoryTypes.ts.
  */
+
+export type SupportedLanguageSetting =
+  | "auto"
+  | "hindi"
+  | "english"
+  | "hinglish"
+  | "bengali"
+  | "bhojpuri"
+  | "maithili"
+  | "japanese"
+  | "tamil"
+  | "telugu"
+  | "russian";
 
 export interface MyraaSettings {
   /** Launch MYRAA (backends + browser tab) silently on Windows login. */
@@ -23,6 +36,8 @@ export interface MyraaSettings {
   sensitivity: number;
   /** Master toggle for UI animations. */
   animations: boolean;
+  /** Multilingual voice engine language preference: "auto" or one of 10 languages. */
+  languagePreference: SupportedLanguageSetting;
 }
 
 export const DEFAULT_SETTINGS: MyraaSettings = {
@@ -32,6 +47,7 @@ export const DEFAULT_SETTINGS: MyraaSettings = {
   micDeviceId: "",
   sensitivity: 60,
   animations: true,
+  languagePreference: "auto",
 };
 
 const STORAGE_KEY = "myraa.settings.v2";
