@@ -52,8 +52,10 @@ export const APPLICATION_ALIASES: Readonly<Record<string, string>> = {
   "windows explorer": "explorer",
   "files": "explorer",
   "file manager": "explorer",
+  "filemanager": "explorer",
   "my computer": "explorer",
   "this pc": "explorer",
+  "pc": "explorer",
   "explorer.exe": "explorer",
 
   // Browsers
@@ -136,6 +138,8 @@ export const DESKTOP_NATIVE_APPS: ReadonlySet<string> = new Set([
   "vscode",
   "cursor",
   "explorer",
+  "file explorer",
+  "file manager",
   "chrome",
   "edge",
   "brave",

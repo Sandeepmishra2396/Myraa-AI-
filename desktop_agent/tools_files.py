@@ -54,7 +54,14 @@ FOLDER_ALIASES: Dict[str, Path] = {
     "music": HOME / "Music",
     "videos": HOME / "Videos",
     "home": HOME,
-    "this pc": Path("C:\\"),
+    "this pc": Path(os.environ.get("SystemDrive", "C:") + "\\"),
+    "my computer": Path(os.environ.get("SystemDrive", "C:") + "\\"),
+    "file manager": Path(os.environ.get("SystemDrive", "C:") + "\\"),
+    "filemanager": Path(os.environ.get("SystemDrive", "C:") + "\\"),
+    "file explorer": Path(os.environ.get("SystemDrive", "C:") + "\\"),
+    "explorer": Path(os.environ.get("SystemDrive", "C:") + "\\"),
+    "files": Path(os.environ.get("SystemDrive", "C:") + "\\"),
+    "windows explorer": Path(os.environ.get("SystemDrive", "C:") + "\\"),
     "c drive": Path("C:\\"),
     "c:": Path("C:\\"),
     "c": Path("C:\\"),
@@ -397,7 +404,28 @@ def move_file(args: Dict[str, Any]) -> Dict[str, Any]:
 
 @register("openFolder")
 def open_folder(args: Dict[str, Any]) -> Dict[str, Any]:
-    raw_target = args.get("path") or args.get("name")
+    raw_target = args.get("path") or args.get("name") or args.get("folder")
+    norm_target = str(raw_target or "").strip().lower()
+
+    # Direct File Manager / File Explorer activation
+    if not norm_target or norm_target in {
+        "file manager",
+        "filemanager",
+        "file explorer",
+        "explorer",
+        "files",
+        "windows explorer",
+        "this pc",
+        "my computer",
+    }:
+        if platform.system() == "Windows":
+            explorer_exe = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "explorer.exe")
+            if os.path.exists(explorer_exe):
+                subprocess.Popen([explorer_exe], close_fds=True)
+            else:
+                subprocess.Popen("explorer", shell=True, close_fds=True)
+            return {"result": "Opened File Explorer.", "path": "explorer", "verified": True}
+
     folder = _resolve_folder(raw_target)
     _ensure_safe(folder, allow_anywhere=True)
     if not folder.exists():

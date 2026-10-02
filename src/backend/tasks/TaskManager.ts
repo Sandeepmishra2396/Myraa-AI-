@@ -291,7 +291,8 @@ export async function callDesktopAgent(
 ): Promise<{ ok: boolean; result?: unknown; error?: string }> {
   const isCloud =
     (process.env.NODE_ENV === "production" || Boolean(process.env.RENDER)) &&
-    process.env.SORA_LAUNCHED_BY !== "electron";
+    process.env.SORA_LAUNCHED_BY !== "electron" &&
+    process.env.MYRAA_LOCAL_DESKTOP !== "true";
   if (isCloud) {
     // Cloud Render environment: localhost desktop agent does NOT exist on the container.
     // Cloud Render MUST NEVER directly access localhost.
@@ -315,6 +316,7 @@ export async function callDesktopAgent(
 
   // Normalize common application aliases so both source and frozen PyInstaller desktop agents
   // resolve them identically (e.g., "file manager" -> "file explorer", "vs code" -> "vscode").
+  let effectiveTool = tool;
   let effectiveArgs = args;
   if (tool === "openApplication" && args && typeof args === "object") {
     const rawKey = String(args.name ?? args.app ?? args.application ?? "").trim().toLowerCase();
@@ -324,9 +326,29 @@ export async function callDesktopAgent(
       "explorer": "file explorer",
       "files": "file explorer",
       "windows explorer": "file explorer",
+      "this pc": "file explorer",
+      "my computer": "file explorer",
+      "pc": "file explorer",
       "vs code": "vscode",
       "visual studio code": "vscode",
       "code": "vscode",
+      "google chrome": "chrome",
+      "browser": "chrome",
+      "microsoft edge": "edge",
+      "ms edge": "edge",
+      "calculator": "calculator",
+      "calc": "calculator",
+      "task manager": "task manager",
+      "taskmanager": "task manager",
+      "taskmgr": "task manager",
+      "terminal": "terminal",
+      "windows terminal": "terminal",
+      "cmd": "cmd",
+      "command prompt": "cmd",
+      "powershell": "powershell",
+      "paint": "paint",
+      "mspaint": "paint",
+      "settings": "settings",
     };
     if (aliasMap[rawKey]) {
       effectiveArgs = { ...args };
@@ -334,6 +356,24 @@ export async function callDesktopAgent(
       else if ("app" in effectiveArgs) effectiveArgs.app = aliasMap[rawKey];
       else if ("application" in effectiveArgs) effectiveArgs.application = aliasMap[rawKey];
       else effectiveArgs.name = aliasMap[rawKey];
+    }
+  } else if (tool === "openFolder" && args && typeof args === "object") {
+    const rawPath = String(args.path ?? args.name ?? args.folder ?? "").trim().toLowerCase();
+    if (
+      !rawPath ||
+      [
+        "file manager",
+        "filemanager",
+        "file explorer",
+        "explorer",
+        "files",
+        "windows explorer",
+        "this pc",
+        "my computer",
+      ].includes(rawPath)
+    ) {
+      effectiveTool = "openApplication";
+      effectiveArgs = { name: "file explorer" };
     }
   }
 
@@ -344,8 +384,8 @@ export async function callDesktopAgent(
   activeControllers.add(controller);
 
   try {
-    _logCommand(`EXECUTE ${tool} ${JSON.stringify(effectiveArgs)}`);
-    _logJson("info", "tool_execute", { tool, args: effectiveArgs });
+    _logCommand(`EXECUTE ${effectiveTool} ${JSON.stringify(effectiveArgs)}`);
+    _logJson("info", "tool_execute", { tool: effectiveTool, args: effectiveArgs });
     const timer = setTimeout(
       () => controller.abort(),
       DESKTOP_AGENT_TIMEOUT,
@@ -354,7 +394,7 @@ export async function callDesktopAgent(
     const res = await fetch(`${DESKTOP_AGENT_URL}/execute`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tool, args: effectiveArgs }),
+      body: JSON.stringify({ tool: effectiveTool, args: effectiveArgs }),
       signal: controller.signal,
     });
     clearTimeout(timer);
@@ -394,7 +434,8 @@ export async function callDesktopAgent(
 
     const isCloudFallback =
       (process.env.NODE_ENV === "production" || Boolean(process.env.RENDER)) &&
-      process.env.SORA_LAUNCHED_BY !== "electron";
+      process.env.SORA_LAUNCHED_BY !== "electron" &&
+      process.env.MYRAA_LOCAL_DESKTOP !== "true";
     const msg =
       err?.name === "AbortError"
         ? "Desktop agent timed out or aborted by emergency stop."

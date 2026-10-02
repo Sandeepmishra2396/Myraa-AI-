@@ -49,32 +49,193 @@ def _find_cursor_path() -> str:
     return "cursor"
 
 
+def _find_windows_app_path(
+    app_key: str, default_exe: str, fallback_candidates: Optional[list[str]] = None
+) -> str:
+    """Find the real, fully qualified Windows executable path for an application.
+
+    Checks:
+      1. Absolute path if given and exists
+      2. Windows Registry App Paths (HKLM & HKCU)
+      3. PATH via shutil.which
+      4. Explicit known installation locations (Program Files, LocalAppData, System32, etc.)
+    """
+    if os.path.isabs(default_exe) and os.path.exists(default_exe):
+        return default_exe
+
+    # 1. Try Windows Registry App Paths
+    try:
+        import winreg
+
+        for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            for sub in [
+                rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{default_exe}",
+                rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{app_key}.exe",
+            ]:
+                try:
+                    with winreg.OpenKey(root, sub) as k:
+                        val, _ = winreg.QueryValueEx(k, "")
+                        if val and os.path.exists(val):
+                            return val
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # 2. Check shutil.which
+    which = shutil.which(default_exe) or shutil.which(f"{default_exe}.exe")
+    if which and os.path.exists(which):
+        return which
+
+    # 3. Check explicit candidate paths
+    if fallback_candidates:
+        for c in fallback_candidates:
+            expanded = os.path.expandvars(c)
+            if os.path.exists(expanded):
+                return expanded
+
+    # Return default_exe for shell/PATH fallback
+    return default_exe
+
+
 # Canonical app key -> (launch_command, kind)
 #   kind == "exe"   : launch_command is the executable name (resolved via PATH/App Paths)
 #   kind == "shell" : launch_command is a shell builtin verb run with cmd /c
 #   kind == "uwp"   : launch_command is an apps-family activation string
 APP_COMMANDS: Dict[str, Dict[str, str]] = {
-    "notepad": {"exe": "notepad.exe", "image": "notepad.exe", "label": "Notepad"},
-    "chrome": {"exe": "chrome.exe", "image": "chrome.exe", "label": "Google Chrome"},
-    "edge": {"exe": "msedge.exe", "image": "msedge.exe", "label": "Microsoft Edge"},
+    "notepad": {
+        "exe": _find_windows_app_path(
+            "notepad", "notepad.exe", [r"C:\Windows\System32\notepad.exe", r"C:\Windows\notepad.exe"]
+        ),
+        "image": "notepad.exe",
+        "label": "Notepad",
+    },
+    "chrome": {
+        "exe": _find_windows_app_path(
+            "chrome",
+            "chrome.exe",
+            [
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+            ],
+        ),
+        "image": "chrome.exe",
+        "label": "Google Chrome",
+    },
+    "edge": {
+        "exe": _find_windows_app_path(
+            "edge",
+            "msedge.exe",
+            [
+                r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
+            ],
+        ),
+        "image": "msedge.exe",
+        "label": "Microsoft Edge",
+    },
     "vscode": {"exe": _find_vscode_path(), "image": "Code.exe", "label": "Visual Studio Code"},
     "cursor": {"exe": _find_cursor_path(), "image": "Cursor.exe", "label": "Cursor Editor"},
-    "calculator": {"shell": "calc", "image": "CalculatorApp.exe", "label": "Calculator"},
-    "calc": {"shell": "calc", "image": "CalculatorApp.exe", "label": "Calculator"},
-    "file explorer": {"shell": "explorer", "image": "explorer.exe", "label": "File Explorer"},
-    "explorer": {"shell": "explorer", "image": "explorer.exe", "label": "File Explorer"},
-    "task manager": {"shell": "taskmgr", "image": "Taskmgr.exe", "label": "Task Manager"},
-    "taskmanager": {"shell": "taskmgr", "image": "Taskmgr.exe", "label": "Task Manager"},
+    "calculator": {
+        "exe": _find_windows_app_path("calc", "calc.exe", [r"C:\Windows\System32\calc.exe"]),
+        "shell": "calc",
+        "image": "CalculatorApp.exe",
+        "label": "Calculator",
+    },
+    "calc": {
+        "exe": _find_windows_app_path("calc", "calc.exe", [r"C:\Windows\System32\calc.exe"]),
+        "shell": "calc",
+        "image": "CalculatorApp.exe",
+        "label": "Calculator",
+    },
+    "file explorer": {
+        "exe": _find_windows_app_path("explorer", "explorer.exe", [r"C:\Windows\explorer.exe"]),
+        "image": "explorer.exe",
+        "label": "File Explorer",
+    },
+    "file manager": {
+        "exe": _find_windows_app_path("explorer", "explorer.exe", [r"C:\Windows\explorer.exe"]),
+        "image": "explorer.exe",
+        "label": "File Explorer",
+    },
+    "explorer": {
+        "exe": _find_windows_app_path("explorer", "explorer.exe", [r"C:\Windows\explorer.exe"]),
+        "image": "explorer.exe",
+        "label": "File Explorer",
+    },
+    "task manager": {
+        "exe": _find_windows_app_path("taskmgr", "Taskmgr.exe", [r"C:\Windows\System32\Taskmgr.exe"]),
+        "shell": "taskmgr",
+        "image": "Taskmgr.exe",
+        "label": "Task Manager",
+    },
+    "taskmanager": {
+        "exe": _find_windows_app_path("taskmgr", "Taskmgr.exe", [r"C:\Windows\System32\Taskmgr.exe"]),
+        "shell": "taskmgr",
+        "image": "Taskmgr.exe",
+        "label": "Task Manager",
+    },
     "settings": {"uwp": "ms-settings:", "image": "SystemSettings.exe", "label": "Settings"},
-    "command prompt": {"exe": "cmd.exe", "image": "cmd.exe", "label": "Command Prompt"},
-    "cmd": {"exe": "cmd.exe", "image": "cmd.exe", "label": "Command Prompt"},
-    "powershell": {"exe": "powershell.exe", "image": "powershell.exe", "label": "PowerShell"},
-    "terminal": {"exe": "wt.exe", "image": "WindowsTerminal.exe", "label": "Windows Terminal"},
+    "command prompt": {
+        "exe": _find_windows_app_path("cmd", "cmd.exe", [r"C:\Windows\System32\cmd.exe"]),
+        "image": "cmd.exe",
+        "label": "Command Prompt",
+    },
+    "cmd": {
+        "exe": _find_windows_app_path("cmd", "cmd.exe", [r"C:\Windows\System32\cmd.exe"]),
+        "image": "cmd.exe",
+        "label": "Command Prompt",
+    },
+    "powershell": {
+        "exe": _find_windows_app_path(
+            "powershell", "powershell.exe", [r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"]
+        ),
+        "image": "powershell.exe",
+        "label": "PowerShell",
+    },
+    "terminal": {
+        "exe": _find_windows_app_path("wt", "wt.exe", [os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WindowsApps\wt.exe")]),
+        "image": "WindowsTerminal.exe",
+        "label": "Windows Terminal",
+    },
     "wordpad": {"shell": "write", "image": "wordpad.exe", "label": "WordPad"},
-    "paint": {"shell": "mspaint", "image": "mspaint.exe", "label": "Paint"},
+    "paint": {
+        "exe": _find_windows_app_path(
+            "mspaint",
+            "mspaint.exe",
+            [r"C:\Windows\System32\mspaint.exe", os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WindowsApps\mspaint.exe")],
+        ),
+        "shell": "mspaint",
+        "image": "mspaint.exe",
+        "label": "Paint",
+    },
     "snipping tool": {"uwp": "ms-screenclip:", "image": "ScreenClippingHost.exe", "label": "Snipping Tool"},
-    "brave": {"exe": "brave.exe", "image": "brave.exe", "label": "Brave Browser"},
-    "firefox": {"exe": "firefox.exe", "image": "firefox.exe", "label": "Mozilla Firefox"},
+    "brave": {
+        "exe": _find_windows_app_path(
+            "brave",
+            "brave.exe",
+            [
+                r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe"),
+            ],
+        ),
+        "image": "brave.exe",
+        "label": "Brave Browser",
+    },
+    "firefox": {
+        "exe": _find_windows_app_path(
+            "firefox",
+            "firefox.exe",
+            [
+                r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                r"C:\Program Files (x86)\Mozilla Firefox\firefox.exe",
+            ],
+        ),
+        "image": "firefox.exe",
+        "label": "Mozilla Firefox",
+    },
     "spotify": {"shell": "spotify:", "image": "Spotify.exe", "label": "Spotify"},
     "whatsapp": {"uwp": "whatsapp:", "image": "WhatsApp.exe", "label": "WhatsApp"},
     "youtube": {"shell": "https://www.youtube.com", "image": "chrome.exe", "label": "YouTube"},
@@ -101,6 +262,7 @@ def _resolve_app(key: str) -> Dict[str, str]:
         "microsoft edge": "edge",
         "ms edge": "edge",
         "calc": "calculator",
+        "calculator": "calculator",
         "settings app": "settings",
         "system settings": "settings",
         "file explorer": "file explorer",
@@ -111,10 +273,20 @@ def _resolve_app(key: str) -> Dict[str, str]:
         "windows explorer": "file explorer",
         "this pc": "file explorer",
         "my computer": "file explorer",
+        "pc": "file explorer",
         "windows terminal": "terminal",
         "wt": "terminal",
         "yt": "youtube",
         "you tube": "youtube",
+        "paint": "paint",
+        "mspaint": "paint",
+        "task manager": "task manager",
+        "taskmanager": "task manager",
+        "taskmgr": "task manager",
+        "powershell": "powershell",
+        "pwsh": "powershell",
+        "command prompt": "cmd",
+        "cmd": "cmd",
     }
     if norm in aliases and aliases[norm] in APP_COMMANDS:
         return APP_COMMANDS[aliases[norm]]
@@ -129,8 +301,11 @@ def _launch(spec: Dict[str, str], extra_args: Optional[list[str]] = None) -> int
     try:
         if "exe" in spec:
             exe = spec["exe"]
+            # If not an existing absolute path, attempt resolution
+            if not (os.path.isabs(exe) and os.path.exists(exe)):
+                exe = _find_windows_app_path(spec.get("label", "").lower(), exe)
             cmd = [exe] + extra
-            if os.path.isabs(exe) or shutil.which(exe) or exe.lower().endswith(".exe"):
+            if (os.path.isabs(exe) and os.path.exists(exe)) or shutil.which(exe):
                 # Detached so we don't block the agent.
                 proc = subprocess.Popen(
                     cmd,

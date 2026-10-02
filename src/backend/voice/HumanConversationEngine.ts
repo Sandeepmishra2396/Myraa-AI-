@@ -72,17 +72,6 @@ export class HumanConversationEngine {
 
     const lower = userPrompt.trim().toLowerCase();
 
-    // Short queries: simple greetings, status checks, binary questions, short pings
-    if (
-      lower.length < 25 ||
-      /^(hi|hello|hey|namaste|pranam|kya hal hai|kaise ho|status|ready\?|ping|time|date|theek hai|haan|nahi|ok|done)\b/i.test(
-        lower
-      ) ||
-      /\b(is (the )?server (running|up)|are you (there|ready)|what time is it)\b/i.test(lower)
-    ) {
-      return "short";
-    }
-
     // Detailed queries: deep tutorials, step-by-step guides, architecture breakdowns, exhaustive comparisons
     if (
       /\b(step[- ]by[- ]step|explain step[- ]by[- ]step|in detail|detailed plan|full architecture|complete architecture|complete guide|architecture breakdown|tutorial|sikhao|pura samjhao|vistar se|deep dive)\b/i.test(
@@ -91,6 +80,23 @@ export class HumanConversationEngine {
       lower.includes("why did this happen and how to prevent it")
     ) {
       return "detailed";
+    }
+
+    // Substantive questions or explanations must NEVER be prematurely collapsed into 'short'
+    const isQuestionOrExplanation = /\b(kya|kaise|kyun|kyu|batao|samjhao|explain|what|how|why|who|where|when|tell me|describe|definition|meaning)\b/i.test(
+      lower
+    ) && !/^(kya hal hai)\b/i.test(lower);
+
+    // Short queries: simple greetings, status checks, binary questions, short pings
+    if (
+      !isQuestionOrExplanation &&
+      (lower.length < 25 ||
+        /^(hi|hello|hey|namaste|pranam|kya hal hai|kaise ho|status|ready\?|ping|time|date|theek hai|haan|nahi|ok|done)\b/i.test(
+          lower
+        ) ||
+        /\b(is (the )?server (running|up)|are you (there|ready)|what time is it)\b/i.test(lower))
+    ) {
+      return "short";
     }
 
     // Default: medium (focused, natural conversational explanation)
@@ -203,14 +209,14 @@ export class HumanConversationEngine {
     const memoryBridge = this.buildMemoryBridge(dialogueHistory, userPrompt, language);
 
     let targetSentenceRange: [number, number] = [2, 3];
-    let instructionDirective = "Keep response natural, warm, and moderately paced (2-3 sentences).";
+    let instructionDirective = "Provide a comprehensive, natural, and properly explained answer (2-3 sentences minimum). Never cut short after only 4-5 words.";
 
     if (pacing === "short") {
       targetSentenceRange = [1, 2];
-      instructionDirective = "User query is brief/direct. Keep response very crisp (1-2 sentences). Do not over-explain.";
+      instructionDirective = "User query is brief/direct. Keep response warm and natural (1-2 sentences). Do not cut short.";
     } else if (pacing === "detailed") {
       targetSentenceRange = [4, 7];
-      instructionDirective = "User asked for a deep explanation. Provide a structured, thoughtful response without being verbose.";
+      instructionDirective = "User asked for a deep explanation. Provide a structured, thorough, complete response (4-7 sentences or full explanation) covering all key points.";
     }
 
     return {

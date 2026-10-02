@@ -98,6 +98,7 @@ export class MyraAudioSession {
   private audioChunksCount = 0;
   /** Timestamp (ms) of last VAD barge-in trigger — used for echo cooldown gate. */
   private _lastBargeInTime = 0;
+  private _speechPlaybackStartTime = 0;
 
   
   // State Callbacks
@@ -339,18 +340,23 @@ export class MyraAudioSession {
         // Local VAD energy check for immediate client-side barge-in.
         if (this.activeSources.length > 0 || this.currentState === "speaking") {
           const now = Date.now();
-          const cooldownMs = 600;
+          const cooldownMs = 1200;
           const lastInterruptTime: number = this._lastBargeInTime;
+          const playbackElapsed = now - (this._speechPlaybackStartTime || 0);
 
-          if (now - lastInterruptTime > cooldownMs) {
+          // Grace period: First 1.2s of playback cannot be interrupted by local VAD
+          // to prevent speaker startup transient & initial speaker audio bleed from killing playback!
+          if (playbackElapsed > 1200 && now - lastInterruptTime > cooldownMs) {
             let sumSquares = 0;
             for (let i = 0; i < channelData.length; i++) {
               sumSquares += channelData[i] * channelData[i];
             }
             const rms = Math.sqrt(sumSquares / channelData.length);
-            if (rms > 0.15) {
+            // Require sustained intentional user speech (> 0.38 RMS for 16 frames ~220ms)
+            // to clearly distinguish loud user barge-in from normal speaker acoustic feedback
+            if (rms > 0.38) {
               this.consecutiveSpeechFrames++;
-              if (this.consecutiveSpeechFrames >= 4) {
+              if (this.consecutiveSpeechFrames >= 16) {
                 console.log(
                   `[Myraa Audio] Local speech barge-in detected (RMS: ${rms.toFixed(3)}). Flushing active playback queue immediately.`
                 );
@@ -362,14 +368,26 @@ export class MyraAudioSession {
               this.consecutiveSpeechFrames = 0;
             }
           } else {
-            // In cooldown window — ignore mic frames to prevent echo re-trigger
+            // In grace period or cooldown window — ignore mic frames to prevent echo re-trigger
             this.consecutiveSpeechFrames = 0;
           }
         } else {
           this.consecutiveSpeechFrames = 0;
         }
 
-        const pcmBuffer = floatTo16BitPCM(channelData);
+        // Acoustic echo ducking: Attenuate mic by 90% while Myraa is actively speaking.
+        // This stops the microphone from feeding Myraa's own speaker voice back into Gemini Live API,
+        // which was causing Gemini to generate false userTurn transcriptions that abruptly truncated playback!
+        let effectiveChannelData = channelData;
+        if (this.activeSources.length > 0 || this.currentState === "speaking") {
+          const ducked = new Float32Array(channelData.length);
+          for (let i = 0; i < channelData.length; i++) {
+            ducked[i] = channelData[i] * 0.1;
+          }
+          effectiveChannelData = ducked;
+        }
+
+        const pcmBuffer = floatTo16BitPCM(effectiveChannelData);
         const base64 = base64ArrayBuffer(pcmBuffer);
 
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -689,6 +707,7 @@ export class MyraAudioSession {
       if (this.activeSources.length === 0) {
         // Fresh start — 25ms lead so subsequent packets queue seamlessly
         this.nextStartTime = currentTime + 0.025;
+        this._speechPlaybackStartTime = Date.now();
       } else if (this.nextStartTime < currentTime) {
         // Network catch-up — cursor fell behind hardware clock, start immediately
         this.nextStartTime = currentTime;
@@ -927,7 +946,9 @@ export class MyraAudioSession {
         this.onTranscription(data.role, data.text);
         if (data.role === "user" && this.activeSources.length > 0) {
           const now = Date.now();
-          if (now - this._lastBargeInTime > 600) {
+          const playbackElapsed = now - (this._speechPlaybackStartTime || 0);
+          // Only permit barge-in after 1.5s of playback and with 1.2s cooldown to avoid speaker echo abort
+          if (playbackElapsed > 1500 && now - this._lastBargeInTime > 1200) {
             console.log("[Myraa Audio] User speech recognized by model; clearing lingering playback sources.");
             this._lastBargeInTime = now;
             this.handleInterruption();

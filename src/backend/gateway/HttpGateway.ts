@@ -5192,6 +5192,79 @@ export function createHttpApp(): express.Application {
     }
   });
 
+  // ── Phase 17 — Intelligence 2.0 REST Endpoints ───────────────────────────
+  app.post("/api/intelligence/evaluate", async (req, res) => {
+    try {
+      const { input, contextId, device } = req.body || {};
+      if (!input || typeof input !== "string") {
+        res.status(400).json({ error: "Missing required string 'input'" });
+        return;
+      }
+      const { intelligenceCoordinator } = await import("../intelligence/index.ts");
+      const decision = intelligenceCoordinator.evaluate(input, contextId || "default", undefined, device);
+      res.status(200).json({ ok: true, decision });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Intelligence evaluation failed") });
+    }
+  });
+
+  app.post("/api/intelligence/execute", async (req, res) => {
+    try {
+      const { input, contextId, device } = req.body || {};
+      if (!input || typeof input !== "string") {
+        res.status(400).json({ error: "Missing required string 'input'" });
+        return;
+      }
+      const { intelligenceCoordinator } = await import("../intelligence/index.ts");
+      const result = await intelligenceCoordinator.execute(input, contextId || "default", undefined, undefined, device);
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Intelligence execution failed") });
+    }
+  });
+
+  app.get("/api/intelligence/task/active", async (req, res) => {
+    try {
+      const contextId = (req.query.contextId as string) || "default";
+      const { contextFusionEngine } = await import("../intelligence/index.ts");
+      const activeTask = contextFusionEngine.getActiveTask(contextId);
+      res.status(200).json({ ok: true, activeTask });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to retrieve active task") });
+    }
+  });
+
+  app.get("/api/intelligence/traces", async (req, res) => {
+    try {
+      const limit = parseInt((req.query.limit as string) || "50", 10);
+      const { intelligenceTrace } = await import("../intelligence/index.ts");
+      const traces = intelligenceTrace.listTraces(limit);
+      res.status(200).json({ ok: true, traces });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to retrieve traces") });
+    }
+  });
+
+  app.post("/api/intelligence/context", async (req, res) => {
+    try {
+      const { contextId, file, app: appName, website, preferences } = req.body || {};
+      const cid = contextId || "default";
+      const { contextFusionEngine, userPreferenceResolver } = await import("../intelligence/index.ts");
+
+      if (file !== undefined) contextFusionEngine.setCurrentFile(cid, file);
+      if (appName !== undefined) contextFusionEngine.setCurrentApplication(cid, appName);
+      if (website !== undefined) contextFusionEngine.setCurrentWebsite(cid, website);
+      if (preferences && typeof preferences === "object") {
+        userPreferenceResolver.updatePreferences(cid, preferences);
+      }
+
+      const fused = contextFusionEngine.fuseContext(cid);
+      res.status(200).json({ ok: true, context: fused });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Context update failed") });
+    }
+  });
+
   // ── Global Sanitized Error Handling Middleware ───────────────────────────
   // Guarantees fail-closed error responses and zero stack trace / path leakage to clients
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
