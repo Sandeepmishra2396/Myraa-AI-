@@ -151,11 +151,16 @@ export class VoiceSynthesizer {
         const timeSec = currentSampleIndex / sampleRate;
         const wordProgress = s / samplesPerWord;
 
-        if (isPause && wordProgress > 0.3) {
-          // Natural silence pause
-          buffer.writeInt16LE(0, currentSampleIndex * 2);
-          currentSampleIndex++;
-          continue;
+        let pauseFactor = 1.0;
+        if (isPause && wordProgress > 0.15) {
+          if (wordProgress >= 0.25) {
+            // Natural silence pause after smooth fade out
+            buffer.writeInt16LE(0, currentSampleIndex * 2);
+            currentSampleIndex++;
+            continue;
+          }
+          // Smooth 10% cosine decay into silence to prevent DC pops
+          pauseFactor = 0.5 * (1 + Math.cos(Math.PI * (wordProgress - 0.15) / 0.1));
         }
 
         // Intonation curve within the word (slight rise-fall)
@@ -170,10 +175,11 @@ export class VoiceSynthesizer {
         const instF0 = f0 + pitchInflection + vibrato;
 
         // Vowel formant synthesis (glottal pulse + acoustic resonators)
+        // Softened high harmonics prevent shrill treble whistling
         const fundamental = Math.sin(2.0 * Math.PI * instF0 * timeSec);
-        const harmonic1 = 0.5 * Math.sin(2.0 * Math.PI * f1 * timeSec);
-        const harmonic2 = 0.25 * Math.sin(2.0 * Math.PI * f2 * timeSec);
-        const harmonic3 = 0.1 * Math.sin(2.0 * Math.PI * f3 * timeSec);
+        const harmonic1 = 0.35 * Math.sin(2.0 * Math.PI * f1 * timeSec);
+        const harmonic2 = 0.15 * Math.sin(2.0 * Math.PI * f2 * timeSec);
+        const harmonic3 = 0.04 * Math.sin(2.0 * Math.PI * f3 * timeSec);
 
         // Word amplitude envelope (smooth attack and decay to eliminate audio clicks)
         let envelope = 1.0;
@@ -186,10 +192,11 @@ export class VoiceSynthesizer {
           envelope = (samplesPerWord - s) / decaySamples;
         }
 
+        envelope *= pauseFactor;
         if (isExclamation) envelope *= 1.25;
 
-        // Combined waveform scaled to signed 16-bit range (-32768 to 32767)
-        const rawSample = (fundamental + harmonic1 + harmonic2 + harmonic3) * envelope * 0.4;
+        // Combined waveform with safe headroom (-5dBFS ceiling) to prevent digital saturation
+        const rawSample = (fundamental + harmonic1 + harmonic2 + harmonic3) * envelope * 0.35;
         const clampedSample = Math.max(-1.0, Math.min(1.0, rawSample));
         const int16Val = Math.floor(clampedSample * 32767);
 

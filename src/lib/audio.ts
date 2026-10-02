@@ -37,13 +37,14 @@ function floatTo16BitPCM(input: Float32Array): ArrayBuffer {
 
 // Float conversion helper: converts signed Int16 array buffer to Float32Array [-1.0, 1.0]
 function pcm16ToFloats(uint8Array: Uint8Array): Float32Array {
+  const sampleCount = Math.floor(uint8Array.byteLength / 2);
   const int16 = new Int16Array(
     uint8Array.buffer,
     uint8Array.byteOffset,
-    uint8Array.byteLength / 2
+    sampleCount
   );
-  const floats = new Float32Array(int16.length);
-  for (let i = 0; i < int16.length; i++) {
+  const floats = new Float32Array(sampleCount);
+  for (let i = 0; i < sampleCount; i++) {
     floats[i] = int16[i] / 32768.0;
   }
   return floats;
@@ -88,6 +89,7 @@ export class MyraAudioSession {
   public inputAnalyser: AnalyserNode | null = null;
   public outputAnalyser: AnalyserNode | null = null;
   private outputGainNode: GainNode | null = null;
+  private outputLimiter: DynamicsCompressorNode | null = null;
   
   // Buffering / Playback details
   private nextStartTime = 0;
@@ -295,14 +297,23 @@ export class MyraAudioSession {
         await this.outputAudioCtx.resume().catch(() => {});
       }
 
-      // Setup custom output Analyser & Volume Gains
+      // Setup custom output Analyser & Volume Gains with studio-grade safety limiter
       this.outputGainNode = this.outputAudioCtx.createGain();
       this.outputAnalyser = this.outputAudioCtx.createAnalyser();
       this.outputAnalyser.fftSize = 256;
       this.outputAnalyser.smoothingTimeConstant = 0.8;
 
+      // Studio-grade transparent limiter to prevent DAC digital clipping ("fata hua" voice)
+      this.outputLimiter = this.outputAudioCtx.createDynamicsCompressor();
+      this.outputLimiter.threshold.setValueAtTime(-1.0, this.outputAudioCtx.currentTime); // -1.0 dBFS ceiling
+      this.outputLimiter.knee.setValueAtTime(6.0, this.outputAudioCtx.currentTime);       // gentle soft-knee transition
+      this.outputLimiter.ratio.setValueAtTime(16.0, this.outputAudioCtx.currentTime);     // firm limiting ratio
+      this.outputLimiter.attack.setValueAtTime(0.002, this.outputAudioCtx.currentTime);   // 2ms fast transient control
+      this.outputLimiter.release.setValueAtTime(0.12, this.outputAudioCtx.currentTime);   // 120ms smooth recovery
+
       this.outputGainNode.connect(this.outputAnalyser);
-      this.outputAnalyser.connect(this.outputAudioCtx.destination);
+      this.outputAnalyser.connect(this.outputLimiter);
+      this.outputLimiter.connect(this.outputAudioCtx.destination);
 
       // Setup custom input Analyser
       this.inputAnalyser = this.inputAudioCtx.createAnalyser();
@@ -658,15 +669,12 @@ export class MyraAudioSession {
       const source = this.outputAudioCtx.createBufferSource();
       source.buffer = buffer;
 
-      // Apply dynamic speaking rate if prosody profile exists
-      if (
-        this.currentProsody?.rate &&
-        typeof this.currentProsody.rate === "number" &&
-        this.currentProsody.rate >= 0.8 &&
-        this.currentProsody.rate <= 1.3
-      ) {
-        source.playbackRate.value = this.currentProsody.rate;
-      }
+      // Enforce true 1.0x native playback rate for streaming PCM chunks.
+      // Modifying Web Audio's playbackRate on live 24kHz streaming PCM resamples audio
+      // without pitch compensation (causing unnatural high-pitched shrill voice) and desynchronizes
+      // chunk boundaries against buffer.duration (causing "pt pt pt" silence gaps or chunk collision clipping).
+      // Gemini Live already generates natural cadence, pauses, and pacing natively within the audio stream.
+      source.playbackRate.value = 1.0;
 
       // Connect source to gain which is routed to analyser & speakers
       source.connect(this.outputGainNode);
@@ -805,6 +813,10 @@ export class MyraAudioSession {
     this.nextStartTime = 0;
     this.inputAnalyser = null;
     this.outputAnalyser = null;
+    if (this.outputLimiter) {
+      try { this.outputLimiter.disconnect(); } catch (e) {}
+      this.outputLimiter = null;
+    }
     this.outputGainNode = null;
   }
 

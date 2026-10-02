@@ -134,7 +134,7 @@ export const LANGUAGE_PROFILES: Record<ActiveLanguage, LanguageProfile> = {
       fallbackLocale: "en-IN",
       geminiVoice: "Aoede",
       rateMultiplier: 0.98,
-      pitchMultiplier: 1.02,
+      pitchMultiplier: 1.0,
       vowelFormants: {
         a: { f1: 750, f2: 1250 },
         i: { f1: 300, f2: 2300 },
@@ -293,7 +293,7 @@ export const LANGUAGE_PROFILES: Record<ActiveLanguage, LanguageProfile> = {
       fallbackLocale: "hi-IN",
       geminiVoice: "Aoede",
       rateMultiplier: 1.02,
-      pitchMultiplier: 1.01,
+      pitchMultiplier: 1.0,
       vowelFormants: {
         a: { f1: 740, f2: 1180 },
         i: { f1: 285, f2: 2310 },
@@ -376,7 +376,7 @@ export const LANGUAGE_PROFILES: Record<ActiveLanguage, LanguageProfile> = {
       fallbackLocale: "hi-IN",
       geminiVoice: "Aoede",
       rateMultiplier: 0.96,
-      pitchMultiplier: 1.04,
+      pitchMultiplier: 1.0,
       vowelFormants: {
         a: { f1: 780, f2: 1220 }, // Bengali rounded open vowel
         i: { f1: 290, f2: 2280 },
@@ -456,7 +456,7 @@ export const LANGUAGE_PROFILES: Record<ActiveLanguage, LanguageProfile> = {
       fallbackLocale: "hi-IN",
       geminiVoice: "Aoede",
       rateMultiplier: 0.95, // Slightly measured cadence with expressive vowel elongation
-      pitchMultiplier: 1.03,
+      pitchMultiplier: 1.0,
       vowelFormants: {
         a: { f1: 760, f2: 1200 },
         i: { f1: 295, f2: 2270 },
@@ -540,7 +540,7 @@ export const LANGUAGE_PROFILES: Record<ActiveLanguage, LanguageProfile> = {
       fallbackLocale: "hi-IN",
       geminiVoice: "Aoede",
       rateMultiplier: 0.94, // Distinct polite, lyrical Maithili cadence
-      pitchMultiplier: 1.05,
+      pitchMultiplier: 1.0,
       vowelFormants: {
         a: { f1: 740, f2: 1240 },
         i: { f1: 280, f2: 2320 },
@@ -624,7 +624,7 @@ export const LANGUAGE_PROFILES: Record<ActiveLanguage, LanguageProfile> = {
       fallbackLocale: "en-US",
       geminiVoice: "Kore",
       rateMultiplier: 1.04,
-      pitchMultiplier: 1.08,
+      pitchMultiplier: 1.02,
       vowelFormants: {
         a: { f1: 800, f2: 1300 }, // Pure Japanese 5-vowel matrix
         i: { f1: 280, f2: 2400 },
@@ -704,7 +704,7 @@ export const LANGUAGE_PROFILES: Record<ActiveLanguage, LanguageProfile> = {
       fallbackLocale: "en-IN",
       geminiVoice: "Aoede",
       rateMultiplier: 1.02,
-      pitchMultiplier: 1.02,
+      pitchMultiplier: 1.0,
       vowelFormants: {
         a: { f1: 770, f2: 1220 },
         i: { f1: 290, f2: 2350 },
@@ -784,7 +784,7 @@ export const LANGUAGE_PROFILES: Record<ActiveLanguage, LanguageProfile> = {
       fallbackLocale: "en-IN",
       geminiVoice: "Aoede",
       rateMultiplier: 1.01,
-      pitchMultiplier: 1.03,
+      pitchMultiplier: 1.0,
       vowelFormants: {
         a: { f1: 760, f2: 1240 },
         i: { f1: 295, f2: 2320 },
@@ -864,7 +864,7 @@ export const LANGUAGE_PROFILES: Record<ActiveLanguage, LanguageProfile> = {
       fallbackLocale: "en-US",
       geminiVoice: "Aoede",
       rateMultiplier: 0.98,
-      pitchMultiplier: 1.01,
+      pitchMultiplier: 1.0,
       vowelFormants: {
         a: { f1: 720, f2: 1100 },
         i: { f1: 260, f2: 2350 }, // Palatalized front vowel
