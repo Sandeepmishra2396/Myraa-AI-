@@ -382,7 +382,7 @@ export class LanguageManager {
     const hinglishMarkers = [
       /\b(kya|hai|hain|karo|karein|kaise|achha|acha|achhi|suno|batao|thik|theek|yaar|mera|meri|mere)\b/i,
       /\b(mujhe|tum|aap|hum|karna|hoga|hogi|nahi|nahin|haan|han|dekho|dekhein|chalo|bohot|bahut)\b/i,
-      /\b(waah|arre|are|oho|shukriya|dhanyawad|mat|kripya|bana|rakho|chal|raha|rahi|samjho|ruko|roko)\b/i,
+      /\b(waah|arre|arey|are yaar|are waah|oho|shukriya|dhanyawad|kripya|bana|rakho|chal|raha|rahi|samjho|ruko|roko)\b/i,
       /\b(bhai|dost|kaam|karega|karegi|karke|lekin|magar|kyunki|isko|usko|yahan|wahan|bolo|boliye|suniye)\b/i,
     ];
     let hinglishCount = 0;

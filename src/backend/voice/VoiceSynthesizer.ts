@@ -72,7 +72,9 @@ export class VoiceSynthesizer {
         rateMultiplier,
         pitchMultiplier,
         prosody.profile.emotion,
-        prosody.profile.language
+        prosody.profile.language,
+        prosody.profile.warmth,
+        prosody.profile.sentenceEnding
       );
     }
 
@@ -108,7 +110,9 @@ export class VoiceSynthesizer {
     rateMultiplier = 1.0,
     pitchMultiplier = 1.0,
     emotion = "neutral",
-    language: ActiveLanguage = "english"
+    language: ActiveLanguage = "english",
+    warmth?: "warm" | "gentle" | "bright" | "calm" | "clear",
+    sentenceEnding?: "falling" | "rising" | "sustained" | "melodic"
   ): Buffer {
     const words = text.split(/\s+/).filter(Boolean);
     const totalWords = Math.max(1, words.length);

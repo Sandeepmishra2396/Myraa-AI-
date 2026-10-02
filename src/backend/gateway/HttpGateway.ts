@@ -5143,6 +5143,55 @@ export function createHttpApp(): express.Application {
     }
   });
 
+  app.post("/api/voice/validate-sentence", async (req, res) => {
+    try {
+      const { text, language, userPrompt } = req.body || {};
+      if (!text || typeof text !== "string") {
+        res.status(400).json({ error: "Missing required string 'text'" });
+        return;
+      }
+      const { sentenceQualityGate, languageManager } = await import("../voice/index.ts");
+      const targetLang = (language as any) || languageManager.detectLanguage(text).language;
+      const result = sentenceQualityGate.validateAndRefine(text, targetLang, { userPrompt });
+      res.status(200).json({ ok: true, language: targetLang, ...result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Sentence validation failed") });
+    }
+  });
+
+  app.post("/api/voice/conversation-pacing", async (req, res) => {
+    try {
+      const { userPrompt, language, dialogueHistory } = req.body || {};
+      if (!userPrompt || typeof userPrompt !== "string") {
+        res.status(400).json({ error: "Missing required string 'userPrompt'" });
+        return;
+      }
+      const { humanConversationEngine, languageManager } = await import("../voice/index.ts");
+      const targetLang = (language as any) || languageManager.detectLanguage(userPrompt).language;
+      const result = humanConversationEngine.decidePacing(userPrompt, targetLang, dialogueHistory || []);
+      res.status(200).json({ ok: true, language: targetLang, ...result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Conversation pacing evaluation failed") });
+    }
+  });
+
+  app.post("/api/voice/reaction", async (req, res) => {
+    try {
+      const { text, emotion, language, context } = req.body || {};
+      if (!text || typeof text !== "string") {
+        res.status(400).json({ error: "Missing required string 'text'" });
+        return;
+      }
+      const { naturalReactionEngine, languageManager, speechProsodyEngine } = await import("../voice/index.ts");
+      const targetLang = (language as any) || languageManager.detectLanguage(text).language;
+      const targetEmotion = (emotion as any) || speechProsodyEngine.detectEmotion(text, context);
+      const result = naturalReactionEngine.decideReaction(text, targetEmotion, targetLang, context);
+      res.status(200).json({ ok: true, language: targetLang, emotion: targetEmotion, ...result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Reaction decision failed") });
+    }
+  });
+
   // ── Global Sanitized Error Handling Middleware ───────────────────────────
   // Guarantees fail-closed error responses and zero stack trace / path leakage to clients
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

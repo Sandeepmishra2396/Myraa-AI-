@@ -34,6 +34,9 @@ import type {
   PauseMarker,
 } from "./ProsodyTypes.ts";
 import { languageManager } from "./LanguageManager.ts";
+import { sentenceQualityGate } from "./SentenceQualityGate.ts";
+import { naturalReactionEngine } from "./NaturalReactionEngine.ts";
+import { humanConversationEngine } from "./HumanConversationEngine.ts";
 
 export interface ProsodyContext {
   userPrompt?: string;
@@ -63,14 +66,28 @@ export class SpeechProsodyEngine {
   public resetState(): void {
     this.recentFillers = [];
     this.lastTurnHadFiller = false;
+    naturalReactionEngine.resetState();
+    humanConversationEngine.resetState();
   }
 
   /**
    * Detect language across all 10 supported languages via LanguageManager.
+   * If response is in Latin script (e.g. code-switched or technical reply) and userPrompt
+   * has a clearly detected non-English language (e.g. Hinglish), inherit user's conversational language.
    */
-  public detectLanguage(text: string): DetectedLanguage {
+  public detectLanguage(text: string, context?: ProsodyContext): DetectedLanguage {
     if (!text) return "english";
-    return languageManager.detectLanguage(text).language;
+    const textDet = languageManager.detectLanguage(text);
+    if (context?.userPrompt) {
+      const promptDet = languageManager.detectLanguage(context.userPrompt);
+      if (
+        promptDet.language !== "english" &&
+        (textDet.language === "english" || textDet.confidence < promptDet.confidence)
+      ) {
+        return promptDet.language;
+      }
+    }
+    return textDet.language;
   }
 
   /**
@@ -204,7 +221,7 @@ export class SpeechProsodyEngine {
     context?: ProsodyContext,
     forcedLanguage?: DetectedLanguage
   ): ProsodyDecision {
-    const language = forcedLanguage || context?.forceLanguage || this.detectLanguage(text);
+    const language = forcedLanguage || context?.forceLanguage || this.detectLanguage(text, context);
     const emotion = this.detectEmotion(text, context);
     const isTechnical = context?.isCode || this.isPurelyTechnicalOrFactual(text, context?.userPrompt);
     const isUrgent = context?.isEmergency || false;
@@ -221,17 +238,41 @@ export class SpeechProsodyEngine {
       !this.lastTurnHadFiller; // Rule: Avoid adding filler to every sentence / consecutive turns
 
     if (fillerAllowed) {
-      const candidates = this.getCandidatesForEmotion(emotion, language);
-      const eligible = candidates.filter((c) => this.isFillerEligible(c));
+      // Check if naturalReactionEngine detects playful banter or teasing
+      const reactionDecision = naturalReactionEngine.decideReaction(
+        text,
+        emotion,
+        language,
+        {
+          userPrompt: context?.userPrompt,
+          isError: context?.isError,
+          isEmergency: context?.isEmergency,
+          isFactual: context?.isFactual,
+          isCode: context?.isCode,
+          isGreeting: context?.isGreeting,
+          taskSuccess: context?.taskSuccess,
+          forceNoReaction: context?.forceNoFiller,
+        }
+      );
 
-      if (eligible.length > 0) {
-        // Pick reaction that fits best
-        selectedReaction = this.selectBestCandidate(eligible, text);
+      if (reactionDecision.allowed && reactionDecision.reaction) {
+        selectedReaction = reactionDecision.reaction;
         shouldAddReaction = true;
         this.recordFillerUsage(selectedReaction);
         this.lastTurnHadFiller = true;
       } else {
-        this.lastTurnHadFiller = false;
+        const candidates = this.getCandidatesForEmotion(emotion, language);
+        const eligible = candidates.filter((c) => this.isFillerEligible(c));
+
+        if (eligible.length > 0) {
+          // Pick reaction that fits best
+          selectedReaction = this.selectBestCandidate(eligible, text);
+          shouldAddReaction = true;
+          this.recordFillerUsage(selectedReaction);
+          this.lastTurnHadFiller = true;
+        } else {
+          this.lastTurnHadFiller = false;
+        }
       }
     } else {
       this.lastTurnHadFiller = false;
@@ -259,10 +300,14 @@ export class SpeechProsodyEngine {
     // ── 3. Speaking Speed & Pitch ───────────────────────────────────────────
     const { rate, pitch } = this.computeRateAndPitch(emotion, isUrgent, language);
 
-    // ── 4. Contextual Pauses & Sentence Rhythm ──────────────────────────────
+    // ── 4. Warmth & Sentence Ending ─────────────────────────────────────────
+    const warmth = this.computeWarmth(emotion);
+    const sentenceEnding = this.computeSentenceEnding(text, emotion, language);
+
+    // ── 5. Contextual Pauses & Sentence Rhythm ──────────────────────────────
     const pauses = this.calculatePauseMarkers(text, emotion);
 
-    // ── 5. Emphasis on Important Words ──────────────────────────────────────
+    // ── 6. Emphasis on Important Words ──────────────────────────────────────
     const emphasisWords = this.identifyEmphasisWords(text, emotion);
 
     return {
@@ -274,13 +319,15 @@ export class SpeechProsodyEngine {
       pitch,
       pauses,
       emphasisWords,
-      reason: `emotion=${emotion}, lang=${language}, reaction=${selectedReaction || "none"}, laugh=${shouldAddLaughter}`,
+      warmth,
+      sentenceEnding,
+      reason: `emotion=${emotion}, lang=${language}, reaction=${selectedReaction || "none"}, laugh=${shouldAddLaughter}, warmth=${warmth}`,
     };
   }
 
   /**
-   * Main Transformation: Applies natural reactions, rhythmic pauses, word emphasis,
-   * and generates expressive speech text and valid SSML markup.
+   * Main Transformation: Applies quality validation, natural reactions,
+   * rhythmic pauses, word emphasis, and generates expressive speech text and SSML.
    */
   public transformSpeech(
     rawText: string,
@@ -288,11 +335,18 @@ export class SpeechProsodyEngine {
   ): ProsodyTransformationResult {
     // Preserve factual text: never mangle code blocks, URLs, or commands
     const cleanRaw = this.sanitizeRoleplayIfAny(rawText);
-    const language = context?.forceLanguage || this.detectLanguage(cleanRaw);
-    const emotion = this.detectEmotion(cleanRaw, context);
-    const decision = this.decideProsody(cleanRaw, context, language);
+    const language = context?.forceLanguage || this.detectLanguage(cleanRaw, context);
 
-    let expressiveText = cleanRaw;
+    // Pass through SentenceQualityGate before prosody & speech transformation
+    const qualityGate = sentenceQualityGate.validateAndRefine(cleanRaw, language, {
+      userPrompt: context?.userPrompt,
+    });
+    const validatedText = qualityGate.refinedText;
+
+    const emotion = this.detectEmotion(validatedText, context);
+    const decision = this.decideProsody(validatedText, context, language);
+
+    let expressiveText = validatedText;
 
     // Apply laughter if appropriate and not already present
     if (decision.shouldAddLaughter && decision.laughterToken) {
@@ -305,7 +359,7 @@ export class SpeechProsodyEngine {
     if (decision.shouldAddReaction && decision.reaction) {
       const startsWithReaction =
         expressiveText.startsWith(decision.reaction) ||
-        /^(hmm|ohh|oh|aha|haha|wait|oho|achha|acha|are waah|arre|हम्म|अच्छा|अरे वाह|বাহ|হুম|わあ|えーと|ஆஹா|ஆமாம்|ఆహా|సరే|Ого|Хм)\b/iu.test(
+        /^(hmm|ohh|oh|aha|haha|wait|oho|achha|acha|are waah|arre|हम्म|अच्छा|अरे वाह|हाहा|বাহ|হুম|わあ|えーと|ஆஹா|ஆமாம்|ఆహా|సరే|Ого|Хм)\b/iu.test(
           expressiveText
         );
       if (!startsWithReaction) {
@@ -319,17 +373,29 @@ export class SpeechProsodyEngine {
     // Build valid SSML markup for TTS systems
     const ssml = this.buildSsml(expressiveText, decision, emotion);
 
+    const pacing = humanConversationEngine.selectPacing(context?.userPrompt || "");
+    const pauseAverageMs =
+      decision.pauses.length > 0
+        ? Math.round(decision.pauses.reduce((acc, p) => acc + p.durationMs, 0) / decision.pauses.length)
+        : 0;
+
     const profile: ProsodyProfile = {
       emotion,
       language,
       rate: decision.rate,
       pitch: decision.pitch,
       energy: emotion === "excited" ? "high" : emotion === "calm" ? "low" : "medium",
+      warmth: decision.warmth,
+      sentenceEnding: decision.sentenceEnding,
+      pacing,
       reactionUsed: decision.reaction,
       hasLaughter: decision.shouldAddLaughter,
       laughterToken: decision.laughterToken,
       pauseCount: decision.pauses.length,
+      pauseAverageMs,
       emphasisWords: decision.emphasisWords,
+      qualityValid: qualityGate.isValid,
+      wasRewritten: qualityGate.wasRewritten,
     };
 
     const langProfile = languageManager.getLanguageProfile(language);
@@ -340,13 +406,50 @@ export class SpeechProsodyEngine {
       ssml,
       profile,
       decision,
+      qualityGate,
       audioHints: {
         voice: langProfile.ttsConfig.geminiVoice,
         rate: decision.rate,
         pitch: decision.pitch,
-        stylePrompt: `Speak in a warm, natural, ${emotion} tone in ${langProfile.name} with expressive pacing.`,
+        stylePrompt: `Speak in a ${decision.warmth || "warm"}, natural, ${emotion} tone in ${langProfile.name} with expressive pacing.`,
       },
     };
+  }
+
+  private computeWarmth(emotion: EmotionState): "warm" | "gentle" | "bright" | "calm" | "clear" {
+    switch (emotion) {
+      case "happy":
+        return "warm";
+      case "excited":
+        return "bright";
+      case "concerned":
+        return "gentle";
+      case "calm":
+        return "calm";
+      case "curious":
+        return "warm";
+      case "neutral":
+      default:
+        return "clear";
+    }
+  }
+
+  private computeSentenceEnding(
+    text: string,
+    emotion: EmotionState,
+    language: DetectedLanguage
+  ): "falling" | "rising" | "sustained" | "melodic" {
+    const trimmed = text.trim();
+    if (trimmed.endsWith("?")) {
+      return "rising";
+    }
+    if (trimmed.endsWith("...") || trimmed.endsWith("—")) {
+      return "sustained";
+    }
+    if (language === "telugu" || language === "bengali" || language === "maithili" || emotion === "happy") {
+      return "melodic";
+    }
+    return "falling";
   }
 
   /**

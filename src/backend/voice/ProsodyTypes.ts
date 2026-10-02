@@ -26,17 +26,47 @@ export interface PauseMarker {
   markerText: string;
 }
 
+export interface QualityIssue {
+  type:
+    | "grammar"
+    | "language_inconsistency"
+    | "unnatural_translation"
+    | "broken_sentence"
+    | "wrong_pronoun_honorific"
+    | "accidental_language_mixing"
+    | "repeated_words"
+    | "awkward_phrasing";
+  description: string;
+  originalSegment?: string;
+  replacementSegment?: string;
+}
+
+export interface QualityValidationResult {
+  originalText: string;
+  refinedText: string;
+  isValid: boolean;
+  issuesFound: QualityIssue[];
+  wasRewritten: boolean;
+  confidence: number;
+}
+
 export interface ProsodyProfile {
   emotion: EmotionState;
   language: DetectedLanguage;
   rate: number;         // 0.85 - 1.20
   pitch: number;        // 0.90 - 1.15
   energy: "low" | "medium" | "high";
+  warmth?: "warm" | "gentle" | "bright" | "calm" | "clear";
+  sentenceEnding?: "falling" | "rising" | "sustained" | "melodic";
+  pacing?: "short" | "medium" | "detailed";
   reactionUsed: string | null;
   hasLaughter: boolean;
   laughterToken: string | null;
   pauseCount: number;
+  pauseAverageMs?: number;
   emphasisWords: string[];
+  qualityValid?: boolean;
+  wasRewritten?: boolean;
 }
 
 export interface ProsodyDecision {
@@ -48,6 +78,8 @@ export interface ProsodyDecision {
   pitch: number;
   pauses: PauseMarker[];
   emphasisWords: string[];
+  warmth?: "warm" | "gentle" | "bright" | "calm" | "clear";
+  sentenceEnding?: "falling" | "rising" | "sustained" | "melodic";
   reason: string;
 }
 
@@ -57,6 +89,7 @@ export interface ProsodyTransformationResult {
   ssml: string;
   profile: ProsodyProfile;
   decision: ProsodyDecision;
+  qualityGate?: QualityValidationResult;
   audioHints: {
     voice: string;
     rate: number;

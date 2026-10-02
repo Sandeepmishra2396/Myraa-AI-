@@ -2454,11 +2454,12 @@ export class GeminiSessionFactory {
                 type: "speech_prosody",
                 prosody: prosodyResult.profile,
                 audioHints: prosodyResult.audioHints,
+                qualityGate: prosodyResult.qualityGate,
               });
 
               dialogueHistory.push({
                 role: "model",
-                text: currentModelResponseRef.text,
+                text: prosodyResult.expressiveText,
               });
               currentModelResponseRef.text = "";
             }
