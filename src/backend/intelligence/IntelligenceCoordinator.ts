@@ -32,6 +32,8 @@ import { actionPlanningEngine } from "./ActionPlanningEngine.ts";
 import { intelligenceActionVerifier } from "./ActionVerifier.ts";
 import { contextMemoryUpdater } from "./ContextMemoryUpdater.ts";
 import { intelligenceTrace } from "./IntelligenceTrace.ts";
+import { contextFusionCoordinator } from "./ContextFusionCoordinator.ts";
+import { referenceResolver } from "./ReferenceResolver.ts";
 import {
   intentCapabilityOrchestrator,
   type OrchestratorExecutors,
@@ -43,6 +45,7 @@ import type {
   ResolvedGoal,
   SituationUnderstanding,
   TaskState,
+  UnifiedMyraaContext,
 } from "./IntelligenceTypes.ts";
 import type { SecurityContext } from "../security/SecurityTypes.ts";
 import type { TargetDevice } from "../orchestrator/OrchestratorTypes.ts";
@@ -79,6 +82,8 @@ export class IntelligenceCoordinator {
   public verifier = intelligenceActionVerifier;
   public updater = contextMemoryUpdater;
   public trace = intelligenceTrace;
+  public fusionCoordinator = contextFusionCoordinator;
+  public references = referenceResolver;
 
   /**
    * Evaluates user input and produces a context-aware decision without immediate side-effects.
@@ -146,6 +151,22 @@ export class IntelligenceCoordinator {
     });
 
     return decision;
+  }
+
+  /**
+   * Phase 19: Evaluates user input using full Unified Context Fusion.
+   */
+  public async evaluateUnified(
+    userInput: string,
+    contextId = "default",
+    secContext?: SecurityContext,
+    deviceHint?: TargetDevice
+  ): Promise<{ decision: DecisionEvaluation; unifiedContext: UnifiedMyraaContext }> {
+    const unifiedContext = await this.fusionCoordinator.fuseUnifiedContext(contextId, undefined, deviceHint, userInput);
+    const situation = this.situation.analyzeSituation(userInput, unifiedContext);
+    const goal = this.goals.resolveGoal(userInput, situation, unifiedContext);
+    const decision = this.decision.evaluateDecision(userInput, goal, situation, unifiedContext, secContext);
+    return { decision, unifiedContext };
   }
 
   /**

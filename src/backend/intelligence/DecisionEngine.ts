@@ -77,6 +77,42 @@ export class DecisionEngine {
     }
 
     const isLockdown = securityPolicyEngine.getMode() === "LOCKDOWN";
+    if (
+      isLockdown &&
+      (situation.riskContext === "HIGH" ||
+        situation.riskContext === "CRITICAL" ||
+        /\b(modify|change|edit|overwrite|delete|remove|destroy|write|run|create)\b/i.test(userInput))
+    ) {
+      return {
+        decisionId,
+        timestamp: Date.now(),
+        userInput,
+        intent: "BLOCKED",
+        targetDevice: goal.targetDevice,
+        targetEntity: goal.targetEntity,
+        goal,
+        contextSnapshot: {
+          device: context.currentDevice,
+          application: context.currentApplication,
+          file: context.currentFile,
+          project: context.currentProject,
+          task: context.currentTask?.goal || null,
+        },
+        availableCapabilities: [],
+        constraints: ["Security Lockdown is active: system-modifying actions are strictly blocked."],
+        risk: "HIGH",
+        confidence: "HIGH",
+        confidenceScore: 1.0,
+        candidateActions: [],
+        selectedAction: null,
+        reason: "LOCKDOWN_MODE: Modifying actions are restricted while system is in security lockdown.",
+        verificationMethod: "none",
+        requiresClarification: false,
+        requiresConfirmation: false,
+        blockedBySecurity: true,
+        securityBlockReason: "LOCKDOWN_MODE",
+      };
+    }
 
     // ── 2. Ambiguity & Clarification Evaluation ─────────────────────────────
     if (situation.ambiguityLevel === "HIGH") {
@@ -200,8 +236,30 @@ export class DecisionEngine {
   ): void {
     const targetDevice = goal.targetDevice || "DESKTOP";
 
+    // Scenario Close: Application Close ("close vscode", "ab isko close kar do")
+    const isCloseCommand =
+      /\b(close|band karo|hata do|hatao|quit|exit)\b/i.test(goal.primaryGoal) ||
+      /\b(close|band karo|hata do|hatao|quit|exit)\b/i.test(goal.rawInput);
+
+    if (isCloseCommand) {
+      const appToClose = goal.targetEntity || situation.activeEntities.apps[0] || context.currentApplication || "app";
+      candidates.push({
+        id: "act_app_close",
+        capability: "desktop.closeApplication",
+        toolName: "closeApplication",
+        args: { appName: appToClose },
+        targetDevice,
+        score: 0.96,
+        risk: "LOW",
+        requiresConfirmation: false,
+        reason: `Close application '${appToClose}'`,
+        verificationMethod: "process_and_window_check",
+      });
+      return;
+    }
+
     // Scenario A: VS Code Open (with project binding)
-    if (goal.targetEntity === "vscode" || /\b(vscode|vs code)\b/i.test(goal.primaryGoal)) {
+    if (!isCloseCommand && (goal.targetEntity === "vscode" || /\b(vscode|vs code)\b/i.test(goal.primaryGoal))) {
       const workspacePath = context.currentProject || context.userPreferences.preferredWorkspace;
       const assessment = capabilityAwarenessEngine.assessCapability(
         "openInVsCode",
@@ -246,20 +304,29 @@ export class DecisionEngine {
       }
     }
 
-    // Scenario C: Code Inspection / Bug Diagnosis ("Isko check karo", "Isme bug hai")
-    if (goal.followUpType === "inspect" || /\b(inspect|check|diagnose)\b/i.test(goal.primaryGoal)) {
-      const targetFile = situation.implicitReferences.resolvedEntity || context.currentFile;
-      if (targetFile) {
+    // Scenario C: Code Inspection / Bug Diagnosis / Improvement ("Isko check karo", "Isme bug hai", "Isko improve karo", "Iska backend check karo")
+    if (
+      goal.followUpType === "inspect" ||
+      /\b(inspect|check|diagnose|improve|optimize|backend)\b/i.test(goal.primaryGoal) ||
+      /\b(inspect|check|diagnose|improve|optimize|backend)\b/i.test(goal.rawInput)
+    ) {
+      const target =
+        situation.implicitReferences.resolvedEntity ||
+        goal.targetEntity ||
+        context.currentFile ||
+        context.currentProject;
+
+      if (target) {
         candidates.push({
           id: "act_code_inspect",
           capability: "code.inspect",
           toolName: "readFile",
-          args: { filePath: targetFile },
+          args: { filePath: target },
           targetDevice,
           score: 0.94,
           risk: "LOW",
           requiresConfirmation: false,
-          reason: `Read and inspect code in '${targetFile}' to diagnose issues`,
+          reason: `Read and inspect code in '${target}' to diagnose issues`,
           verificationMethod: "code_diagnostics_report",
         });
         return;
@@ -268,7 +335,7 @@ export class DecisionEngine {
 
     // Scenario D: Run Tests ("Ab isko test karo")
     if (goal.followUpType === "test" || /\b(test|run test)\b/i.test(goal.primaryGoal)) {
-      const targetFile = situation.implicitReferences.resolvedEntity || context.currentFile;
+      const targetFile = situation.implicitReferences.resolvedEntity || goal.targetEntity || context.currentFile || context.currentProject;
       candidates.push({
         id: "act_code_test",
         capability: "code.runTests",
@@ -302,7 +369,7 @@ export class DecisionEngine {
       return;
     }
 
-    // Scenario F: File Open ("open file.ts")
+    // Scenario G: File Open ("open file.ts")
     if (situation.activeEntities.files.length === 1 || situation.implicitReferences.resolvedType === "file") {
       const fileToOpen = situation.activeEntities.files[0] || situation.implicitReferences.resolvedEntity;
       if (fileToOpen) {

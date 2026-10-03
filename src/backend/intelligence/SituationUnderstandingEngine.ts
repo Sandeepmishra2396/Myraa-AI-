@@ -66,13 +66,18 @@ export class SituationUnderstandingEngine {
       return "desktop";
     }
 
+    const hasConversationCodeFile = context.previousConversation?.some((t) =>
+      /[\w.-]+\.(ts|tsx|js|jsx|py|json|md|html|css|txt|log|yaml|yml)/i.test(t.text)
+    );
+
     if (
-      /\b(code|bug|error|test|syntax|function|script|compile|debug|inspect|review|refactor|vs code|vscode|editor|python|ts|js)\b/i.test(
+      /\b(code|bug|error|test|syntax|function|script|compile|debug|inspect|review|refactor|optimize|improve|vs code|vscode|editor|python|ts|js)\b/i.test(
         lower
       ) ||
       (/\bfile\b/i.test(lower) && !/\b(file manager|filemanager|file explorer)\b/i.test(lower)) ||
       Boolean(context.currentFile) ||
-      Boolean(context.currentTask)
+      Boolean(context.currentTask) ||
+      Boolean(hasConversationCodeFile)
     ) {
       return "code";
     }
@@ -99,6 +104,19 @@ export class SituationUnderstandingEngine {
     if (context.currentTask?.relevantEntities?.files) {
       for (const f of context.currentTask.relevantEntities.files) {
         if (!files.includes(f)) files.push(f);
+      }
+    }
+
+    // Cross-turn conversation entity extraction
+    if (files.length === 0 && context.previousConversation?.length) {
+      for (const turn of [...context.previousConversation].reverse()) {
+        const turnFiles = turn.text.match(/[\w.-]+\.(ts|tsx|js|jsx|py|json|md|html|css|txt|log|yaml|yml)/gi);
+        if (turnFiles) {
+          for (const f of turnFiles) {
+            if (!files.includes(f)) files.push(f);
+          }
+          if (files.length > 0) break;
+        }
       }
     }
 
@@ -151,7 +169,8 @@ export class SituationUnderstandingEngine {
     context: FusedContext,
     entities: SituationUnderstanding["activeEntities"]
   ): SituationUnderstanding["implicitReferences"] {
-    const deicticRegex = /\b(isko|isme|isse|ye|yeh|ye wala|yeh wala|this|it|that|this one|that one|the file|the code|the result)\b/i;
+    const deicticRegex =
+      /\b(iske andar|ye wala|yeh wala|woh wala|wo wala|this one|that one|the file|the code|the result|iska|uska|isko|usko|isme|usme|isse|ispe|yeh|ye|woh|wo|yahi|wahi|idhar|this|it|that)\b/i;
     const hasDeicticReference = deicticRegex.test(lower);
     const match = lower.match(deicticRegex);
     const rawPronoun = match ? match[1] : undefined;
@@ -179,9 +198,25 @@ export class SituationUnderstandingEngine {
       };
     }
 
+    // Intent hints
+    const isProjectIntent = /\b(project|workspace|backend|frontend|repo|repository)\b/i.test(lower);
+    const isAppIntent = /\b(close|band karo|hata do|hatao|quit|exit|minimize|maximize|switch)\b/i.test(lower);
+
     // Reference Resolution Ladder:
-    // 1. Current File / Code
-    if (entities.files.length === 1 || context.currentFile) {
+    // 1. If project intent and project is known
+    if (isProjectIntent && context.currentProject) {
+      return {
+        hasDeicticReference: true,
+        rawPronoun,
+        resolvedEntity: context.currentProject,
+        resolvedType: "project",
+        sourcePriority: ContextPriority.CURRENT_APPLICATION_FILE_PROJECT,
+        confidence: 0.95,
+      };
+    }
+
+    // 2. Current File / Code
+    if (!isAppIntent && (entities.files.length === 1 || context.currentFile)) {
       const resolved = context.currentFile || entities.files[0];
       return {
         hasDeicticReference: true,
@@ -193,7 +228,7 @@ export class SituationUnderstandingEngine {
       };
     }
 
-    // 2. Active Task target
+    // 3. Active Task target
     if (context.currentTask?.relevantEntities?.files?.[0]) {
       return {
         hasDeicticReference: true,
@@ -205,7 +240,7 @@ export class SituationUnderstandingEngine {
       };
     }
 
-    // 3. Current Application
+    // 4. Current Application
     if (entities.apps.length > 0 || context.currentApplication) {
       const app = context.currentApplication || entities.apps[0];
       return {
@@ -218,7 +253,7 @@ export class SituationUnderstandingEngine {
       };
     }
 
-    // 4. Current Project
+    // 5. Current Project
     if (context.currentProject) {
       return {
         hasDeicticReference: true,

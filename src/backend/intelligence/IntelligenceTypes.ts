@@ -144,7 +144,7 @@ export interface ResolvedGoal {
   targetDevice: TargetDevice;
   confidence: number; // 0.0 - 1.0
   isFollowUp: boolean;
-  followUpType?: "test" | "run" | "browse" | "inspect" | "select" | "confirm" | "retry" | null;
+  followUpType?: "test" | "run" | "browse" | "inspect" | "select" | "confirm" | "retry" | "cancel" | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -309,3 +309,136 @@ export interface IntelligenceTraceRecord {
   };
   sanitized: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// 10. Phase 19 — Advanced Context Fusion Schemas
+// ---------------------------------------------------------------------------
+
+export type ContextSourceType =
+  | "voice"
+  | "conversation"
+  | "application"
+  | "file"
+  | "project"
+  | "browser"
+  | "screen"
+  | "brain"
+  | "task"
+  | "device"
+  | "recent_actions"
+  | "ui_state";
+
+export interface ContextSourceMetadata {
+  sourceId: ContextSourceType;
+  name: string;
+  reliability: number; // 0.0 to 1.0 base reliability
+  defaultTtlMs: number;
+  lastSampledAt?: number;
+}
+
+export interface ContextItemProvenance<T = unknown> {
+  value: T;
+  source: ContextSourceType;
+  confidence: number; // 0.0 to 1.0
+  timestamp: number;
+  isStale: boolean;
+  decayFactor: number; // 1.0 (fresh) -> 0.0 (fully decayed)
+  provenanceId: string;
+  rawObservation?: unknown;
+}
+
+export interface ContextConflict {
+  entityType: "file" | "application" | "project" | "url" | "action" | "preference";
+  primaryCandidate: {
+    value: string;
+    source: ContextSourceType;
+    confidence: number;
+    timestamp: number;
+  };
+  conflictingCandidate: {
+    value: string;
+    source: ContextSourceType;
+    confidence: number;
+    timestamp: number;
+  };
+  resolution: "primary_won" | "conflicting_won" | "ambiguous_unresolved";
+  winningValue: string | null;
+  rationale: string;
+}
+
+export interface ResolvedReference {
+  rawPronoun: string; // e.g. "isko", "isme", "ye", "this", "that"
+  resolvedEntity: string | null;
+  resolvedType: "file" | "app" | "project" | "url" | "media" | "task" | "code" | null;
+  source: ContextSourceType;
+  confidence: number;
+  confidenceTier: "HIGH" | "MEDIUM" | "LOW";
+  timestamp: number;
+  isStale: boolean;
+  isAmbiguous: boolean;
+  candidateAlternatives: string[];
+  clarificationPrompt?: string;
+}
+
+export interface UnifiedMyraaContext extends FusedContext {
+  voiceState: {
+    isListening: boolean;
+    lastVoiceUtterance: string;
+    lastModelResponse: string;
+    timestamp: number;
+  };
+  activeWindow: {
+    title: string;
+    processName: string;
+    bounds?: unknown;
+    isSensitive?: boolean;
+    timestamp: number;
+  } | null;
+  visualContext: {
+    ocrTextSummary?: string;
+    hasRedSquiggles?: boolean;
+    detectedError?: string;
+    timestamp: number;
+    isStale: boolean;
+  } | null;
+  browserContext: {
+    url: string | null;
+    pageTitle: string | null;
+    activeTabTitle?: string;
+    timestamp: number;
+    isStale: boolean;
+  } | null;
+  brainContext: {
+    activeDirectives: string[];
+    learnedPreferencesCount: number;
+    recentCorrections: string[];
+    timestamp: number;
+  } | null;
+  deviceState: {
+    deviceType: TargetDevice;
+    isLocal: boolean;
+    localTime: string;
+    timestamp: number;
+  };
+  freshnessSummary: Record<ContextSourceType, { isFresh: boolean; ageMs: number; decayFactor: number }>;
+  conflictsDetected: ContextConflict[];
+  resolvedReferences: Record<string, ResolvedReference>;
+  provenanceChain: Array<{
+    source: ContextSourceType;
+    field: string;
+    confidence: number;
+    timestamp: number;
+  }>;
+}
+
+export interface ContextProvenanceRecord {
+  provenanceId: string;
+  contextId: string;
+  timestamp: number;
+  contributingSources: ContextSourceType[];
+  conflicts: ContextConflict[];
+  resolvedReferences: Record<string, ResolvedReference>;
+  overallConfidence: number;
+  sanitized: boolean;
+}
+

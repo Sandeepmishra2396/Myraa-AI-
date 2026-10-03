@@ -73,14 +73,30 @@ export class ContextMemoryUpdater {
     }
 
     // 2. Record in ContextFusionEngine recent action ring
+    const targetStr = String(action.args.path || action.args.filePath || action.args.name || action.args.url || "");
     contextFusionEngine.recordRecentAction(contextId, {
       actionId: action.id,
       intent: action.capability,
       toolName: action.toolName,
-      target: String(action.args.path || action.args.filePath || action.args.name || action.args.url || ""),
+      target: targetStr,
       result,
       ok,
     });
+
+    // 2b. Record in Phase 18 Cognitive Learning Layer (command pattern tracking)
+    try {
+      import("../brain/index.ts").then(({ cognitiveLearningCoordinator }) => {
+        cognitiveLearningCoordinator
+          .recordCommand(action.toolName, targetStr, {
+            capability: action.capability,
+            ok,
+            contextId,
+          })
+          .catch(() => {});
+      }).catch(() => {});
+    } catch {
+      /* pattern tracking is best-effort */
+    }
 
     // 3. Advance active task step if a task is active
     const activeTask = contextFusionEngine.getActiveTask(contextId);

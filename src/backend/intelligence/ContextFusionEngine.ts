@@ -318,6 +318,23 @@ export class ContextFusionEngine {
 
     return fused;
   }
+
+  /**
+   * Phase 19: Asynchronously fuses all 12+ multi-source perception streams into a UnifiedMyraaContext.
+   */
+  public async fuseUnifiedContext(
+    contextIdOrOverrides: string | Partial<import("./IntelligenceTypes.ts").UnifiedMyraaContext> = "default",
+    currentDeviceHint?: TargetDevice,
+    userInput?: string
+  ): Promise<import("./IntelligenceTypes.ts").UnifiedMyraaContext> {
+    const { contextFusionCoordinator } = await import("./ContextFusionCoordinator.ts");
+    const cid =
+      typeof contextIdOrOverrides === "string"
+        ? contextIdOrOverrides
+        : contextIdOrOverrides.contextId || "default";
+    const overrides = typeof contextIdOrOverrides === "object" ? contextIdOrOverrides : undefined;
+    return contextFusionCoordinator.fuseUnifiedContext(cid, overrides, currentDeviceHint, userInput);
+  }
 }
 
 export const contextFusionEngine = new ContextFusionEngine();

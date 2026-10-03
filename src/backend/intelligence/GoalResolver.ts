@@ -46,7 +46,7 @@ export class GoalResolver {
       expectedOutcome = "Browser application running and visible";
       targetDevice = "DESKTOP";
       confidence = 0.92;
-    } else if (/\b(isme kya problem hai|kya issue hai|isme bug hai|check karo|dekhna)\b/i.test(lower)) {
+    } else if (/\b(isme kya problem hai|kya issue hai|isme bug hai|check karo|dekhna|improve karo|improve|optimize|optimize karo)\b/i.test(lower)) {
       isFollowUp = true;
       followUpType = "inspect";
       primaryGoal = `Inspect and diagnose issues in ${targetEntity || "active code/file"}`;
@@ -97,13 +97,22 @@ export class GoalResolver {
       primaryGoal = `Open application '${app}'`;
       expectedOutcome = `Application '${app}' running`;
       confidence = 0.95;
+    } else if (/\b(close|band karo|hata do|hatao|quit|exit)\b/i.test(lower) && (situation.activeEntities.apps.length > 0 || targetEntity || context.currentApplication)) {
+      const app = targetEntity || situation.activeEntities.apps[0] || context.currentApplication || "app";
+      targetEntity = app;
+      primaryGoal = `Close application '${app}'`;
+      expectedOutcome = `Application '${app}' closed`;
+      confidence = 0.95;
     }
-    // 4. File Open / Check: "Isko check karo", "open file.ts"
-    else if (/\b(check karo|dekho|inspect)\b/i.test(lower)) {
+    // 4. File Open / Check / Improve: "Isko check karo", "Isko improve karo", "Iska backend check karo", "open file.ts"
+    else if (/\b(check karo|dekho|inspect|improve|optimize|backend)\b/i.test(lower)) {
       isImplicit = situation.implicitReferences.hasDeicticReference;
-      primaryGoal = `Inspect and verify '${targetEntity || "current context"}'`;
+      isFollowUp = true;
+      followUpType = "inspect";
+      const resolvedTarget = targetEntity || situation.implicitReferences.resolvedEntity || context.currentProject || context.currentFile;
+      primaryGoal = `Inspect and verify '${resolvedTarget || "current context"}'`;
       expectedOutcome = "Inspection diagnostics report provided";
-      confidence = targetEntity ? 0.9 : 0.55;
+      confidence = resolvedTarget ? 0.9 : 0.55;
     } else {
       primaryGoal = raw;
       expectedOutcome = "Command executed successfully";

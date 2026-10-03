@@ -71,6 +71,23 @@ export class UserPreferenceResolver {
   }
 
   /**
+   * Synchronize learned cognitive preferences into the profile.
+   */
+  public syncCognitivePreferences(
+    memories: Array<{ key: string; value: any; status: string }>,
+    userId = "default"
+  ): void {
+    for (const mem of memories) {
+      if (mem.status !== "active") continue;
+      if (mem.key === "workflow.preferred_editor" && typeof mem.value === "string") {
+        this.updatePreferences(userId, { preferredEditor: mem.value });
+      } else if (mem.key === "comm.language" && typeof mem.value === "string") {
+        this.updatePreferences(userId, { preferredLanguage: mem.value });
+      }
+    }
+  }
+
+  /**
    * Resolves whether the user's explicit utterance overrides a stored preference.
    * If user explicitly says "Cursor kholo" or "open in notepad", preference "vscode" MUST NOT override it.
    */
