@@ -47,7 +47,8 @@ export class ConversationManager {
     if (!keyMeta.isValid || !keyMeta.key) {
       const isCloud =
         (process.env.NODE_ENV === "production" || keyMeta.source === "GEMINI_API_KEY") &&
-        process.env.SORA_LAUNCHED_BY !== "electron";
+        process.env.SORA_LAUNCHED_BY !== "electron" &&
+        process.env.MYRAA_LOCAL_DESKTOP !== "true";
       const isPlaceholder = Boolean(keyMeta.isPlaceholder);
       const errMsg = isPlaceholder && isCloud
         ? "SERVER_API_KEY_PLACEHOLDER: The server environment variable GEMINI_API_KEY on Render contains an unconfigured template placeholder (ends in HERE). Please update GEMINI_API_KEY in the Render Dashboard with a valid Google Gemini API key from Google AI Studio."
@@ -226,6 +227,12 @@ export class ConversationManager {
               });
             });
           }
+          return;
+        }
+
+        if (msg.type === "interrupted") {
+          console.log("[ConversationManager] Client signaled local barge-in interruption.");
+          currentModelResponseRef.text = "";
           return;
         }
 
