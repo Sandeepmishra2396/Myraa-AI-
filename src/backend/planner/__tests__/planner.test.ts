@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MYRAA — Phase 5: Planner Test Suite
  *
  * Tests cover:
@@ -431,7 +431,11 @@ describe("PlanStore", () => {
   });
 
   afterEach(() => {
-    process.env.SORA_DATA_DIR = originalEnv;
+    if (originalEnv === undefined) {
+      delete process.env.SORA_DATA_DIR;
+    } else {
+      process.env.SORA_DATA_DIR = originalEnv;
+    }
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

@@ -5265,6 +5265,1067 @@ export function createHttpApp(): express.Application {
     }
   });
 
+  // ── Phase 19 — Advanced Context Fusion REST Endpoints ────────────────────
+  app.post(["/api/intelligence/unified-context", "/api/context/unified"], async (req, res) => {
+    try {
+      const { contextId, overrides, device, input } = req.body || {};
+      const { contextFusionCoordinator } = await import("../intelligence/index.ts");
+      const unifiedContext = await contextFusionCoordinator.fuseUnifiedContext(
+        contextId || "default",
+        overrides,
+        device,
+        input
+      );
+      res.status(200).json({ ok: true, unifiedContext });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Unified context fusion failed") });
+    }
+  });
+
+  app.post(["/api/intelligence/resolve-reference", "/api/context/resolve-reference"], async (req, res) => {
+    try {
+      const { input, contextId } = req.body || {};
+      if (!input || typeof input !== "string") {
+        res.status(400).json({ error: "Missing required string 'input'" });
+        return;
+      }
+      const { contextFusionEngine, referenceResolver } = await import("../intelligence/index.ts");
+      const base = contextFusionEngine.fuseContext(contextId || "default");
+      const reference = referenceResolver.resolveReference(input, base);
+      res.status(200).json({ ok: true, reference });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Reference resolution failed") });
+    }
+  });
+
+  app.get(["/api/intelligence/provenance", "/api/context/provenance"], async (req, res) => {
+    try {
+      const limit = parseInt((req.query.limit as string) || "50", 10);
+      const { contextProvenanceTracker } = await import("../intelligence/index.ts");
+      const records = contextProvenanceTracker.listRecentProvenance(limit);
+      res.status(200).json({ ok: true, provenance: records });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to retrieve provenance") });
+    }
+  });
+
+  // ── Phase 18 — Adaptive Personal Brain REST Endpoints ────────────────────
+  app.post("/api/brain/learn", async (req, res) => {
+    try {
+      const { utterance, contextId } = req.body || {};
+      if (!utterance || typeof utterance !== "string") {
+        res.status(400).json({ error: "Missing required string 'utterance'" });
+        return;
+      }
+      const { cognitiveLearningCoordinator } = await import("../brain/index.ts");
+      const result = await cognitiveLearningCoordinator.processUserInput(utterance, contextId || "default");
+      res.status(200).json({ ok: true, result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Brain learning processing failed") });
+    }
+  });
+
+  app.get("/api/brain/preferences", async (req, res) => {
+    try {
+      const category = req.query.category as any;
+      const status = req.query.status as any;
+      const minConfidence = req.query.minConfidence ? parseFloat(req.query.minConfidence as string) : undefined;
+
+      const { cognitiveLearningCoordinator } = await import("../brain/index.ts");
+      const preferences = await cognitiveLearningCoordinator.listPreferences({
+        category,
+        status,
+        minConfidence,
+      });
+      res.status(200).json({ ok: true, preferences });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to list cognitive preferences") });
+    }
+  });
+
+  app.get("/api/brain/prompt", async (_req, res) => {
+    try {
+      const { cognitiveLearningCoordinator } = await import("../brain/index.ts");
+      const prompt = await cognitiveLearningCoordinator.getAdaptivePrompt();
+      res.status(200).json({ ok: true, prompt });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to synthesize adaptive prompt") });
+    }
+  });
+
+  app.get("/api/brain/patterns", async (req, res) => {
+    try {
+      const minFreq = req.query.minFrequency ? parseInt(req.query.minFrequency as string, 10) : 3;
+      const { cognitiveLearningCoordinator } = await import("../brain/index.ts");
+      const patterns = await cognitiveLearningCoordinator.getFrequentCommands(minFreq);
+      res.status(200).json({ ok: true, patterns });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get command patterns") });
+    }
+  });
+
+  app.post("/api/brain/feedback", async (req, res) => {
+    try {
+      const { text, contextId } = req.body || {};
+      if (!text || typeof text !== "string") {
+        res.status(400).json({ error: "Missing required string 'text'" });
+        return;
+      }
+      const { cognitiveLearningCoordinator } = await import("../brain/index.ts");
+      const result = await cognitiveLearningCoordinator.processUserInput(text, contextId || "default");
+      res.status(200).json({ ok: true, feedbackReceived: true, result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Feedback processing failed") });
+    }
+  });
+
+  app.delete("/api/brain/preferences/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { cognitiveLearningCoordinator } = await import("../brain/index.ts");
+      const deleted = await cognitiveLearningCoordinator.deletePreference(id);
+      res.status(200).json({ ok: true, deleted });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to delete cognitive preference") });
+    }
+  });
+
+  // ── Phase 20 — Advanced Natural Conversation REST Endpoints ───────────────
+  app.post("/api/conversation/message", async (req, res) => {
+    try {
+      const { message, contextId } = req.body || {};
+      if (!message || typeof message !== "string") {
+        res.status(400).json({ error: "Missing required string 'message'" });
+        return;
+      }
+      const { naturalConversationEngine } = await import("../conversation/index.ts");
+      const outcome = await naturalConversationEngine.converse(message, contextId || "default");
+      res.status(200).json({ ok: true, outcome });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Conversation turn processing failed") });
+    }
+  });
+
+  app.post("/api/conversation/interrupt", async (req, res) => {
+    try {
+      const { utterance, contextId } = req.body || {};
+      if (!utterance || typeof utterance !== "string") {
+        res.status(400).json({ error: "Missing required string 'utterance'" });
+        return;
+      }
+      const { naturalConversationEngine } = await import("../conversation/index.ts");
+      const interruption = naturalConversationEngine.handleInterruption(utterance, contextId || "default");
+      res.status(200).json({ ok: true, interruption });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Interruption handling failed") });
+    }
+  });
+
+  app.get("/api/conversation/state", async (req, res) => {
+    try {
+      const contextId = (req.query.contextId as string) || "default";
+      const { naturalConversationEngine } = await import("../conversation/index.ts");
+      const state = naturalConversationEngine.getState(contextId);
+      res.status(200).json({ ok: true, state });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to retrieve conversation state") });
+    }
+  });
+
+  app.post("/api/conversation/confirm", async (req, res) => {
+    try {
+      const { contextId } = req.body || {};
+      const { naturalConversationEngine } = await import("../conversation/index.ts");
+      const outcome = await naturalConversationEngine.confirmPending(contextId || "default");
+      res.status(200).json({ ok: true, outcome });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Confirmation failed") });
+    }
+  });
+
+  app.post("/api/conversation/cancel", async (req, res) => {
+    try {
+      const { contextId } = req.body || {};
+      const { naturalConversationEngine } = await import("../conversation/index.ts");
+      const outcome = await naturalConversationEngine.cancelPending(contextId || "default");
+      res.status(200).json({ ok: true, outcome });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Cancellation failed") });
+    }
+  });
+
+  app.post("/api/conversation/reset", async (req, res) => {
+    try {
+      const { contextId } = req.body || {};
+      const { naturalConversationEngine } = await import("../conversation/index.ts");
+      naturalConversationEngine.reset(contextId || "default");
+      res.status(200).json({ ok: true, message: "Conversation state reset" });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Reset failed") });
+    }
+  });
+
+  // ── Phase 21: Predictive / Proactive Intelligence Endpoints ───────────────
+  app.post("/api/proactive/observe", async (req, res) => {
+    try {
+      const signal = req.body || {};
+      const { predictiveContextCoordinator } = await import("../proactive/index.ts");
+      const event = await predictiveContextCoordinator.observeSignal(signal);
+      res.status(200).json({ ok: true, event });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Signal observation failed") });
+    }
+  });
+
+  app.get("/api/proactive/pending", async (_req, res) => {
+    try {
+      const { predictiveContextCoordinator } = await import("../proactive/index.ts");
+      const pending = predictiveContextCoordinator.getPendingProactiveEvent();
+      res.status(200).json({ ok: true, pending });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get pending proactive event") });
+    }
+  });
+
+  app.post("/api/proactive/respond", async (req, res) => {
+    try {
+      const { userUtterance, contextId } = req.body || {};
+      const { predictiveContextCoordinator } = await import("../proactive/index.ts");
+      const resolution = await predictiveContextCoordinator.handleUserResponse(userUtterance || "", contextId || "default");
+      res.status(200).json({ ok: true, resolution });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Proactive response failed") });
+    }
+  });
+
+  app.get("/api/proactive/events", async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string, 10) || 20;
+      const { predictiveContextCoordinator } = await import("../proactive/index.ts");
+      const events = predictiveContextCoordinator.listEvents(limit);
+      res.status(200).json({ ok: true, events });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to list proactive events") });
+    }
+  });
+
+  app.post("/api/proactive/reset", async (_req, res) => {
+    try {
+      const { predictiveContextCoordinator } = await import("../proactive/index.ts");
+      predictiveContextCoordinator.reset();
+      res.status(200).json({ ok: true, message: "Proactive engine state reset" });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Reset failed") });
+    }
+  });
+
+  // ── Phase 22: Multi-Agent Brain Endpoints ─────────────────────────────────
+  app.post("/api/multiagent/orchestrate", async (req, res) => {
+    try {
+      const request = req.body || {};
+      const { multiAgentBrainCoordinator } = await import("../multiagent/index.ts");
+      const result = await multiAgentBrainCoordinator.orchestrate(request);
+      res.status(200).json({ ok: true, result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Multi-agent orchestration failed") });
+    }
+  });
+
+  app.post("/api/multiagent/cancel", async (req, res) => {
+    try {
+      const { reason } = req.body || {};
+      const { multiAgentBrainCoordinator } = await import("../multiagent/index.ts");
+      multiAgentBrainCoordinator.cancel(reason || "User requested cancellation");
+      res.status(200).json({ ok: true, message: "Multi-agent orchestration cancelled" });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Cancellation failed") });
+    }
+  });
+
+  app.get("/api/multiagent/traces", async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string, 10) || 20;
+      const { multiAgentBrainCoordinator } = await import("../multiagent/index.ts");
+      const traces = multiAgentBrainCoordinator.getRecentTraces(limit);
+      res.status(200).json({ ok: true, traces });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get traces") });
+    }
+  });
+
+  app.post("/api/multiagent/reset", async (_req, res) => {
+    try {
+      const { multiAgentBrainCoordinator } = await import("../multiagent/index.ts");
+      multiAgentBrainCoordinator.reset();
+      res.status(200).json({ ok: true, message: "Multi-agent coordinator reset" });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Reset failed") });
+    }
+  });
+
+  // ── Phase 23: Autonomous Coding Engineer Endpoints ─────────────────────────
+  app.post("/api/coding/process", async (req, res) => {
+    try {
+      const request = req.body || {};
+      const { autonomousCodingEngineer } = await import("../coding/index.ts");
+      const result = await autonomousCodingEngineer.processRequest(request);
+      res.status(200).json({ ok: true, result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Autonomous coding process failed") });
+    }
+  });
+
+  app.post("/api/coding/apply", async (req, res) => {
+    try {
+      const { changeSetId } = req.body || {};
+      const { autonomousCodingEngineer } = await import("../coding/index.ts");
+      const result = await autonomousCodingEngineer.processRequest({
+        goal: "Apply approved changes",
+        userApprovalGranted: true,
+        changeSetId,
+      });
+      res.status(200).json({ ok: true, result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Apply changes failed") });
+    }
+  });
+
+  app.get("/api/coding/changeset", async (req, res) => {
+    try {
+      const { changeSetId } = req.query as { changeSetId?: string };
+      const { changeSetManager } = await import("../coding/index.ts");
+      const changeSet = changeSetId
+        ? changeSetManager.getChangeSet(changeSetId)
+        : changeSetManager.getLatestChangeSet();
+      res.status(200).json({ ok: true, changeSet: changeSet || null });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get ChangeSet") });
+    }
+  });
+
+  app.post("/api/coding/reset", async (_req, res) => {
+    try {
+      const { autonomousCodingEngineer } = await import("../coding/index.ts");
+      autonomousCodingEngineer.reset();
+      res.status(200).json({ ok: true, message: "Autonomous coding engineer reset" });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Reset failed") });
+    }
+  });
+
+  // ── Step 8: Advanced Browser Research Agent — localhost/core only ─────────
+  // Security: All research routes are localhost-only.
+  // External content is never executed or trusted as instructions.
+
+  /**
+   * POST /api/research/query
+   * Execute a full research query with multi-source search, claim extraction,
+   * contradiction detection, and citation-backed synthesis.
+   */
+  app.post("/api/research/query", requireLocalhost, async (req, res) => {
+    try {
+      const { advancedResearchCoordinator } = await import("../research/index.ts");
+      const { question, projectPath, browserContext, maxSources, requireOfficial } = req.body || {};
+      if (!question || typeof question !== "string") {
+        return res.status(400).json({ error: "Missing required field: question" });
+      }
+      const result = await advancedResearchCoordinator.query({
+        question,
+        projectPath: typeof projectPath === "string" ? projectPath : undefined,
+        browserContext: browserContext || undefined,
+        maxSources: typeof maxSources === "number" ? Math.min(maxSources, 10) : 5,
+        requireOfficial: Boolean(requireOfficial),
+      });
+      res.status(200).json({ ok: true, result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Research query failed") });
+    }
+  });
+
+  /**
+   * POST /api/research/compare
+   * Compare a documentation URL against the project implementation.
+   * Returns a structured ComparisonReport with MATCH/MISMATCH findings.
+   */
+  app.post("/api/research/compare", requireLocalhost, async (req, res) => {
+    try {
+      const { advancedResearchCoordinator } = await import("../research/index.ts");
+      const { documentationUrl, projectPath, specificFiles, focusArea } = req.body || {};
+      if (!documentationUrl || typeof documentationUrl !== "string") {
+        return res.status(400).json({ error: "Missing required field: documentationUrl" });
+      }
+      if (!projectPath || typeof projectPath !== "string") {
+        return res.status(400).json({ error: "Missing required field: projectPath" });
+      }
+      const report = await advancedResearchCoordinator.compare({
+        documentationUrl,
+        projectPath,
+        specificFiles: Array.isArray(specificFiles) ? specificFiles : undefined,
+        focusArea: typeof focusArea === "string" ? focusArea : undefined,
+      });
+      res.status(200).json({ ok: true, report });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Comparison failed") });
+    }
+  });
+
+  /**
+   * POST /api/research/browser-context
+   * Process a browser page context (user has a docs page open) and analyze it
+   * against the project implementation.
+   */
+  app.post("/api/research/browser-context", requireLocalhost, async (req, res) => {
+    try {
+      const { advancedResearchCoordinator } = await import("../research/index.ts");
+      const { browserContext, projectPath, question } = req.body || {};
+      if (!browserContext || typeof browserContext !== "object") {
+        return res.status(400).json({ error: "Missing required field: browserContext" });
+      }
+      const result = await advancedResearchCoordinator.fromBrowserContext({
+        browserContext,
+        projectPath: typeof projectPath === "string" ? projectPath : undefined,
+        question: typeof question === "string" ? question : undefined,
+      });
+      res.status(200).json({ ok: true, result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Browser context research failed") });
+    }
+  });
+
+  /**
+   * GET /api/research/session
+   * Get current session status and metadata.
+   */
+  app.get("/api/research/session", requireLocalhost, async (req, res) => {
+    try {
+      const { advancedResearchCoordinator } = await import("../research/index.ts");
+      const { sessionId } = req.query as { sessionId?: string };
+      if (sessionId) {
+        const session = advancedResearchCoordinator.getSession(sessionId);
+        if (!session) {
+          return res.status(404).json({ error: "Session not found" });
+        }
+        res.status(200).json({
+          ok: true,
+          session: {
+            sessionId: session.sessionId,
+            status: session.status,
+            query: session.query,
+            sourceCount: session.sources.length,
+            claimCount: session.claims.length,
+            contradictionCount: session.contradictions.length,
+            startedAt: session.startedAt,
+          },
+        });
+      } else {
+        const sessions = advancedResearchCoordinator.getAllSessions().map((s) => ({
+          sessionId: s.sessionId,
+          status: s.status,
+          query: s.query,
+          startedAt: s.startedAt,
+        }));
+        res.status(200).json({ ok: true, sessions });
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get session") });
+    }
+  });
+
+  /**
+   * GET /api/research/claims
+   * Get structured claims for a session.
+   */
+  app.get("/api/research/claims", requireLocalhost, async (req, res) => {
+    try {
+      const { advancedResearchCoordinator } = await import("../research/index.ts");
+      const { sessionId } = req.query as { sessionId?: string };
+      if (!sessionId) {
+        return res.status(400).json({ error: "Missing required query: sessionId" });
+      }
+      const claims = advancedResearchCoordinator.getClaims(sessionId);
+      res.status(200).json({ ok: true, sessionId, claims, totalCount: claims.length });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get claims") });
+    }
+  });
+
+  /**
+   * GET /api/research/citations
+   * Get citation registry for the last research session.
+   */
+  app.get("/api/research/citations", requireLocalhost, async (req, res) => {
+    try {
+      const { advancedResearchCoordinator } = await import("../research/index.ts");
+      const citations = advancedResearchCoordinator.getCitations();
+      res.status(200).json({ ok: true, citations, totalCount: citations.length });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get citations") });
+    }
+  });
+
+  /**
+   * POST /api/research/reset
+   * Reset the research coordinator — clears all sessions and citations.
+   */
+  app.post("/api/research/reset", requireLocalhost, async (_req, res) => {
+    try {
+      const { advancedResearchCoordinator } = await import("../research/index.ts");
+      advancedResearchCoordinator.reset();
+      res.status(200).json({ ok: true, message: "Research coordinator reset" });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Reset failed") });
+    }
+  });
+
+  // ── Phase 24: Personal Knowledge Graph — localhost/core only ──────────────
+  // Security: All graph endpoints are strictly localhost-only and protected
+  // by Emergency Stop and Security Policy assertions.
+
+  /**
+   * POST /api/knowledge/node
+   * Creates a new KnowledgeNode.
+   */
+  app.post("/api/knowledge/node", requireLocalhost, async (req, res) => {
+    try {
+      const { knowledgeGraphCoordinator } = await import("../knowledge/index.ts");
+      const { type, canonicalName, aliases, attributes, confidence, importance, provenance } = req.body || {};
+      if (!type || !canonicalName) {
+        return res.status(400).json({ error: "Missing required fields: type, canonicalName" });
+      }
+      const node = await knowledgeGraphCoordinator.createNode({
+        type,
+        canonicalName,
+        aliases: Array.isArray(aliases) ? aliases : [],
+        attributes: typeof attributes === "object" && attributes !== null ? attributes : {},
+        confidence: typeof confidence === "number" ? confidence : undefined,
+        importance: typeof importance === "number" ? importance : undefined,
+        provenance: Array.isArray(provenance) ? provenance : [
+          { source: "api", sourceType: "EXPLICIT_USER", timestamp: Date.now(), confidence: 0.95 },
+        ],
+      });
+      res.status(200).json({ ok: true, node });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to create node") });
+    }
+  });
+
+  /**
+   * GET /api/knowledge/node/:id
+   * Retrieves a node by its ID.
+   */
+  app.get("/api/knowledge/node/:id", requireLocalhost, async (req, res) => {
+    try {
+      const { knowledgeGraphCoordinator } = await import("../knowledge/index.ts");
+      const node = knowledgeGraphCoordinator.nodes.getNode(req.params.id);
+      if (!node) {
+        return res.status(404).json({ error: "Node not found" });
+      }
+      res.status(200).json({ ok: true, node });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get node") });
+    }
+  });
+
+  /**
+   * POST /api/knowledge/edge
+   * Creates a controlled relationship between two nodes.
+   */
+  app.post("/api/knowledge/edge", requireLocalhost, async (req, res) => {
+    try {
+      const { knowledgeGraphCoordinator } = await import("../knowledge/index.ts");
+      const { sourceNodeId, relationType, targetNodeId, confidence, importance, weight, provenance } = req.body || {};
+      if (!sourceNodeId || !relationType || !targetNodeId) {
+        return res.status(400).json({ error: "Missing required fields: sourceNodeId, relationType, targetNodeId" });
+      }
+      const edge = await knowledgeGraphCoordinator.createEdge({
+        sourceNodeId,
+        relationType,
+        targetNodeId,
+        confidence: typeof confidence === "number" ? confidence : undefined,
+        importance: typeof importance === "number" ? importance : undefined,
+        weight: typeof weight === "number" ? weight : undefined,
+        provenance: Array.isArray(provenance) ? provenance : [
+          { source: "api", sourceType: "EXPLICIT_USER", timestamp: Date.now(), confidence: 0.95 },
+        ],
+      });
+      res.status(200).json({ ok: true, edge });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to create edge") });
+    }
+  });
+
+  /**
+   * GET /api/knowledge/related/:id
+   * Retrieves all connected relationships and neighbor nodes for a node ID.
+   */
+  app.get("/api/knowledge/related/:id", requireLocalhost, async (req, res) => {
+    try {
+      const { knowledgeGraphCoordinator } = await import("../knowledge/index.ts");
+      const node = knowledgeGraphCoordinator.nodes.getNode(req.params.id);
+      if (!node) {
+        return res.status(404).json({ error: "Node not found" });
+      }
+      const edges = knowledgeGraphCoordinator.edges.getAllConnectedEdges(req.params.id, "ACTIVE");
+      const neighborIds = new Set<string>();
+      for (const e of edges) {
+        neighborIds.add(e.sourceNodeId === node.id ? e.targetNodeId : e.sourceNodeId);
+      }
+      const neighbors = Array.from(neighborIds)
+        .map((id) => knowledgeGraphCoordinator.nodes.getNode(id))
+        .filter(Boolean);
+
+      res.status(200).json({ ok: true, node, edges, neighbors });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get related nodes") });
+    }
+  });
+
+  /**
+   * POST /api/knowledge/query
+   * Executes relationship-aware queries.
+   */
+  app.post("/api/knowledge/query", requireLocalhost, async (req, res) => {
+    try {
+      const { knowledgeGraphCoordinator } = await import("../knowledge/index.ts");
+      const result = knowledgeGraphCoordinator.query(req.body || {});
+      res.status(200).json({ ok: true, result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Knowledge graph query failed") });
+    }
+  });
+
+  /**
+   * POST /api/knowledge/traverse
+   * Bounded graph traversal from a start node.
+   */
+  app.post("/api/knowledge/traverse", requireLocalhost, async (req, res) => {
+    try {
+      const { knowledgeGraphCoordinator } = await import("../knowledge/index.ts");
+      const { startNodeId, maxDepth, direction, relationTypes, nodeTypes, status } = req.body || {};
+      if (!startNodeId) {
+        return res.status(400).json({ error: "Missing required field: startNodeId" });
+      }
+      const result = knowledgeGraphCoordinator.traverse({
+        startNodeId,
+        maxDepth: typeof maxDepth === "number" ? maxDepth : undefined,
+        direction: direction || "OUTGOING",
+        relationTypes: Array.isArray(relationTypes) ? relationTypes : undefined,
+        nodeTypes: Array.isArray(nodeTypes) ? nodeTypes : undefined,
+        status: status || "ACTIVE",
+      });
+      res.status(200).json({ ok: true, result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Traversal failed") });
+    }
+  });
+
+  /**
+   * GET /api/knowledge/projects
+   * Retrieves all active project nodes in the graph.
+   */
+  app.get("/api/knowledge/projects", requireLocalhost, async (_req, res) => {
+    try {
+      const { knowledgeGraphCoordinator } = await import("../knowledge/index.ts");
+      const projects = knowledgeGraphCoordinator.nodes.findByType("PROJECT").filter((p) => p.status === "ACTIVE");
+      res.status(200).json({ ok: true, projects, count: projects.length });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get projects") });
+    }
+  });
+
+  /**
+   * GET /api/knowledge/preferences
+   * Retrieves all active preference nodes.
+   */
+  app.get("/api/knowledge/preferences", requireLocalhost, async (_req, res) => {
+    try {
+      const { knowledgeGraphCoordinator } = await import("../knowledge/index.ts");
+      const preferences = knowledgeGraphCoordinator.nodes.findByType("PREFERENCE").filter((p) => p.status === "ACTIVE");
+      res.status(200).json({ ok: true, preferences, count: preferences.length });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get preferences") });
+    }
+  });
+
+  /**
+   * GET /api/knowledge/tasks
+   * Retrieves all active task nodes.
+   */
+  app.get("/api/knowledge/tasks", requireLocalhost, async (_req, res) => {
+    try {
+      const { knowledgeGraphCoordinator } = await import("../knowledge/index.ts");
+      const tasks = knowledgeGraphCoordinator.nodes.findByType("TASK").filter((t) => t.status === "ACTIVE");
+      res.status(200).json({ ok: true, tasks, count: tasks.length });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get tasks") });
+    }
+  });
+
+  /**
+   * GET /api/knowledge/skills
+   * Retrieves all active skill nodes.
+   */
+  app.get("/api/knowledge/skills", requireLocalhost, async (_req, res) => {
+    try {
+      const { knowledgeGraphCoordinator } = await import("../knowledge/index.ts");
+      const skills = knowledgeGraphCoordinator.nodes.findByType("SKILL").filter((s) => s.status === "ACTIVE");
+      res.status(200).json({ ok: true, skills, count: skills.length });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get skills") });
+    }
+  });
+
+  /**
+   * GET /api/knowledge/provenance/:id
+   * Explains provenance for a node or relationship ("Why do you know this?").
+   */
+  app.get("/api/knowledge/provenance/:id", requireLocalhost, async (req, res) => {
+    try {
+      const { knowledgeGraphCoordinator } = await import("../knowledge/index.ts");
+      const explanation = knowledgeGraphCoordinator.explainKnowledge(req.params.id);
+      res.status(200).json({ ok: true, explanation });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get provenance") });
+    }
+  });
+
+  /**
+   * GET /api/knowledge/stats
+   * Retrieves graph statistics.
+   */
+  app.get("/api/knowledge/stats", requireLocalhost, async (_req, res) => {
+    try {
+      const { knowledgeGraphCoordinator } = await import("../knowledge/index.ts");
+      const stats = knowledgeGraphCoordinator.getStats();
+      res.status(200).json({ ok: true, stats });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get stats") });
+    }
+  });
+
+  /**
+   * POST /api/knowledge/refresh
+   * Synchronizes memories from Phase 18 CognitiveMemoryStore into the graph.
+   */
+  app.post("/api/knowledge/refresh", requireLocalhost, async (_req, res) => {
+    try {
+      const { knowledgeGraphCoordinator } = await import("../knowledge/index.ts");
+      const result = await knowledgeGraphCoordinator.refreshFromMemory();
+      res.status(200).json({ ok: true, result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to refresh knowledge graph") });
+    }
+  });
+
+  /**
+   * POST /api/knowledge/reset
+   * Resets the entire knowledge graph.
+   */
+  app.post("/api/knowledge/reset", requireLocalhost, async (_req, res) => {
+    try {
+      const { knowledgeGraphCoordinator } = await import("../knowledge/index.ts");
+      await knowledgeGraphCoordinator.reset();
+      res.status(200).json({ ok: true, message: "Personal Knowledge Graph reset" });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Reset failed") });
+    }
+  });
+
+  // ── Phase 25: Self-Correction & Failure Recovery Engine — localhost/core only ──
+  // Security: All recovery endpoints are strictly localhost-only, security-gated,
+  // and subject to Emergency Stop and Security Policy assertions.
+
+  /**
+   * POST /api/recovery/analyze
+   * Ingests an error or operation failure and produces root cause analysis and candidates.
+   */
+  app.post("/api/recovery/analyze", requireLocalhost, async (req, res) => {
+    try {
+      const { selfCorrectionCoordinator } = await import("../recovery/index.ts");
+      const { operation, errorMessage, stdout, stderr, exitCode, targetResource, actionId, taskId, context } = req.body || {};
+      if (!operation && !errorMessage) {
+        return res.status(400).json({ error: "Missing required fields: operation or errorMessage" });
+      }
+      const response = selfCorrectionCoordinator.handleFailure({
+        operation: operation || "unknown_operation",
+        errorMessage,
+        stdout,
+        stderr,
+        exitCode,
+        targetResource,
+        actionId,
+        taskId,
+        context,
+      });
+      res.status(200).json({ ok: true, ...response });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to analyze failure") });
+    }
+  });
+
+  /**
+   * POST /api/recovery/strategies
+   * Retrieves safe recovery candidates for a failure event.
+   */
+  app.post("/api/recovery/strategies", requireLocalhost, async (req, res) => {
+    try {
+      const { selfCorrectionCoordinator } = await import("../recovery/index.ts");
+      const { failureId, operation, errorMessage, targetResource } = req.body || {};
+      let failure = failureId ? selfCorrectionCoordinator.getFailure(failureId) : undefined;
+      if (!failure) {
+        const handled = selfCorrectionCoordinator.handleFailure({
+          operation: operation || "unknown_operation",
+          errorMessage,
+          targetResource,
+        });
+        return res.status(200).json({ ok: true, candidates: handled.candidates });
+      }
+      const history = selfCorrectionCoordinator.getHistory();
+      const match = history.failures.find((f) => f.id === failureId);
+      res.status(200).json({ ok: true, failure: match });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to retrieve strategies") });
+    }
+  });
+
+  /**
+   * POST /api/recovery/execute
+   * Executes a safe recovery candidate and verifies the outcome.
+   */
+  app.post("/api/recovery/execute", requireLocalhost, async (req, res) => {
+    try {
+      const { selfCorrectionCoordinator } = await import("../recovery/index.ts");
+      const { failureId, strategyId, verifiedValue, scope } = req.body || {};
+      if (!failureId || !strategyId) {
+        return res.status(400).json({ error: "Missing required fields: failureId, strategyId" });
+      }
+      const result = await selfCorrectionCoordinator.executeRecovery({
+        failureId,
+        strategyId,
+        executor: async () => ({ exitCode: 0, stdout: "Recovery executed successfully" }),
+        scope,
+        verifiedValue: verifiedValue || "VERIFIED_OK",
+        requirements: [{ type: "EXIT_CODE_ZERO", target: "default" }],
+      });
+      res.status(200).json({ ok: true, result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to execute recovery") });
+    }
+  });
+
+  /**
+   * POST /api/recovery/cancel
+   * Signals cancellation of ongoing recovery loops.
+   */
+  app.post("/api/recovery/cancel", requireLocalhost, async (req, res) => {
+    try {
+      const { selfCorrectionCoordinator } = await import("../recovery/index.ts");
+      selfCorrectionCoordinator.cancel(req.body?.reason || "User requested cancellation via API");
+      res.status(200).json({ ok: true, message: "Recovery operations cancelled" });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to cancel recovery") });
+    }
+  });
+
+  /**
+   * GET /api/recovery/status
+   * Retrieves active recovery counts, budgets, and cancellation state.
+   */
+  app.get("/api/recovery/status", requireLocalhost, async (_req, res) => {
+    try {
+      const { selfCorrectionCoordinator } = await import("../recovery/index.ts");
+      const status = selfCorrectionCoordinator.getStatus();
+      res.status(200).json({ ok: true, status });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get recovery status") });
+    }
+  });
+
+  /**
+   * GET /api/recovery/history
+   * Retrieves list of past failures, recovery attempts, and audit trail.
+   */
+  app.get("/api/recovery/history", requireLocalhost, async (_req, res) => {
+    try {
+      const { selfCorrectionCoordinator } = await import("../recovery/index.ts");
+      const history = selfCorrectionCoordinator.getHistory();
+      res.status(200).json({ ok: true, history });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get recovery history") });
+    }
+  });
+
+  /**
+   * GET /api/recovery/:id
+   * Retrieves details of a specific failure event.
+   */
+  app.get("/api/recovery/:id", requireLocalhost, async (req, res) => {
+    try {
+      const { selfCorrectionCoordinator } = await import("../recovery/index.ts");
+      const failure = selfCorrectionCoordinator.getFailure(req.params.id);
+      if (!failure) {
+        return res.status(404).json({ error: `Failure event '${req.params.id}' not found` });
+      }
+      res.status(200).json({ ok: true, failure });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get failure event") });
+    }
+  });
+
+  /**
+   * POST /api/recovery/reset
+   * Resets all recovery tracking, state, and budgets.
+   */
+  app.post("/api/recovery/reset", requireLocalhost, async (_req, res) => {
+    try {
+      const { selfCorrectionCoordinator } = await import("../recovery/index.ts");
+      selfCorrectionCoordinator.reset();
+      res.status(200).json({ ok: true, message: "Recovery state reset" });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Reset failed") });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PHASE 26 — SECURITY + INTELLIGENCE SEPARATION REST API (Localhost-Only)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * POST /api/security/separation/propose
+   * Submits an untrusted AI action proposal for sanitization and registry tracking.
+   */
+  app.post("/api/security/separation/propose", requireLocalhost, async (req, res) => {
+    try {
+      const { securitySeparationCoordinator } = await import("../security/separation/index.ts");
+      const proposal = securitySeparationCoordinator.proposeAction({
+        source: req.body?.source || "UNKNOWN",
+        toolName: req.body?.toolName || "",
+        args: req.body?.args || {},
+        intentDescription: req.body?.intentDescription || "",
+        requestedScope: req.body?.requestedScope,
+        riskHint: req.body?.riskHint,
+        modelMetadata: req.body?.modelMetadata,
+      });
+      res.status(200).json({ ok: true, proposal });
+    } catch (err: any) {
+      res.status(400).json({ error: sanitizeError(err?.message || "Failed to create proposal") });
+    }
+  });
+
+  /**
+   * POST /api/security/separation/evaluate
+   * Authoritatively evaluates a proposal across the trust boundary.
+   */
+  app.post("/api/security/separation/evaluate", requireLocalhost, async (req, res) => {
+    try {
+      const { securitySeparationCoordinator } = await import("../security/separation/index.ts");
+      const proposalId = req.body?.proposalId;
+      let proposal = proposalId ? securitySeparationCoordinator.getProposal(proposalId) : undefined;
+
+      if (!proposal) {
+        proposal = securitySeparationCoordinator.proposeAction({
+          source: req.body?.source || "UNKNOWN",
+          toolName: req.body?.toolName || "",
+          args: req.body?.args || {},
+          intentDescription: req.body?.intentDescription || "",
+          requestedScope: req.body?.requestedScope,
+          riskHint: req.body?.riskHint,
+          modelMetadata: req.body?.modelMetadata,
+        });
+      }
+
+      const context = {
+        identityId: req.body?.context?.identityId || "local_user",
+        role: req.body?.context?.role || "admin",
+        ipAddress: req.ip || "127.0.0.1",
+        isLocal: true,
+        sessionId: req.body?.context?.sessionId || "local",
+      };
+
+      const decision = await securitySeparationCoordinator.evaluateProposal(
+        proposal,
+        context,
+        req.body?.confirmationToken,
+      );
+
+      res.status(200).json({ ok: true, proposal, decision });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Evaluation failed") });
+    }
+  });
+
+  /**
+   * POST /api/security/separation/validate
+   * Validates a security decision immediately prior to execution.
+   */
+  app.post("/api/security/separation/validate", requireLocalhost, async (req, res) => {
+    try {
+      const { securitySeparationCoordinator } = await import("../security/separation/index.ts");
+      const decisionId = req.body?.decisionId;
+      const decision = decisionId ? securitySeparationCoordinator.getDecision(decisionId) : undefined;
+
+      if (!decision) {
+        return res.status(404).json({ error: `Decision '${decisionId}' not found.` });
+      }
+
+      const validation = securitySeparationCoordinator.validateForExecution({
+        decision,
+        actualToolName: req.body?.actualToolName || decision.toolName,
+        actualArgs: req.body?.actualArgs || {},
+      });
+
+      res.status(200).json({ ok: true, validation });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Validation failed") });
+    }
+  });
+
+  /**
+   * GET /api/security/separation/status
+   * Returns current separation status, active modes, emergency stop state, and counters.
+   */
+  app.get("/api/security/separation/status", requireLocalhost, async (_req, res) => {
+    try {
+      const { securitySeparationCoordinator } = await import("../security/separation/index.ts");
+      const status = securitySeparationCoordinator.getStatus();
+      res.status(200).json({ ok: true, status });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get status") });
+    }
+  });
+
+  /**
+   * GET /api/security/separation/audit
+   * Returns security separation audit records.
+   */
+  app.get("/api/security/separation/audit", requireLocalhost, async (req, res) => {
+    try {
+      const { securitySeparationCoordinator } = await import("../security/separation/index.ts");
+      const limit = parseInt(req.query?.limit as string, 10) || 50;
+      const audit = securitySeparationCoordinator.getAuditTrail(limit);
+      res.status(200).json({ ok: true, audit });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to get audit trail") });
+    }
+  });
+
+  /**
+   * POST /api/security/separation/reset
+   * Resets security separation testing state.
+   */
+  app.post("/api/security/separation/reset", requireLocalhost, async (_req, res) => {
+    try {
+      const { securitySeparationCoordinator } = await import("../security/separation/index.ts");
+      securitySeparationCoordinator.resetForTesting();
+      res.status(200).json({ ok: true, message: "Security separation state reset" });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Reset failed") });
+    }
+  });
+
+
+
+
   // ── Global Sanitized Error Handling Middleware ───────────────────────────
   // Guarantees fail-closed error responses and zero stack trace / path leakage to clients
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

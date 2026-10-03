@@ -155,3 +155,22 @@ export type {
   MobileProactiveCategory,
 } from "./android/index.ts";
 
+// Phase 13A-WIN.6: Centralized Canonical Runtime Mode
+export {
+  getRuntimeMode,
+  isDesktopLocal,
+  isCloudWeb,
+  isAndroidStandalone,
+  isRemoteDesktop,
+  getBackendBaseUrl,
+  getDesktopAgentUrl,
+  getCloudBackendUrl,
+  CLOUD_PRODUCTION_URL,
+  DEFAULT_LOCAL_AGENT_URL,
+} from "./runtimeMode.ts";
+
+export type {
+  RuntimeMode,
+  RuntimeSystemStatus,
+} from "./runtimeMode.ts";
+

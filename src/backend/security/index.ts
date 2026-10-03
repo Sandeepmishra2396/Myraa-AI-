@@ -22,3 +22,4 @@ export * from "./SecretManager.ts";
 export * from "./RemoteSecurityCoordinator.ts";
 export * from "./AndroidSecurityTypes.ts";
 export * from "./AndroidSecurityManager.ts";
+export * from "./separation/index.ts";

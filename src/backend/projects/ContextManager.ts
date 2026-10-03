@@ -225,6 +225,16 @@ export async function buildCompleteSystemInstructions(
     /* language directive is best-effort */
   }
 
+  try {
+    const { cognitiveLearningCoordinator } = await import("../brain/index.ts");
+    const brainCard = await cognitiveLearningCoordinator.getAdaptivePrompt();
+    if (brainCard) {
+      instructions += "\n\n" + brainCard;
+    }
+  } catch {
+    /* brain cognitive directive is best-effort */
+  }
+
   return instructions;
 }
 

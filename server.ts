@@ -91,7 +91,18 @@ async function startServer() {
         const ip = typeof forwardedFor === "string"
           ? forwardedFor.split(",")[0].trim()
           : (socket as any).remoteAddress || request.socket?.remoteAddress || "";
-        const isLocal = !forwardedFor && (ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1");
+        const cleanIp = ip.replace(/^::ffff:/, "");
+        const isLanIp =
+          cleanIp.startsWith("192.168.") ||
+          cleanIp.startsWith("10.") ||
+          cleanIp.startsWith("172.16.") ||
+          cleanIp.startsWith("172.17.") ||
+          cleanIp.startsWith("172.18.") ||
+          cleanIp.startsWith("172.19.") ||
+          cleanIp.startsWith("172.2") ||
+          cleanIp.startsWith("172.3");
+        const isLocal = !forwardedFor && (cleanIp === "127.0.0.1" || cleanIp === "::1" || cleanIp === "localhost" || isLanIp);
+
 
         // Validate Transport Security: Non-localhost WebSocket connections must use WSS
         if (!isLocal) {

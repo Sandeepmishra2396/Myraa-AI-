@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ApiKeyGate — first-run onboarding.
  *
  * MYRAA ships without any API key. On launch we ask the backend whether a key
@@ -11,6 +11,7 @@
 
 import { useEffect, useState, type ReactNode, type FormEvent } from "react";
 import { KeyRound, Loader2, ExternalLink, ShieldCheck } from "lucide-react";
+import { getBackendBaseUrl } from "../platform";
 
 type Phase = "checking" | "needsKey" | "ready";
 
@@ -24,7 +25,8 @@ export function ApiKeyGate({ children }: { children: ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/config", { cache: "no-store" });
+        const baseUrl = getBackendBaseUrl();
+        const res = await fetch(`${baseUrl}/api/config`, { cache: "no-store" });
         const data = await res.json();
         if (cancelled) return;
         setPhase(data.hasApiKey ? "ready" : "needsKey");
@@ -45,7 +47,8 @@ export function ApiKeyGate({ children }: { children: ReactNode }) {
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch("/api/config/apikey", {
+      const baseUrl = getBackendBaseUrl();
+      const res = await fetch(`${baseUrl}/api/config/apikey`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ apiKey: key }),
@@ -55,7 +58,12 @@ export function ApiKeyGate({ children }: { children: ReactNode }) {
       setValue("");
       setPhase("ready");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
+      const raw = err instanceof Error ? err.message : "Something went wrong.";
+      const sanitized = raw
+        .replace(/AIza[0-9A-Za-z\-_]{10,}/g, "AIzaSy...[REDACTED]")
+        .replace(/AQ\.[0-9A-Za-z\-_.]{10,}/g, "AQ...[REDACTED]")
+        .replace(/ya29\.[0-9A-Za-z\-_.]{10,}/g, "ya29...[REDACTED]");
+      setError(sanitized);
     } finally {
       setSubmitting(false);
     }

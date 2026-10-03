@@ -1009,9 +1009,43 @@ export class ProductionUxController {
       return this._recordMobileTurn(session, params.utterance, selectedTarget, effectiveTarget, null, resolvedCap, false, err);
     }
 
+    const isAppOpenIntent =
+      resolution.intent.intent === "OPEN_APPLICATION" ||
+      resolvedCap === "mobile.openApp" ||
+      resolvedCap === "desktop.openApplication";
+
+    if (!isAppOpenIntent && !androidCapabilityEngine.canExecute(resolvedCap)) {
+      const lower = params.utterance.toLowerCase().trim();
+      let responseText = "Main aapki madad karne ke liye taiyaar hoon! Aap YouTube play karne, alarm lagane, timer set karne ya koi app open karne ke liye keh sakte hain.";
+      if (/^(hello|hi|hey|namaste|pranam|helo)\b/i.test(lower)) {
+        responseText = "Hello! Main MYRAA hoon, aapka personal AI assistant. Main aapki kya madad kar sakti hoon?";
+      } else if (/\b(kya\s+kar\s+rhe\s+ho|kya\s+kar\s+rahe\s+ho|what\s+are\s+you\s+doing)\b/i.test(lower)) {
+        responseText = "Main aapki assistance ke liye active hoon. Aap YouTube, Alarms, Timers ya phone apps ke liye commands de sakte hain!";
+      } else if (/\b(who\s+are\s+you|tum\s+kaun\s+ho|aap\s+kaun\s+hain)\b/i.test(lower)) {
+        responseText = "Main MYRAA hoon — aapka standalone voice aur cross-device AI assistant.";
+      } else if (/\b(how\s+are\s+you|kaise\s+ho|kya\s+haal\s+hai)\b/i.test(lower)) {
+        responseText = "Main bilkul theek hoon! Aap batayein, aaj aapki kya madad karoon?";
+      } else {
+        responseText = `Processed: "${params.utterance}". Main YouTube, Alarms, Timers, Phone Apps aur system controls chala sakti hoon.`;
+      }
+
+      return this._recordMobileTurn(
+        session,
+        params.utterance,
+        selectedTarget,
+        effectiveTarget,
+        params.deviceId,
+        "mobile.conversational",
+        true,
+        undefined,
+        responseText,
+      );
+    }
+
     const mobileCapToExecute = androidCapabilityEngine.canExecute(resolvedCap)
       ? resolvedCap
       : "mobile.openApp";
+
 
     const engineRes = await androidCapabilityEngine.execute(
       mobileCapToExecute,

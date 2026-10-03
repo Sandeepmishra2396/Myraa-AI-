@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MYRAA — PlanStore (Phase 5)
  *
  * Atomic, BOM-safe persistence of task plans in DATA_DIR/agent_plans.json.
@@ -15,16 +15,18 @@ import path from "path";
 import { dataFile } from "../../../server_paths.ts";
 import type { TaskPlan, PlanStatus } from "./PlannerTypes.ts";
 
-const PLANS_FILE = dataFile("agent_plans.json");
-const TMP_FILE = PLANS_FILE + ".tmp";
+function getPlansFile(): string {
+  return dataFile("agent_plans.json");
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
 async function readPlans(): Promise<Map<string, TaskPlan>> {
+  const plansFile = getPlansFile();
   try {
-    let raw = await fs.readFile(PLANS_FILE, "utf-8");
+    let raw = await fs.readFile(plansFile, "utf-8");
     // Strip BOM and whitespace (same defence as MemoryStore / server_memory.ts)
     raw = raw.replace(/^\uFEFF/, "").trim();
     if (!raw) return new Map();
@@ -39,15 +41,16 @@ async function readPlans(): Promise<Map<string, TaskPlan>> {
 }
 
 async function writePlans(plans: Map<string, TaskPlan>): Promise<void> {
+  const plansFile = getPlansFile();
   const arr = Array.from(plans.values());
   const json = JSON.stringify(arr, null, 2);
-  const tmpFile = `${PLANS_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  const tmpFile = `${plansFile}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   try {
     await fs.writeFile(tmpFile, json, "utf-8");
     let renamed = false;
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        await fs.rename(tmpFile, PLANS_FILE);
+        await fs.rename(tmpFile, plansFile);
         renamed = true;
         break;
       } catch (err: any) {
@@ -59,7 +62,7 @@ async function writePlans(plans: Map<string, TaskPlan>): Promise<void> {
       }
     }
     if (!renamed) {
-      await fs.rename(tmpFile, PLANS_FILE);
+      await fs.rename(tmpFile, plansFile);
     }
   } catch (err) {
     console.error("[PlanStore] Error writing agent_plans.json:", err);

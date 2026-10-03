@@ -19,7 +19,10 @@ import crypto from "crypto";
 import os from "os";
 
 function resolveDefaultDataDir(): string {
-  if (process.env.SORA_DATA_DIR) {
+  if (process.env.MYRAA_DATA_DIR && process.env.MYRAA_DATA_DIR !== "undefined" && process.env.MYRAA_DATA_DIR.trim() !== "") {
+    return process.env.MYRAA_DATA_DIR;
+  }
+  if (process.env.SORA_DATA_DIR && process.env.SORA_DATA_DIR !== "undefined" && process.env.SORA_DATA_DIR.trim() !== "") {
     return process.env.SORA_DATA_DIR;
   }
   if (process.env.VITEST) {
@@ -58,8 +61,10 @@ try {
 
 /** Absolute path to a file inside the writable data directory. */
 export function dataFile(name: string): string {
-  return path.join(DATA_DIR, name);
+  return path.join(resolveDefaultDataDir(), name);
 }
+
+import { secureSecretStore } from "./src/backend/security/DataProtectionService.ts";
 
 let _cachedServerSecret: string | null = null;
 
@@ -226,7 +231,14 @@ export function isValidGeminiApiKey(key: string | undefined | null): boolean {
 
 export interface KeyMetadata {
   key?: string;
-  source: "secrets.json" | "appdata_secrets.json" | "GEMINI_API_KEY" | "GOOGLE_API_KEY" | "GOOGLE_GENAI_API_KEY" | "none";
+  source:
+    | "secure_secrets.enc"
+    | "secrets.json"
+    | "appdata_secrets.json"
+    | "GEMINI_API_KEY"
+    | "GOOGLE_API_KEY"
+    | "GOOGLE_GENAI_API_KEY"
+    | "none";
   credentialClass: CredentialClass;
   isValid: boolean;
   prefix: string;
@@ -293,7 +305,12 @@ function getFileMtimeMs(filePath: string): number {
 export function resolveApiKeyWithMetadata(): KeyMetadata {
   // In cloud production (not packaged Electron desktop), server environment variables take
   // absolute precedence to ensure secrets are loaded strictly from the server environment.
-  if (process.env.NODE_ENV === "production" && process.env.SORA_LAUNCHED_BY !== "electron") {
+  const isCloudProd =
+    process.env.NODE_ENV === "production" &&
+    process.env.SORA_LAUNCHED_BY !== "electron" &&
+    process.env.MYRAA_LOCAL_DESKTOP !== "true";
+
+  if (isCloudProd) {
     const envGemini = cleanKey(process.env.GEMINI_API_KEY);
     const envGeminiInfo = inspectKey(envGemini);
     if (envGeminiInfo.isValid) {
@@ -327,7 +344,19 @@ export function resolveApiKeyWithMetadata(): KeyMetadata {
     };
   }
 
-  // 1 & 2. Data dir secrets.json and Roaming AppData secrets.json
+  // 1. Primary: Encrypted secret store at rest (AES-256-GCM in secure_secrets.enc)
+  let encryptedKey: string | undefined;
+  try {
+    encryptedKey = cleanKey(secureSecretStore.getSecret("GEMINI_API_KEY"));
+  } catch {}
+  if (encryptedKey) {
+    const encInfo = inspectKey(encryptedKey);
+    if (encInfo.isValid) {
+      return { key: encryptedKey, source: "secure_secrets.enc", ...encInfo };
+    }
+  }
+
+  // 2. Legacy fallback & auto-migration: secrets.json / Roaming AppData secrets.json
   const stored = cleanKey(readSecretsFromFile(SECRETS_FILE).geminiApiKey);
   const storedInfo = inspectKey(stored);
   const appDataFile = getAppDataSecretsFile();
@@ -338,15 +367,24 @@ export function resolveApiKeyWithMetadata(): KeyMetadata {
   if (storedInfo.isValid && appDataInfo.isValid) {
     const storedMtime = getFileMtimeMs(SECRETS_FILE);
     const appDataMtime = getFileMtimeMs(appDataFile!);
-    if (appDataMtime > storedMtime) {
-      return { key: appDataKey, source: "appdata_secrets.json", ...appDataInfo };
-    }
-    return { key: stored, source: "secrets.json", ...storedInfo };
+    const winningKey = appDataMtime > storedMtime ? appDataKey : stored;
+    const winningSource = appDataMtime > storedMtime ? "appdata_secrets.json" : "secrets.json";
+    const winningInfo = appDataMtime > storedMtime ? appDataInfo : storedInfo;
+    try {
+      secureSecretStore.setSecret("GEMINI_API_KEY", winningKey);
+    } catch {}
+    return { key: winningKey, source: winningSource, ...winningInfo };
   }
   if (storedInfo.isValid) {
+    try {
+      secureSecretStore.setSecret("GEMINI_API_KEY", stored);
+    } catch {}
     return { key: stored, source: "secrets.json", ...storedInfo };
   }
   if (appDataInfo.isValid) {
+    try {
+      secureSecretStore.setSecret("GEMINI_API_KEY", appDataKey);
+    } catch {}
     return { key: appDataKey, source: "appdata_secrets.json", ...appDataInfo };
   }
 
@@ -372,6 +410,7 @@ export function resolveApiKeyWithMetadata(): KeyMetadata {
   }
 
   // If no valid candidate, report metadata of rejected token if present
+  if (encryptedKey) return { key: undefined, source: "secure_secrets.enc", ...inspectKey(encryptedKey) };
   if (stored) return { key: undefined, source: "secrets.json", ...storedInfo };
   if (appDataKey) return { key: undefined, source: "appdata_secrets.json", ...appDataInfo };
   if (envGemini) return { key: undefined, source: "GEMINI_API_KEY", ...envGeminiInfo };
@@ -429,32 +468,64 @@ export function setGeminiApiKey(key: string): void {
   }
   if (cleaned.length < 15) throw new Error("API key is too short. Please provide a valid Gemini API key or authorization key.");
   if (isPlaceholderKey(cleaned)) throw new Error("API key appears to be a template placeholder. Please provide a valid Gemini API key.");
-  const current = readSecrets();
-  current.geminiApiKey = cleaned;
-  fs.writeFileSync(SECRETS_FILE, JSON.stringify(current, null, 2), "utf-8");
 
-  // Keep Roaming AppData synchronized
+  // Store in encrypted persistence at rest (AES-256-GCM + PBKDF2 via SecureSecretStore)
+  secureSecretStore.setSecret("GEMINI_API_KEY", cleaned);
+
+  // Keep in-memory process environment synchronized
+  process.env.GEMINI_API_KEY = cleaned;
+
+  // Clean legacy plaintext secrets.json to prevent plaintext leakage on disk
+  try {
+    if (fs.existsSync(SECRETS_FILE)) {
+      const current = readSecretsFromFile(SECRETS_FILE);
+      if (current.geminiApiKey) {
+        delete current.geminiApiKey;
+        fs.writeFileSync(SECRETS_FILE, JSON.stringify(current, null, 2), "utf-8");
+      }
+    }
+  } catch {}
+
   const appDataFile = getAppDataSecretsFile();
   if (appDataFile && appDataFile !== SECRETS_FILE) {
     try {
-      fs.mkdirSync(path.dirname(appDataFile), { recursive: true });
-      fs.writeFileSync(appDataFile, JSON.stringify(current, null, 2), "utf-8");
+      if (fs.existsSync(appDataFile)) {
+        const current = readSecretsFromFile(appDataFile);
+        if (current.geminiApiKey) {
+          delete current.geminiApiKey;
+          fs.writeFileSync(appDataFile, JSON.stringify(current, null, 2), "utf-8");
+        }
+      }
     } catch {}
   }
 }
 
 /** Remove the stored key (used by "reset"/sign-out flows). */
 export function clearGeminiApiKey(): void {
-  const current = readSecrets();
-  delete current.geminiApiKey;
   try {
-    fs.writeFileSync(SECRETS_FILE, JSON.stringify(current, null, 2), "utf-8");
+    secureSecretStore.deleteSecret("GEMINI_API_KEY");
+  } catch {}
+
+  delete process.env.GEMINI_API_KEY;
+  delete process.env.GOOGLE_API_KEY;
+  delete process.env.GOOGLE_GENAI_API_KEY;
+
+  try {
+    if (fs.existsSync(SECRETS_FILE)) {
+      const current = readSecretsFromFile(SECRETS_FILE);
+      delete current.geminiApiKey;
+      fs.writeFileSync(SECRETS_FILE, JSON.stringify(current, null, 2), "utf-8");
+    }
   } catch {}
 
   const appDataFile = getAppDataSecretsFile();
   if (appDataFile && appDataFile !== SECRETS_FILE) {
     try {
-      fs.writeFileSync(appDataFile, JSON.stringify(current, null, 2), "utf-8");
+      if (fs.existsSync(appDataFile)) {
+        const current = readSecretsFromFile(appDataFile);
+        delete current.geminiApiKey;
+        fs.writeFileSync(appDataFile, JSON.stringify(current, null, 2), "utf-8");
+      }
     } catch {}
   }
 }
