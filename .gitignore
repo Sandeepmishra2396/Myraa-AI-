@@ -57,4 +57,14 @@ Thumbs.db
 secrets.json
 remote_secret.key
 *.key
+secure_secrets.enc
+
+# Package binaries & build artifacts
+*.apk
+*.aab
+
+# Temporary test captures, screenshots & UI dumps
+ui_kb.xml
+window_dump.xml
+/*.png
 
