@@ -9,6 +9,9 @@ export default defineConfig(() => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+        '@backend': path.resolve(__dirname, 'backend'),
+        '@frontend': path.resolve(__dirname, 'frontend'),
+        '@platform': path.resolve(__dirname, 'platform'),
       },
     },
     server: {
@@ -20,6 +23,8 @@ export default defineConfig(() => {
           '**/desktop_agent/**',
           '**/Desktop/**',
           '**/Downloads/**',
+          '**/data/**',
+          '**/test-artifacts/**',
           '**/*.json',
           '**/*.log',
           '**/*.txt',

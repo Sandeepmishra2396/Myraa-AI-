@@ -18,9 +18,27 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@backend/*": [
+        "./backend/*"
+      ],
+      "@frontend/*": [
+        "./frontend/*"
+      ],
+      "@platform/*": [
+        "./platform/*"
       ]
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "include": [
+    "backend",
+    "frontend",
+    "platform",
+    "tests",
+    "server.ts",
+    "server_memory.ts",
+    "server_paths.ts"
+  ]
 }

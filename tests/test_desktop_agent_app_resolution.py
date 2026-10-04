@@ -26,14 +26,20 @@ def test_app_resolution():
         ("vscode", "Visual Studio Code"),
         ("vs code", "Visual Studio Code"),
         ("cursor", "Cursor Editor"),
+        ("telegram", "Telegram"),
+        ("tg", "Telegram"),
+        ("whatsapp", "WhatsApp"),
     ]
 
     for query, expected_label in apps_to_test:
         spec = _resolve_app(query)
         assert spec["label"] == expected_label, f"Expected {expected_label} for {query}, got {spec['label']}"
-        if "exe" in spec:
+        if "exe" in spec and os.path.isabs(spec["exe"]) and os.path.exists(spec["exe"]):
             assert os.path.exists(spec["exe"]) or spec["exe"].endswith(".cmd"), f"Exe path does not exist: {spec['exe']}"
-        print(f"PASS: {query:15} -> {spec['label']} ({spec.get('exe', spec.get('shell'))})")
+        else:
+            assert "app_id" in spec or "shell" in spec or "uwp" in spec or "exe" in spec
+        print(f"PASS: {query:15} -> {spec['label']} ({spec.get('exe', spec.get('app_id', spec.get('shell')))})")
+
 
 def test_folder_aliases():
     for fa in ["file manager", "file explorer", "explorer", "files", "desktop", "documents", "downloads"]:

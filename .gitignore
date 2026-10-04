@@ -23,6 +23,8 @@ android/.kotlin/
 android/local.properties
 android/captures/
 android/.cxx/
+android/app/src/debug/
+android/app/src/releaseTest/
 
 # Android signing keys & credentials
 *.keystore
@@ -54,6 +56,9 @@ Thumbs.db
 .env*
 !.env.example
 !.env.production.example
+# Runtime data and state
+data/
+.agents/
 secrets.json
 remote_secret.key
 *.key
@@ -62,9 +67,11 @@ secure_secrets.enc
 # Package binaries & build artifacts
 *.apk
 *.aab
+MYRAA/
 
 # Temporary test captures, screenshots & UI dumps
 ui_kb.xml
 window_dump.xml
 /*.png
+test-artifacts/
 
