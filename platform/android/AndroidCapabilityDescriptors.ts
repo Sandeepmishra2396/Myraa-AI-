@@ -31,7 +31,7 @@
  *  MULTIMODAL_TOOLS        6   ScreenContextManager / ActiveWindowTracker
  *  PROJECT_TOOLS           5   ProjectManager
  *  REMOTE_TOOLS            4   RemoteSessionManager / EmergencyStopCoordinator
- *  SECURITY_TOOLS          3   DesktopSecurityGate ("Mummy Ka Beta")
+ *  SECURITY_TOOLS          3   DesktopSecurityGate (dynamic passcode)
  *  MEMORY_TOOLS            1   MemoryManager
  *  ─────────────────── ──────
  *  TOTAL                 129   ✓
@@ -912,7 +912,7 @@ const ALL_TOOL_DESCRIPTORS: AndroidToolDescriptor[] = [
     name: "unlockDesktopControl",
     toolSet: "SECURITY_TOOLS",
     availability: "available",
-    note: "Server-side passcode verification for Desktop Control mode ('Mummy Ka Beta').",
+    note: "Server-side passcode verification for Desktop Control mode.",
   },
   {
     name: "getDesktopControlStatus",

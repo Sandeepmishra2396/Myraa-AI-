@@ -1,25 +1,55 @@
 /* ===========================================================================
- * MYRAA — Electron preload
+ * MYRAA — Electron Preload (Mishtron Labs)
  * ---------------------------------------------------------------------------
- * Runs in an isolated context and exposes a minimal, explicit API surface to
- * the renderer via contextBridge. In Phase 1 this only advertises that the UI
- * is running inside the desktop shell (so the web UI can adapt if it wants);
- * tray/notification/window controls are added alongside those features.
+ * Phase 13A-WIN.6: Local Desktop Application + Cloud/Local Hybrid Runtime
+ *
+ * Runs in an isolated context and exposes a minimal, explicit, typed API surface
+ * to the renderer via contextBridge. Zero Node API leakage, contextIsolation: true.
  * ========================================================================= */
 
 'use strict';
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('myraa', {
+const localBackendUrl = (
+  process.env.MYRAA_LOCAL_BACKEND_URL || 'http://127.0.0.1:3000'
+).replace(/\/+$/, '');
+
+const localBackendPort = parseInt(
+  process.env.MYRAA_LOCAL_BACKEND_PORT ||
+  (localBackendUrl.match(/:(\d+)$/) ? localBackendUrl.match(/:(\d+)$/)[1] : '3000'),
+  10
+);
+
+const cloudBackendUrl = (
+  process.env.MYRAA_BACKEND_URL || 'https://myraa-ai-q0h3.onrender.com'
+).replace(/\/+$/, '');
+
+const myraaApi = {
   isDesktop: true,
+  runtimeMode: 'DESKTOP_LOCAL',
   platform: process.platform,
   version: process.versions.electron,
   appId: 'com.myraa.desktop',
   productName: 'MYRAA',
   publisher: 'Mishtron Labs',
   appVersion: '1.0.0',
+
+  // Canonical runtime URLs
+  localBackendUrl,
+  localBackendPort,
+  cloudBackendUrl,
   productionBackendUrl: 'https://myraa-ai-q0h3.onrender.com',
+  desktopAgentUrl: 'http://127.0.0.1:8765',
+
+  // System diagnostic & health inspection
+  getSystemStatus: () => ipcRenderer.invoke('desktop:get-system-status'),
+  retryDesktopAgent: () => ipcRenderer.invoke('desktop:retry-agent'),
+  onSystemStatus: (callback) => {
+    const handler = (_event, status) => callback(status);
+    ipcRenderer.on('desktop:system-status-updated', handler);
+    return () => ipcRenderer.removeListener('desktop:system-status-updated', handler);
+  },
 
   // Window controls
   openFloating: () => ipcRenderer.send('floating:open'),
@@ -61,5 +91,7 @@ contextBridge.exposeInMainWorld('myraa', {
 
   // Native Desktop Agent execution bridge (loopback 127.0.0.1:8765)
   executeDesktopTool: (tool, args) => ipcRenderer.invoke('desktop:execute-tool', { tool, args }),
-});
+};
 
+contextBridge.exposeInMainWorld('myraa', myraaApi);
+contextBridge.exposeInMainWorld('electronAPI', myraaApi);

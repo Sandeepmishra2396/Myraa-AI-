@@ -18,6 +18,7 @@ import { createHttpApp } from "../../backend/gateway/HttpGateway.ts";
 import { LIVE_TOOLS } from "../../backend/ai/GeminiSessionFactory.ts";
 import { emergencyStopCoordinator } from "../../backend/remote/EmergencyStopCoordinator.ts";
 import { securityPolicyEngine } from "../../backend/security/SecurityPolicyEngine.ts";
+import { identityAuthManager } from "../../backend/security/IdentityAuthManager.ts";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -96,18 +97,28 @@ describe("Phase 30 — Production Hardening & Release Readiness Suite", () => {
   describe("2. Request Payload Size Limits", () => {
     it("2.1 accepts valid JSON payloads within normal bounds", async () => {
       const url = await startTestServer();
+      const { tokens } = identityAuthManager.createSession({
+        deviceId: "phase30_device",
+        identityId: "op_phase30",
+        role: "admin",
+        ipAddress: "127.0.0.1",
+      });
       const res = await fetch(`${url}/api/memories`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${tokens.accessToken}`,
+        },
         body: JSON.stringify({
           category: "user_preference",
           text: "Prefers concise production logs and dark theme.",
         }),
       });
 
-      expect(res.status).toBe(201);
+      expect(res.status).toBe(202);
       const data = await res.json() as any;
-      expect(data.id).toBeDefined();
+      expect(data.requestId).toBeDefined();
+      expect(data.status).toBe("pending_approval");
     });
 
     it("2.2 rejects payloads exceeding the 10MB body cap with 413 Payload Too Large", async () => {
@@ -297,10 +308,10 @@ describe("Phase 30 — Production Hardening & Release Readiness Suite", () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 8. 126 GEMINI LIVE TOOLS STRICT INVARIANT
+  // 8. 129 GEMINI LIVE TOOLS STRICT INVARIANT
   // ═══════════════════════════════════════════════════════════════════════════
-  describe("8. Strict 126 Gemini Live Tool Invariant", () => {
-    it("8.1 strictly preserves exactly 126 Gemini Live tools in LIVE_TOOLS", () => {
+  describe("8. Strict 129 Gemini Live Tool Invariant", () => {
+    it("8.1 strictly preserves exactly 129 Gemini Live tools in LIVE_TOOLS", () => {
       const decls = LIVE_TOOLS[0].functionDeclarations;
       expect(decls.length).toBe(129);
 
@@ -308,7 +319,7 @@ describe("Phase 30 — Production Hardening & Release Readiness Suite", () => {
       expect(uniqueNames.size).toBe(129);
     });
 
-    it("8.2 verifies all 126 tools declare valid names and non-empty schemas", () => {
+    it("8.2 verifies all 129 tools declare valid names and non-empty schemas", () => {
       const decls = LIVE_TOOLS[0].functionDeclarations;
       for (const tool of decls) {
         expect(typeof tool.name).toBe("string");

@@ -269,6 +269,7 @@ export interface ConfirmationTokenPayload {
   tokenId: string;
   toolName: string;
   argsHash: string;
+  targetPath?: string;
   sessionId: string;
   issuedAt: number;
   expiresAt: number;

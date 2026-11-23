@@ -54,6 +54,8 @@ Thumbs.db
 
 # Environment and secrets
 .env*
+!config/env/.env.example
+!config/env/.env.production.example
 !.env.example
 !.env.production.example
 # Runtime data and state

@@ -28,7 +28,8 @@ import { recoveryEngine } from "./RecoveryEngine.ts";
 import { callDesktopAgent, DESKTOP_TOOLS } from "../tasks/TaskManager.ts";
 import { projectManager } from "../projects/ProjectManager.ts";
 import { knowledgeManager } from "../knowledge/KnowledgeManager.ts";
-import { isPathWithinWorkspace, sanitizeError } from "../security/PermissionManager.ts";
+import { isPathWithinWorkspace, isPathWithinSafeRoots, sanitizeError } from "../security/PermissionManager.ts";
+import { desktopSecurityGate } from "../security/DesktopSecurityGate.ts";
 
 const WORKSPACE = process.env.SORA_WORKSPACE_DIR || process.cwd();
 
@@ -119,7 +120,7 @@ async function dispatchTool(
     // Extra workspace boundary check for file-path arguments
     const candidatePaths = extractPathArgs(toolArgs);
     for (const p of candidatePaths) {
-      if (!isPathWithinWorkspace(p, WORKSPACE)) {
+      if (!isPathWithinWorkspace(p, WORKSPACE) && !isPathWithinSafeRoots(p, WORKSPACE)) {
         throw new Error(
           `Access denied: path '${sanitizeError(p)}' is outside the active workspace boundary.`,
         );
@@ -136,10 +137,13 @@ async function dispatchTool(
   }
 
   if (toolName === "sharedMemory") {
-    const { sharedMemoryManager } = await import("../memory/SharedMemoryManager.ts");
+    const { sharedMemoryManager, isDlpClean } = await import("../memory/SharedMemoryManager.ts");
+    const { emergencyStopCoordinator } = await import("../remote/EmergencyStopCoordinator.ts");
+    const { securityPolicyEngine } = await import("../security/SecurityPolicyEngine.ts");
+    const { contentSanitizer } = await import("../security/ContentSanitizer.ts");
     const secContext = args.secContext || {
       identityId: (args.deviceId as string) || "local_operator",
-      role: "admin",
+      role: (args.role as any) || "standard",
       ipAddress: "127.0.0.1",
       deviceId: (args.deviceId as string) || "local_operator",
       isLocal: !args.deviceId,
@@ -149,7 +153,36 @@ async function dispatchTool(
       return { matches: results, count: results.length };
     }
     if (args.action === "create" || args.action === "save") {
-      return sharedMemoryManager.createMemory(args.item as any, secContext);
+      if (emergencyStopCoordinator.isActive()) {
+        throw new Error("EMERGENCY_STOP_ACTIVE: Shared memory writes are blocked during Emergency Stop.");
+      }
+      if (securityPolicyEngine.getMode() === "LOCKDOWN") {
+        throw new Error("SECURITY_LOCKDOWN_ACTIVE: Shared memory writes are blocked during Security Lockdown.");
+      }
+      const item = (args.item || {}) as any;
+      if ((item.text && !isDlpClean(String(item.text))) || (item.key && !isDlpClean(String(item.key)))) {
+        throw new Error("DLP_SECRET_REJECTED: Secrets or credentials cannot be stored in shared memory.");
+      }
+      if (item.text && contentSanitizer.scanForPromptInjection(String(item.text), { source: "step_executor_shared_memory" }).hasInjectionAttempt) {
+        throw new Error("PROMPT_INJECTION_BLOCKED: Shared memory payload contains unsafe prompt-injection patterns.");
+      }
+      const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+      const req = await governingMemoryGate.requestWrite({
+        action: "CREATE",
+        proposedMemory: item,
+        reason: "Planner StepExecutor sharedMemory execution",
+        confidence: 0.85,
+        source: "system_generated",
+        userId: secContext.identityId,
+        provenance: "StepExecutor.sharedMemory",
+        sessionId: (secContext as any).sessionId,
+        actorRole: secContext.role,
+      });
+      return {
+        status: "pending_approval",
+        requestId: req.id,
+        message: "Memory proposal created. Awaiting operator confirmation.",
+      };
     }
     const list = await sharedMemoryManager.listMemories({}, secContext);
     return { memories: list, count: list.length };
@@ -264,7 +297,7 @@ export class StepExecutor {
     // MANDATORY SECURITY INVARIANT: A valid hash must NEVER authorize an unsafe path.
     const candidatePaths = extractPathArgs(step.toolArgs);
     for (const p of candidatePaths) {
-      if (!isPathWithinWorkspace(p, WORKSPACE)) {
+      if (!isPathWithinWorkspace(p, WORKSPACE) && !isPathWithinSafeRoots(p, WORKSPACE)) {
         return this._blockedResult(
           step,
           `Security violation: path '${sanitizeError(p)}' is outside the active workspace boundary. Direct workspace validation failed independent of hash authorization.`,
@@ -279,21 +312,24 @@ export class StepExecutor {
       MODIFYING_TOOLS.has(step.toolName);
 
     if (isModifying) {
-      if (!step.checkpointId) {
+      const isOperatorAuthorized = desktopSecurityGate.isUnlocked();
+      if (!isOperatorAuthorized && !step.checkpointId) {
         return this._blockedResult(step, "No checkpoint token found for destructive step — execution refused.");
       }
-      const approved = checkpointManager.consumeApproval(
-        step.checkpointId,
-        step.id,
-        step.toolName,
-        step.toolArgs,
-      );
-      if (!approved) {
-        return this._blockedResult(
-          step,
-          `Checkpoint '${step.checkpointId}' for step '${step.id}' failed validation ` +
-            "(missing / expired / consumed / tampered args). Execution refused.",
+      if (step.checkpointId) {
+        const approved = checkpointManager.consumeApproval(
+          step.checkpointId,
+          step.id,
+          step.toolName,
+          step.toolArgs,
         );
+        if (!approved && !isOperatorAuthorized) {
+          return this._blockedResult(
+            step,
+            `Checkpoint '${step.checkpointId}' for step '${step.id}' failed validation ` +
+              "(missing / expired / consumed / tampered args). Execution refused.",
+          );
+        }
       }
     }
 

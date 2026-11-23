@@ -18,6 +18,7 @@ files:
   - electron/preload.cjs
   - electron/splash.html
   - assets/icon.ico
+  - assets/icon.png
   - assets/avatar_idle.png
   - assets/avatar_talking.png
   - assets/avatar_thinking.png
@@ -27,9 +28,9 @@ files:
   - dist/assets/**/*
   - dist/models/myraa.vrm
   - dist/models/myraa2.vrm
+  - dist/server.cjs
   - package.json
   - "!**/node_modules/**"
-  - "!dist/server.cjs*"
   - "!**/*.map"
   - "!**/*-backup*"
   - "!desktop_agent/**"

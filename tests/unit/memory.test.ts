@@ -12,11 +12,14 @@
  *   Tool inventory:     saveCustomMemory category enum matches MemoryCategory
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { jaccardSimilarity, findSimilar, mergeText } from "../../backend/memory/MemoryDeduplicator.ts";
 import { searchMemories, filterForContext } from "../../backend/memory/MemorySearch.ts";
-import { MemoryStore, migrateRecord } from "../../backend/memory/MemoryStore.ts";
+import { MemoryStore, memoryStore, migrateRecord } from "../../backend/memory/MemoryStore.ts";
 import { MemoryManager } from "../../backend/memory/MemoryManager.ts";
+import { governingMemoryGate } from "../../backend/companion/GoverningMemoryGate.ts";
+import { approvedMemoryPersistenceAdapter } from "../../backend/memory/ApprovedMemoryPersistenceAdapter.ts";
+import { assertActivePersistenceSession } from "../../backend/memory/MemoryPersistenceContext.ts";
 import type { EnhancedMemory } from "../../backend/memory/MemoryTypes.ts";
 import type { Memory } from "../../frontend/lib/memoryTypes.ts";
 
@@ -56,6 +59,8 @@ class MockMemoryStore extends MemoryStore {
   }
 
   override async save(memories: EnhancedMemory[]): Promise<void> {
+    // Enforce the same runtime ALS persistence boundary as real MemoryStore
+    assertActivePersistenceSession();
     this._data = [...memories];
   }
 
@@ -333,22 +338,51 @@ describe("MemoryManager", () => {
   let store: MockMemoryStore;
   let manager: MemoryManager;
 
+  async function approveAllPending(actorId = "local_operator"): Promise<EnhancedMemory[]> {
+    const pending = governingMemoryGate.listPendingRequests();
+    const committed: EnhancedMemory[] = [];
+    for (const pub of pending) {
+      const full = governingMemoryGate.getRequest(pub.id)!;
+      const saved = await governingMemoryGate.approveWrite(full.id, full.oneTimeToken, {
+        actorId: full.userId || actorId,
+        role: "admin",
+        ipAddress: "127.0.0.1",
+        isStepUpAuthenticated: true,
+      });
+      committed.push(saved);
+    }
+    return committed;
+  }
+
   beforeEach(() => {
     store = new MockMemoryStore();
     manager = new MemoryManager(store);
+    governingMemoryGate.clearAllRequests();
+    (approvedMemoryPersistenceAdapter as any).store = store;
+  });
+
+  afterEach(() => {
+    (approvedMemoryPersistenceAdapter as any).store = memoryStore;
+    governingMemoryGate.clearAllRequests();
   });
 
   // ── createMemory ─────────────────────────────────────────────────────────
 
   describe("createMemory — no duplicate", () => {
-    it("creates a new memory with defaults", async () => {
-      const m = await manager.createMemory({ category: "identity", text: "The user is Sandeep." });
-      expect(m.id).toBeDefined();
-      expect(m.category).toBe("identity");
-      expect(m.importance).toBe("medium");
-      expect(m.confidence).toBe("medium");
-      expect(m.source).toBe("system_generated");
-      expect(m.status).toBe("active");
+    it("creates a pending proposal then persists defaults after operator approval", async () => {
+      const proposal = await manager.createMemory({ category: "identity", text: "The user is Sandeep." });
+      expect(proposal.id).toBeDefined();
+      expect(proposal.status).toBe("pending_approval" as any);
+      // Zero unapproved disk writes
+      expect((await store.load()).length).toBe(0);
+
+      const [committed] = await approveAllPending();
+      expect(committed.id).toBeDefined();
+      expect(committed.category).toBe("identity");
+      expect(committed.importance).toBe("medium");
+      expect(committed.confidence).toBe("medium");
+      expect(committed.source).toBe("system_generated");
+      expect(committed.status).toBe("active");
       const all = await store.load();
       expect(all.length).toBe(1);
     });
@@ -361,39 +395,44 @@ describe("MemoryManager", () => {
   });
 
   describe("createMemory — exact duplicate", () => {
-    it("updates existing record instead of creating a new one", async () => {
+    it("updates existing record instead of creating a new one upon approval", async () => {
       const existing = makeMemory({ category: "preference", text: "The user loves anime series and manga.", key: "anime_pref" });
       store.setData([existing]);
 
-      const result = await manager.createMemory({ category: "preference", text: "The user loves anime series and manga.", key: "anime_pref" });
+      await manager.createMemory({ category: "preference", text: "The user loves anime series and manga.", key: "anime_pref" });
+      const [committed] = await approveAllPending();
       const all = await store.load();
       expect(all.length).toBe(1); // no new record
-      expect(result.id).toBe(existing.id);
+      expect(committed.id).toBe(existing.id);
     });
   });
 
   describe("createMemory — similar duplicate", () => {
-    it("merges into existing record instead of creating a new one", async () => {
+    it("merges into existing record instead of creating a new one upon approval", async () => {
       const existing = makeMemory({ category: "preference", text: "The user loves watching anime shows and movies on weekends." });
       store.setData([existing]);
 
       await manager.createMemory({ category: "preference", text: "The user loves watching anime and movies." });
+      await approveAllPending();
       const all = await store.load();
       expect(all.length).toBe(1); // merged, not duplicated
     });
   });
 
   describe("createMemory — conflict", () => {
-    it("marks existing as needs_revalidation and adds new with low confidence", async () => {
+    it("marks existing as needs_revalidation and adds new with low confidence upon approval", async () => {
       const existing = makeMemory({ category: "preference", text: "The user loves classical music and Mozart.", key: "music_taste" });
       store.setData([existing]);
 
-      const added = await manager.createMemory({
+      await manager.createMemory({
         category: "preference",
         text: "The user strongly dislikes any form of music and prefers complete silence.",
         key: "music_taste",
       });
+      // Still untouched before approval
+      expect((await store.load()).length).toBe(1);
 
+      const [added] = await approveAllPending();
       const all = await store.load();
       expect(all.length).toBe(2);
 
@@ -434,11 +473,13 @@ describe("MemoryManager", () => {
   // ── updateMemory ─────────────────────────────────────────────────────────
 
   describe("updateMemory", () => {
-    it("updates only the specified fields", async () => {
+    it("updates only the specified fields upon approval", async () => {
       const m = makeMemory({ importance: "low" });
       store.setData([m]);
 
-      const updated = await manager.updateMemory(m.id, { importance: "high" });
+      const proposed = await manager.updateMemory(m.id, { importance: "high" });
+      expect(proposed?.status).toBe("pending_approval" as any);
+      const [updated] = await approveAllPending();
       expect(updated?.importance).toBe("high");
       expect(updated?.text).toBe(m.text); // unchanged
     });
@@ -452,18 +493,21 @@ describe("MemoryManager", () => {
   // ── deleteMemory ─────────────────────────────────────────────────────────
 
   describe("deleteMemory", () => {
-    it("permanently removes memory from disk", async () => {
+    it("queues deletion proposal and permanently removes memory from disk upon approval", async () => {
       const m = makeMemory();
       store.setData([m]);
       const success = await manager.deleteMemory(m.id);
       expect(success).toBe(true);
+      expect((await store.load()).length).toBe(1); // Not deleted until approved
+      await approveAllPending();
       expect((await store.load()).length).toBe(0);
     });
 
-    it("does not appear in listMemories after deletion", async () => {
+    it("does not appear in listMemories after governed deletion approval", async () => {
       const m = makeMemory();
       store.setData([m]);
       await manager.deleteMemory(m.id);
+      await approveAllPending();
       const list = await manager.listMemories();
       expect(list.find((x) => x.id === m.id)).toBeUndefined();
     });
@@ -477,17 +521,20 @@ describe("MemoryManager", () => {
   // ── archiveMemory ─────────────────────────────────────────────────────────
 
   describe("archiveMemory", () => {
-    it("sets status to archived", async () => {
+    it("queues archive proposal and sets status to archived upon approval", async () => {
       const m = makeMemory();
       store.setData([m]);
-      const archived = await manager.archiveMemory(m.id);
+      const queued = await manager.archiveMemory(m.id);
+      expect(queued?.status).toBe("pending_approval" as any);
+      const [archived] = await approveAllPending();
       expect(archived?.status).toBe("archived");
     });
 
-    it("excludes archived from search results", async () => {
+    it("excludes archived from search results after approval", async () => {
       const m = makeMemory({ text: "The user uses Vim editor." });
       store.setData([m]);
       await manager.archiveMemory(m.id);
+      await approveAllPending();
       const results = await manager.searchMemories({ query: "Vim" });
       expect(results.length).toBe(0);
     });
@@ -496,17 +543,20 @@ describe("MemoryManager", () => {
   // ── revalidateMemory ─────────────────────────────────────────────────────
 
   describe("revalidateMemory", () => {
-    it("sets status back to active", async () => {
+    it("sets status back to active upon approval", async () => {
       const m = makeMemory({ status: "needs_revalidation" });
       store.setData([m]);
-      const revalidated = await manager.revalidateMemory(m.id);
+      const queued = await manager.revalidateMemory(m.id);
+      expect(queued?.status).toBe("pending_approval" as any);
+      const [revalidated] = await approveAllPending();
       expect(revalidated?.status).toBe("active");
     });
 
-    it("promotes low confidence to medium when requested", async () => {
+    it("promotes low confidence to medium when requested upon approval", async () => {
       const m = makeMemory({ status: "needs_revalidation", confidence: "low" });
       store.setData([m]);
-      const result = await manager.revalidateMemory(m.id, { promoteConfidence: true });
+      await manager.revalidateMemory(m.id, { promoteConfidence: true });
+      const [result] = await approveAllPending();
       expect(result?.confidence).toBe("medium");
     });
   });
@@ -514,12 +564,14 @@ describe("MemoryManager", () => {
   // ── mergeMemory ───────────────────────────────────────────────────────────
 
   describe("mergeMemory", () => {
-    it("keeps target and removes source", async () => {
+    it("keeps target and removes source upon approval", async () => {
       const target = makeMemory({ id: "t1", text: "Short text." });
       const source = makeMemory({ id: "s1", text: "Short text with extra information added." });
       store.setData([target, source]);
 
       await manager.mergeMemory("t1", "s1");
+      expect((await store.load()).length).toBe(2); // Not merged before approval
+      await approveAllPending();
       const all = await store.load();
       expect(all.find((m) => m.id === "s1")).toBeUndefined();
       expect(all.find((m) => m.id === "t1")).toBeDefined();

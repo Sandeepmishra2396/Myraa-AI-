@@ -24,6 +24,34 @@ export type SourceType =
   | "FORUM"
   | "UNKNOWN";
 
+export type EpistemicLabel = "FACT" | "INFERENCE" | "HYPOTHESIS" | "VERIFIED_CONCLUSION";
+
+export type VerificationStatus =
+  | "UNVERIFIED"
+  | "CORROBORATED"
+  | "CONTRADICTED"
+  | "VERIFIED_CONCLUSION"
+  | "INSUFFICIENT_EVIDENCE";
+
+export interface ClaimExcerpt {
+  url: string;
+  title: string;
+  excerpt: string;
+  sourceType: SourceType;
+  publishedAt?: string;
+  isIndependent?: boolean;
+}
+
+export interface ClaimProvenance {
+  sourceUrl: string;
+  fetchedAt: number;
+  publishedAt?: string;
+  sourceType: SourceType;
+  domain: string;
+  isSyndicated?: boolean;
+  canonicalUrl?: string;
+}
+
 export interface SourceReliabilityScore {
   sourceType: SourceType;
   /** 0.0–1.0: authority of the originating domain/org */
@@ -40,6 +68,18 @@ export interface SourceReliabilityScore {
   versionMatch: boolean;
   /** Composite reliability score (0.0–1.0) */
   composite: number;
+
+  /** Stage 2 Epistemic Additions: */
+  /** 0.0–1.0: measure of source independence (not syndicated/mirrored) */
+  independence?: number;
+  /** 0.0–1.0: topical relevance score */
+  relevance?: number;
+  /** Whether this source is identified as duplicate or syndicated copy */
+  isDuplicateOrSyndicated?: boolean;
+  /** Canonical URL if detected or indicated */
+  canonicalUrl?: string;
+  /** ISO date string when source was published or updated */
+  publishedAt?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -73,6 +113,20 @@ export interface ResearchClaim {
   supports: string[];
   /** IDs of claims this claim contradicts */
   contradicts: string[];
+
+  /** Stage 2 Epistemic Additions: */
+  /** Explicit classification: FACT | INFERENCE | HYPOTHESIS | VERIFIED_CONCLUSION */
+  epistemicLabel?: EpistemicLabel;
+  /** Formal verification status under epistemic verification policy */
+  verificationStatus?: VerificationStatus;
+  /** Supporting evidence excerpts with origin URL and source type */
+  supportingExcerpts?: ClaimExcerpt[];
+  /** Contradicting evidence excerpts with origin URL and source type */
+  contradictingExcerpts?: ClaimExcerpt[];
+  /** Full provenance and metadata */
+  provenance?: ClaimProvenance;
+  /** Explanation of why this verification status / label was assigned */
+  verificationReason?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -227,6 +281,21 @@ export interface ResearchSession {
   status: "ACTIVE" | "COMPLETE" | "FAILED" | "CANCELLED";
 }
 
+export interface EpistemicUncertaintyNote {
+  topic: string;
+  reason: string;
+  conflictingClaims?: string[];
+  severity: "LOW" | "MEDIUM" | "HIGH";
+}
+
+export interface EpistemicSummary {
+  verifiedConclusions: ResearchClaim[];
+  facts: ResearchClaim[];
+  inferences: ResearchClaim[];
+  hypotheses: ResearchClaim[];
+  uncertainties: EpistemicUncertaintyNote[];
+}
+
 export interface SynthesizedResearchResult {
   sessionId: string;
   query: string;
@@ -243,6 +312,41 @@ export interface SynthesizedResearchResult {
   comparisonReport?: ComparisonReport;
   generatedAt: number;
   securityFlags: string[];
+
+  /** Stage 2 Epistemic Additions */
+  epistemicSummary?: EpistemicSummary;
+  hasUncertainty?: boolean;
+  uncertaintyReport?: string[];
+  duplicateClusters?: DuplicateCluster[];
+}
+
+export interface DuplicateCluster {
+  canonicalUrl: string;
+  duplicateUrls: string[];
+  similarityScore: number;
+  isSyndicated: boolean;
+  reason: string;
+}
+
+export interface DuplicateDetectionReport {
+  clusters: DuplicateCluster[];
+  uniqueSourceCount: number;
+  duplicateSourceCount: number;
+  totalEvaluated: number;
+}
+
+export interface QueryRefinementStep {
+  iteration: number;
+  originalQuery: string;
+  refinedQuery: string;
+  targetAngle: "OFFICIAL_DOC" | "VERSION_SPECIFIC" | "KNOWN_ISSUE" | "DISAMBIGUATION" | "DEEPER_EVIDENCE";
+  reason: string;
+}
+
+export interface RefinedQueryPlan extends ResearchQueryPlan {
+  refinements: QueryRefinementStep[];
+  currentIteration: number;
+  maxIterations: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -307,4 +411,21 @@ export interface ResearchCitationsResponse {
   sessionId: string;
   citations: CitationEntry[];
   totalCount: number;
+}
+
+export interface EpistemicQueryRequest {
+  question: string;
+  maxSources?: number;
+  requireOfficial?: boolean;
+  projectPath?: string;
+  allowRefinement?: boolean;
+}
+
+export interface DuplicateDetectionRequest {
+  sources: Array<{ url: string; title: string; content: string; canonicalUrl?: string }>;
+}
+
+export interface VerifyClaimsRequest {
+  claims: ResearchClaim[];
+  sources?: ResearchSource[];
 }

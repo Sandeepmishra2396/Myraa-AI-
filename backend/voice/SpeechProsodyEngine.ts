@@ -99,6 +99,16 @@ export class SpeechProsodyEngine {
       return context.forceEmotion;
     }
 
+    // Code context guardrail: technical operations must stay neutral/calm
+    const isCodeContext =
+      context?.isCode === true ||
+      /```[\s\S]{0,5000}```|^\s*(import|export|const|let|var|function|class|async|await|return|if|else|for|while|try|catch)\b/.test(text) ||
+      /\b(npm install|pip install|pip3 install|npx|yarn add|pnpm|node_modules|package\.json|tsconfig|webpack|vite|eslint|prettier)\b/i.test(text) ||
+      /\.(ts|tsx|js|jsx|py|json|yaml|yml|env|sh|bash|cmd|ps1|sql|css|scss|html|vue|svelte)\b/.test(text);
+    if (isCodeContext) {
+      return 'neutral';
+    }
+
     // Emergency or critical halt -> calm/concerned
     if (context?.isEmergency) {
       return "concerned";
@@ -343,8 +353,18 @@ export class SpeechProsodyEngine {
     });
     const validatedText = qualityGate.refinedText;
 
-    const emotion = this.detectEmotion(validatedText, context);
-    const decision = this.decideProsody(validatedText, context, language);
+    // Auto-detect code context in the validated text; merge into context so all
+    // downstream calls (detectEmotion, decideProsody) honour the guardrail.
+    const hasCodeBlock =
+      /```[\s\S]{0,5000}```/.test(validatedText) ||
+      /\b(npm install|pip install|pip3 install|npx|yarn add|pnpm)\b/i.test(validatedText) ||
+      /\.(ts|tsx|js|jsx|py|json|yaml|yml|sh|bash|cmd|ps1|sql|css|scss|html|vue|svelte)\b/.test(validatedText);
+    const enrichedContext: ProsodyContext | undefined = hasCodeBlock
+      ? { ...context, isCode: true }
+      : context;
+
+    const emotion = this.detectEmotion(validatedText, enrichedContext);
+    const decision = this.decideProsody(validatedText, enrichedContext, language);
 
     let expressiveText = validatedText;
 

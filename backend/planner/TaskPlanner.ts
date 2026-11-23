@@ -18,6 +18,11 @@
 import crypto from "crypto";
 import type { Goal, PlanStep, TaskPlan, StepPhase } from "./PlannerTypes.ts";
 import { hashArgs } from "./CheckpointManager.ts";
+import {
+  taskOrchestrator,
+  type PlanValidationResult,
+  type OrchestratedTaskPlan,
+} from "./TaskOrchestrator.ts";
 
 // ---------------------------------------------------------------------------
 // Step factory
@@ -61,10 +66,14 @@ export class TaskPlanner {
   /**
    * Build a full TaskPlan from a Goal.
    * Returns the plan (not yet persisted — caller must call PlanStore.savePlan).
+   *
+   * @param options.projectId  Optional canonical project ID (Stage 10.3 P2).
+   *   Must be a pre-validated server-side ID passed by PlannerCoordinator.
+   *   Never inferred from goal content, model output, or global active state.
    */
   buildPlan(
     goal: Goal,
-    options?: { deviceId?: string; preferredLanguage?: string },
+    options?: { deviceId?: string; preferredLanguage?: string; projectId?: string },
   ): TaskPlan {
     const planId = crypto.randomUUID();
     const now = new Date().toISOString();
@@ -232,8 +241,14 @@ export class TaskPlanner {
     );
     steps.push(reportStep);
 
+    const validatedProjectId =
+      typeof options?.projectId === "string" && options.projectId.trim().length > 0
+        ? options.projectId.trim()
+        : undefined;
+
     return {
       id: planId,
+      ...(validatedProjectId ? { projectId: validatedProjectId } : {}),
       goal,
       status: "created",
       steps,
@@ -246,7 +261,17 @@ export class TaskPlanner {
       startedAt: undefined,
       completedAt: undefined,
       updatedAt: now,
-    };
+      version: 1,
+      checkpoints: [],
+      uncertainStepIds: [],
+    } as OrchestratedTaskPlan;
+  }
+
+  /**
+   * Validate a plan structure and dependency DAG using TaskOrchestrator.
+   */
+  validatePlan(plan: TaskPlan): PlanValidationResult {
+    return taskOrchestrator.validatePlanGraph(plan);
   }
 
   // ---------------------------------------------------------------------------
@@ -297,7 +322,7 @@ export class TaskPlanner {
     goal: Goal,
     planId: string,
     now: string,
-    options?: { deviceId?: string; preferredLanguage?: string },
+    options?: { deviceId?: string; preferredLanguage?: string; projectId?: string },
   ): TaskPlan {
     const raw = (goal.rawInput || goal.objective).toLowerCase();
     const deviceId = options?.deviceId;
@@ -585,8 +610,14 @@ export class TaskPlanner {
       steps.push(reportStep);
     }
 
+    const validatedProjectId =
+      typeof options?.projectId === "string" && options.projectId.trim().length > 0
+        ? options.projectId.trim()
+        : undefined;
+
     return {
       id: planId,
+      ...(validatedProjectId ? { projectId: validatedProjectId } : {}),
       goal,
       status: "created",
       steps,
@@ -601,7 +632,10 @@ export class TaskPlanner {
       startedAt: undefined,
       completedAt: undefined,
       updatedAt: now,
-    };
+      version: 1,
+      checkpoints: [],
+      uncertainStepIds: [],
+    } as OrchestratedTaskPlan;
   }
 
   private _extractReminderText(text: string): string {

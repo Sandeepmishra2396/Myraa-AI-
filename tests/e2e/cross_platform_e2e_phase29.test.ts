@@ -40,6 +40,7 @@ import { mobileWorkflowManager } from "../../backend/workflow/MobileWorkflowMana
 import { plannerCoordinator } from "../../backend/planner/PlannerCoordinator.ts";
 import { planStore } from "../../backend/planner/PlanStore.ts";
 import { LIVE_TOOLS } from "../../backend/ai/GeminiSessionFactory.ts";
+import { governingMemoryGate } from "../../backend/companion/GoverningMemoryGate.ts";
 
 describe("Phase 29 — Full Cross-Platform Testing Suite", () => {
   const androidDeviceId = "android_pixel_e2e_device";
@@ -130,6 +131,16 @@ describe("Phase 29 — Full Cross-Platform Testing Suite", () => {
         adminSecContext,
       );
       expect(created.id).toBeDefined();
+
+      const pendingReq = governingMemoryGate.getRequest(created.id);
+      if (pendingReq) {
+        await governingMemoryGate.approveWrite(pendingReq.id, pendingReq.oneTimeToken, {
+          actorId: pendingReq.userId,
+          role: "admin",
+          ipAddress: "127.0.0.1",
+          isStepUpAuthenticated: true,
+        });
+      }
 
       const searchResults = await sharedMemoryManager.searchMemories(
         { query: "agent-planner" },
@@ -319,7 +330,18 @@ describe("Phase 29 — Full Cross-Platform Testing Suite", () => {
         adminSecContext,
       );
       expect(created.id).toBeDefined();
-      const memoryId = created.id;
+
+      let memoryId = created.id;
+      const pendingReq = governingMemoryGate.getRequest(created.id);
+      if (pendingReq) {
+        const approved = await governingMemoryGate.approveWrite(pendingReq.id, pendingReq.oneTimeToken, {
+          actorId: pendingReq.userId,
+          role: "admin",
+          ipAddress: "127.0.0.1",
+          isStepUpAuthenticated: true,
+        });
+        memoryId = approved.id;
+      }
 
       // Android reads the shared memory
       const androidMemories = await sharedMemoryManager.listMemories({}, androidSecContext);
@@ -334,10 +356,22 @@ describe("Phase 29 — Full Cross-Platform Testing Suite", () => {
           key: "project_deadline",
           text: "Launch scheduled for Nov 1.",
           category: "project",
+          deviceId: "system",
         },
         adminSecContext,
       );
-      const memoryId = created.id;
+
+      let memoryId = created.id;
+      const pendingCreateReq = governingMemoryGate.getRequest(created.id);
+      if (pendingCreateReq) {
+        const approved = await governingMemoryGate.approveWrite(pendingCreateReq.id, pendingCreateReq.oneTimeToken, {
+          actorId: pendingCreateReq.userId,
+          role: "admin",
+          ipAddress: "127.0.0.1",
+          isStepUpAuthenticated: true,
+        });
+        memoryId = approved.id;
+      }
 
       // Android modifies the memory
       const updated = await sharedMemoryManager.updateMemory(
@@ -347,6 +381,22 @@ describe("Phase 29 — Full Cross-Platform Testing Suite", () => {
       );
       expect(updated.success).toBe(true);
       expect(updated.memory?.id).toBe(memoryId);
+
+      // Approve the update proposal
+      const pendingSummary = governingMemoryGate.listPendingRequests().find(
+        (r) => r.action === "UPDATE" && (r.proposedMemory as any)?.id === memoryId,
+      );
+      if (pendingSummary) {
+        const fullUpdateReq = governingMemoryGate.getRequest(pendingSummary.id);
+        if (fullUpdateReq) {
+          await governingMemoryGate.approveWrite(fullUpdateReq.id, fullUpdateReq.oneTimeToken, {
+            actorId: fullUpdateReq.userId,
+            role: "admin",
+            ipAddress: "127.0.0.1",
+            isStepUpAuthenticated: true,
+          });
+        }
+      }
 
       // Desktop verifies updated version
       const desktopMemories = await sharedMemoryManager.listMemories({}, adminSecContext);

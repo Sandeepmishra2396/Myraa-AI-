@@ -38,6 +38,9 @@ class AudioRecordEngine {
     /** Callback invoked when speech amplitude exceeds the barge-in threshold */
     var onSpeechDetected: ((peakAmplitude: Int) -> Unit)? = null
 
+    /** Callback invoked when speech activity ceases (silence after speech detected) */
+    var onSpeechEnded: (() -> Unit)? = null
+
     val isRecording: Boolean
         get() = isRecordingActive.get()
 
@@ -66,16 +69,40 @@ class AudioRecordEngine {
         val bufferSize = maxOf(minBufferSize, CHUNK_SIZE_BYTES * 4)
 
         try {
-            audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-                SAMPLE_RATE_HZ,
-                CHANNEL_CONFIG,
-                AUDIO_FORMAT,
-                bufferSize
-            )
+            var record: AudioRecord? = null
+            try {
+                record = AudioRecord(
+                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                    SAMPLE_RATE_HZ,
+                    CHANNEL_CONFIG,
+                    AUDIO_FORMAT,
+                    bufferSize
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "VOICE_COMMUNICATION constructor failed: ${e.message}")
+            }
 
+            if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
+                Log.w(TAG, "AudioRecord VOICE_COMMUNICATION uninitialized; attempting fallback to AudioSource.MIC.")
+                try {
+                    record?.release()
+                } catch (_: Exception) {}
+                try {
+                    record = AudioRecord(
+                        MediaRecorder.AudioSource.MIC,
+                        SAMPLE_RATE_HZ,
+                        CHANNEL_CONFIG,
+                        AUDIO_FORMAT,
+                        bufferSize
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "MIC fallback constructor failed: ${e.message}")
+                }
+            }
+
+            audioRecord = record
             if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e(TAG, "AudioRecord failed to initialize.")
+                Log.e(TAG, "AudioRecord failed to initialize under both VOICE_COMMUNICATION and MIC.")
                 audioRecord?.release()
                 audioRecord = null
                 return false
@@ -87,13 +114,29 @@ class AudioRecordEngine {
             recordingThread = Thread({
                 val buffer = ByteArray(CHUNK_SIZE_BYTES)
                 Log.i(TAG, "Microphone capture thread started.")
+                var wasSpeaking = false
+                var silenceChunks = 0
+                val silenceThresholdChunks = 20 // 20 * 20ms = 400ms matching Gemini Live standard
 
                 while (isRecordingActive.get()) {
                     val bytesRead = audioRecord?.read(buffer, 0, buffer.size) ?: -1
                     if (bytesRead > 0) {
                         val peak = calculatePeakAmplitude(buffer, bytesRead)
                         if (peak >= SPEECH_AMPLITUDE_THRESHOLD) {
+                            silenceChunks = 0
+                            if (!wasSpeaking) {
+                                wasSpeaking = true
+                            }
                             onSpeechDetected?.invoke(peak)
+                        } else {
+                            if (wasSpeaking) {
+                                silenceChunks++
+                                if (silenceChunks >= silenceThresholdChunks) {
+                                    wasSpeaking = false
+                                    silenceChunks = 0
+                                    onSpeechEnded?.invoke()
+                                }
+                            }
                         }
 
                         val base64 = Base64.encodeToString(buffer, 0, bytesRead, Base64.NO_WRAP)
@@ -125,10 +168,19 @@ class AudioRecordEngine {
 
         try {
             audioRecord?.stop()
-            audioRecord?.release()
-            recordingThread?.join(500)
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping AudioRecord: ${e.message}")
+        }
+
+        try {
+            recordingThread?.interrupt()
+            recordingThread?.join(300)
+        } catch (_: Exception) {}
+
+        try {
+            audioRecord?.release()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error releasing AudioRecord: ${e.message}")
         } finally {
             audioRecord = null
             recordingThread = null

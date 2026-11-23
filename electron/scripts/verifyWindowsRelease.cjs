@@ -143,17 +143,15 @@ function scanPackagedAppForDevArtifacts(unpackedAppDir) {
         if (rel.includes('-backup')) {
           issues.push(`Backup artifact found in packaged app: ${rel}`);
         }
-        if (rel === 'dist/server.cjs') {
-          issues.push(`Server bundle dist/server.cjs should not be packaged in Windows client: ${rel}`);
-        }
         if (/\.(pfx|p12|key|pem)$/i.test(rel)) {
           issues.push(`Private key or certificate file found in packaged app: ${rel}`);
         }
 
         if (/\.(cjs|js|mjs|html|json)$/i.test(rel)) {
           const content = fs.readFileSync(full, 'utf-8');
-          if (/https?:\/\/localhost:3000/i.test(content)) {
-            issues.push(`Development localhost:3000 URL found in ${rel}`);
+          // Renderer bundle must not hardcode localhost:3000
+          if ((rel.startsWith('dist/assets/') || rel === 'dist/index.html') && /https?:\/\/localhost:3000/i.test(content)) {
+            issues.push(`Development localhost:3000 URL found in renderer bundle: ${rel}`);
           }
           if (/AIza[0-9A-Za-z_-]{30,}/.test(content)) {
             issues.push(`Hardcoded Gemini API key found in ${rel}`);
@@ -167,6 +165,12 @@ function scanPackagedAppForDevArtifacts(unpackedAppDir) {
   }
 
   walk(unpackedAppDir);
+
+  // Phase 13A-WIN.6: Verify local Node backend bundle is packaged
+  if (!filesChecked.includes('dist/server.cjs')) {
+    issues.push('Local Node backend bundle dist/server.cjs missing from packaged app');
+  }
+
   return {
     filesCount: filesChecked.length,
     filesChecked,

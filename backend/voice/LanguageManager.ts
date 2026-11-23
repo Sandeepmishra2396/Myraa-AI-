@@ -48,7 +48,7 @@ export class LanguageManager {
 
   private preferredLanguage: SupportedLanguage = "auto";
   private conversationLanguages: Map<string, ActiveLanguage> = new Map();
-  private lastDetectedLanguage: ActiveLanguage = "english";
+  private lastDetectedLanguage: ActiveLanguage = "hindi";
   private switchHistory: LanguageSwitchEvent[] = [];
   private readonly defaultConversationId = "default";
 
@@ -69,7 +69,7 @@ export class LanguageManager {
   public resetState(): void {
     this.preferredLanguage = "auto";
     this.conversationLanguages.clear();
-    this.lastDetectedLanguage = "english";
+    this.lastDetectedLanguage = "hindi";
     this.switchHistory = [];
   }
 
@@ -88,10 +88,14 @@ export class LanguageManager {
   }
 
   public getActiveLanguage(conversationId: string = this.defaultConversationId): ActiveLanguage {
+    const conv = this.conversationLanguages.get(conversationId);
+    if (conv) {
+      return conv;
+    }
     if (this.preferredLanguage !== "auto") {
       return this.preferredLanguage;
     }
-    return this.conversationLanguages.get(conversationId) || this.lastDetectedLanguage || "english";
+    return this.lastDetectedLanguage || "hindi";
   }
 
   public setActiveLanguage(

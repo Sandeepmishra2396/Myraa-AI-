@@ -16,7 +16,7 @@
  *   • ACCOUNT ≠ DEVICE
  *   • SAME ACCOUNT ≠ AUTOMATIC REMOTE CONNECTION
  *   • RemoteBridge remains INACTIVE unless explicitly connected by the user.
- *   • Preserves Phase 4 ActionContext, ExecutionContext, SecurityPolicyEngine pipeline, and 126 Gemini tools.
+ *   • Preserves Phase 4 ActionContext, ExecutionContext, SecurityPolicyEngine pipeline, and 129 Gemini tools.
  */
 
 import {

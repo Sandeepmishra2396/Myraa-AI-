@@ -100,6 +100,20 @@ export class PlanStore {
   }
 
   /**
+   * Return only plans explicitly associated with the given projectId, ordered by createdAt descending.
+   * Plans without a matching projectId are strictly excluded (no global fallback).
+   */
+  async listPlansByProject(projectId: string): Promise<TaskPlan[]> {
+    if (!projectId || typeof projectId !== "string" || !projectId.trim()) {
+      return [];
+    }
+    const all = await this.listPlans();
+    return all.filter(
+      (p) => typeof p.projectId === "string" && p.projectId.trim() !== "" && p.projectId === projectId,
+    );
+  }
+
+  /**
    * Partially update a plan. Only the supplied fields are overwritten.
    * Returns the updated plan, or undefined if the plan was not found.
    *
@@ -125,6 +139,41 @@ export class PlanStore {
       await writePlans(plans);
     }
     return existed;
+  }
+
+  /**
+   * Save a plan with optimistic concurrency control / version check.
+   * If expectedVersion is specified and does not match existing plan version,
+   * rejects with STALE_UPDATE_DETECTED error to prevent stale overwrite.
+   */
+  async savePlanAtomic(plan: TaskPlan, expectedVersion?: number): Promise<void> {
+    const plans = await readPlans();
+    const existing = plans.get(plan.id);
+    if (existing && expectedVersion !== undefined) {
+      const currentVersion = (existing as any).version;
+      if (currentVersion !== undefined && currentVersion !== expectedVersion) {
+        throw new Error(
+          `STALE_UPDATE_DETECTED: Plan '${plan.id}' version mismatch. Expected ${expectedVersion}, but store has ${currentVersion}.`,
+        );
+      }
+    }
+    plans.set(plan.id, { ...plan, updatedAt: new Date().toISOString() });
+    await writePlans(plans);
+  }
+
+  /**
+   * Return a single plan by ID, verifying that if projectId is supplied,
+   * the plan strictly matches that canonical project ID.
+   */
+  async getPlanWithProjectIsolation(id: string, projectId?: string): Promise<TaskPlan | undefined> {
+    const plan = await this.getPlan(id);
+    if (!plan) return undefined;
+    if (projectId !== undefined && projectId !== null) {
+      if (plan.projectId !== projectId) {
+        return undefined; // Strictly isolated — invisible to other projects
+      }
+    }
+    return plan;
   }
 
   /**

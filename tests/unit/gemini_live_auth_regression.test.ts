@@ -316,3 +316,590 @@ describe("Gemini Live Authentication & Credential Handling Regression Suite", ()
     expect(meta.prefix).toBe("AIza");
   });
 });
+
+// =============================================================================
+// Stage 10.4.2 Closure: Local /live WebSocket Session Identity & Confirmation
+// =============================================================================
+
+describe("Stage 10.4.2 Local /live WebSocket Session Identity & Confirmation Suite", () => {
+  let originalKey: string | undefined;
+
+  beforeEach(async () => {
+    originalKey = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = "AIzaSyTestKeyForLiveAuthSuite0000000001";
+    const { localLiveSessionRegistry } = await import("../../backend/server.ts");
+    localLiveSessionRegistry.resetForTesting();
+    const { securityPolicyEngine } = await import("../../backend/security/SecurityPolicyEngine.ts");
+    securityPolicyEngine.resetForTesting();
+    securityPolicyEngine.setMode("BALANCED");
+    const { emergencyStopCoordinator } = await import("../../backend/remote/EmergencyStopCoordinator.ts");
+    await emergencyStopCoordinator.reset("test_setup");
+  });
+
+  afterEach(async () => {
+    const { localLiveSessionRegistry } = await import("../../backend/server.ts");
+    localLiveSessionRegistry.resetForTesting();
+    const { securityPolicyEngine } = await import("../../backend/security/SecurityPolicyEngine.ts");
+    securityPolicyEngine.resetForTesting();
+    securityPolicyEngine.setMode("BALANCED");
+    const { emergencyStopCoordinator } = await import("../../backend/remote/EmergencyStopCoordinator.ts");
+    await emergencyStopCoordinator.reset("test_cleanup");
+    if (originalKey !== undefined) process.env.GEMINI_API_KEY = originalKey;
+    else delete process.env.GEMINI_API_KEY;
+    vi.restoreAllMocks();
+  });
+
+  function createMockWebSocket() {
+    const sentFrames: any[] = [];
+    const eventHandlers: Record<string, Array<(...args: any[]) => any>> = {};
+    const ws: any = {
+      readyState: 1,
+      remoteDevice: null,
+      send: (data: string) => {
+        try {
+          sentFrames.push(JSON.parse(data));
+        } catch {
+          sentFrames.push(data);
+        }
+      },
+      on: (event: string, cb: (...args: any[]) => any) => {
+        if (!eventHandlers[event]) eventHandlers[event] = [];
+        eventHandlers[event].push(cb);
+      },
+      close: vi.fn(() => {
+        ws.readyState = 3;
+        for (const h of eventHandlers["close"] || []) {
+          try { h(1000, "Normal Closure"); } catch {}
+        }
+      }),
+    };
+    const dispatchMessage = async (payload: unknown) => {
+      const raw = Buffer.from(JSON.stringify(payload));
+      for (const h of eventHandlers["message"] || []) {
+        await h(raw);
+      }
+    };
+    const dispatchClose = () => {
+      ws.readyState = 3;
+      for (const h of eventHandlers["close"] || []) {
+        h(1000, "Client closed");
+      }
+    };
+    return { ws, sentFrames, dispatchMessage, dispatchClose };
+  }
+
+  // --- Local connection identity (Scenarios 1–5) ---
+
+  it("Scenario 1: each accepted local /live socket receives a non-empty server-generated session ID", async () => {
+    const { validateLocalLiveUpgrade, localLiveSessionRegistry } = await import("../../backend/server.ts");
+    const { ws } = createMockWebSocket();
+    const upgradeRes = validateLocalLiveUpgrade(
+      { headers: { origin: "http://127.0.0.1:3000" }, socket: { remoteAddress: "127.0.0.1" } },
+      { remoteAddress: "127.0.0.1" },
+      "/live",
+    );
+    expect(upgradeRes.trusted).toBe(true);
+    if (!upgradeRes.trusted) return;
+
+    localLiveSessionRegistry.markTrustedUpgrade(ws, { ipAddress: upgradeRes.ipAddress, userAgent: upgradeRes.userAgent });
+    const ctx = localLiveSessionRegistry.establishLocalSession(ws);
+
+    expect(ctx).not.toBeNull();
+    expect(ctx!.sessionId).toBeDefined();
+    expect(typeof ctx!.sessionId).toBe("string");
+    expect(ctx!.sessionId.startsWith("local_sess_")).toBe(true);
+    expect(ctx!.sessionId.length).toBeGreaterThan(20);
+    expect(ws.remoteSession).toBe(ctx);
+    expect(ws.remoteSessionId).toBe(ctx!.sessionId);
+    expect(ws.sessionId).toBe(ctx!.sessionId);
+    expect(localLiveSessionRegistry.isActiveSession(ctx!.sessionId)).toBe(true);
+  });
+
+  it("Scenario 2: two independent socket connections receive different session IDs", async () => {
+    const { localLiveSessionRegistry } = await import("../../backend/server.ts");
+    const sock1 = createMockWebSocket();
+    const sock2 = createMockWebSocket();
+
+    localLiveSessionRegistry.markTrustedUpgrade(sock1.ws, { ipAddress: "127.0.0.1", userAgent: "Client-1" });
+    localLiveSessionRegistry.markTrustedUpgrade(sock2.ws, { ipAddress: "127.0.0.1", userAgent: "Client-2" });
+
+    const ctx1 = localLiveSessionRegistry.establishLocalSession(sock1.ws);
+    const ctx2 = localLiveSessionRegistry.establishLocalSession(sock2.ws);
+
+    expect(ctx1!.sessionId).not.toBe(ctx2!.sessionId);
+    expect(localLiveSessionRegistry.getActiveCount()).toBe(2);
+  });
+
+  it("Scenario 3: client-supplied fake session IDs in query, headers, or socket properties are ignored and stripped", async () => {
+    const { validateLocalLiveUpgrade, localLiveSessionRegistry } = await import("../../backend/server.ts");
+    const { ws } = createMockWebSocket();
+    ws.sessionId = "attacker_pre_injected_sessionId";
+    ws.remoteSessionId = "attacker_pre_injected_remoteSessionId";
+    ws.remoteSession = { sessionId: "attacker_spoofed_session", role: "admin" };
+
+    const upgradeRes = validateLocalLiveUpgrade(
+      {
+        url: "/live?sessionId=evil_query_session&remoteSessionId=evil_remote_query",
+        headers: {
+          origin: "http://localhost:3000",
+          "x-session-id": "evil_header_session",
+          "x-forwarded-session": "evil_forwarded_session",
+        },
+        socket: { remoteAddress: "127.0.0.1" },
+      },
+      { remoteAddress: "127.0.0.1" },
+      "/live",
+    );
+    expect(upgradeRes.trusted).toBe(true);
+    if (!upgradeRes.trusted) return;
+
+    localLiveSessionRegistry.markTrustedUpgrade(ws, { ipAddress: upgradeRes.ipAddress, userAgent: upgradeRes.userAgent });
+    const ctx = localLiveSessionRegistry.establishLocalSession(ws);
+
+    expect(ctx!.sessionId).not.toBe("attacker_pre_injected_sessionId");
+    expect(ctx!.sessionId).not.toBe("evil_query_session");
+    expect(ctx!.sessionId).not.toBe("evil_header_session");
+    expect(ctx!.sessionId.startsWith("local_sess_")).toBe(true);
+    expect(ws.sessionId).toBe(ctx!.sessionId);
+    expect(ws.remoteSessionId).toBe(ctx!.sessionId);
+    expect(ws.remoteSession.sessionId).toBe(ctx!.sessionId);
+  });
+
+  it("Scenario 4: missing or invalid server-side identity fails closed with MISSING_SESSION_CONTEXT", async () => {
+    const { localLiveSessionRegistry } = await import("../../backend/server.ts");
+    const { ConversationManager } = await import("../../backend/conversation/ConversationManager.ts");
+    const { securityPolicyEngine } = await import("../../backend/security/SecurityPolicyEngine.ts");
+
+    const unverified = createMockWebSocket();
+    unverified.ws.remoteSessionId = "unauthorized_sid";
+
+    const established = localLiveSessionRegistry.establishLocalSession(unverified.ws);
+    expect(established).toBeNull();
+    expect(unverified.ws.remoteSession).toBeUndefined();
+    expect(unverified.ws.remoteSessionId).toBeUndefined();
+
+    const mockFactory: any = { createSession: vi.fn(async () => ({ sendRealtimeInput: vi.fn(), close: vi.fn() })) };
+    const cm = new ConversationManager(mockFactory);
+    await cm.handleConnection(unverified.ws);
+
+    const token = securityPolicyEngine.generateConfirmationToken(
+      "trackProjectTask",
+      { action: "confirm_decision", decisionId: "dec-unverified-4", projectId: "proj-4" },
+      "unauthorized_sid",
+    );
+
+    unverified.sentFrames.length = 0;
+    await unverified.dispatchMessage({
+      type: "confirm_decision",
+      decisionId: "dec-unverified-4",
+      projectId: "proj-4",
+      confirmationToken: token,
+    });
+    expect(
+      unverified.sentFrames.some(
+        (m) => m.type === "decision_confirmation_failed" && m.error === "MISSING_SESSION_CONTEXT",
+      ),
+    ).toBe(true);
+  });
+
+  it("Scenario 5: disconnect retires the old socket identity and strips session context", async () => {
+    const { localLiveSessionRegistry } = await import("../../backend/server.ts");
+    const sock = createMockWebSocket();
+    localLiveSessionRegistry.markTrustedUpgrade(sock.ws, { ipAddress: "127.0.0.1", userAgent: "Client-5" });
+    const ctx = localLiveSessionRegistry.establishLocalSession(sock.ws)!;
+
+    expect(localLiveSessionRegistry.isActiveSession(ctx.sessionId)).toBe(true);
+    expect(localLiveSessionRegistry.isRetiredSession(ctx.sessionId)).toBe(false);
+
+    const cleaned = localLiveSessionRegistry.cleanupLocalSession(sock.ws);
+    expect(cleaned).toBe(true);
+    expect(localLiveSessionRegistry.isActiveSession(ctx.sessionId)).toBe(false);
+    expect(localLiveSessionRegistry.isRetiredSession(ctx.sessionId)).toBe(true);
+    expect(sock.ws.remoteSession).toBeUndefined();
+    expect(sock.ws.remoteSessionId).toBeUndefined();
+    expect(sock.ws.sessionId).toBeUndefined();
+  });
+
+  // --- Confirmation security (Scenarios 6–12) ---
+
+  it("Scenario 6 & 7: token generated for socket A is accepted only by socket A; socket B cannot reuse it (cross-socket replay)", async () => {
+    const { localLiveSessionRegistry } = await import("../../backend/server.ts");
+    const { ConversationManager } = await import("../../backend/conversation/ConversationManager.ts");
+    const { securityPolicyEngine } = await import("../../backend/security/SecurityPolicyEngine.ts");
+    const { projectDecisionStore } = await import("../../backend/projects/ProjectDecisionStore.ts");
+
+    const sockA = createMockWebSocket();
+    const sockB = createMockWebSocket();
+    localLiveSessionRegistry.markTrustedUpgrade(sockA.ws, { ipAddress: "127.0.0.1", userAgent: "Client-A" });
+    localLiveSessionRegistry.markTrustedUpgrade(sockB.ws, { ipAddress: "127.0.0.1", userAgent: "Client-B" });
+
+    const ctxA = localLiveSessionRegistry.establishLocalSession(sockA.ws)!;
+    const ctxB = localLiveSessionRegistry.establishLocalSession(sockB.ws)!;
+
+    const dec = {
+      id: "dec-x-socket-6",
+      projectId: "proj-x-socket",
+      description: "Cross socket isolation decision",
+      timestamp: new Date().toISOString(),
+      type: "decision" as const,
+      source: "ai_proposed" as const,
+      confirmed: false,
+    };
+    await projectDecisionStore.saveDecision(dec);
+
+    const tokenForA = securityPolicyEngine.generateConfirmationToken(
+      "trackProjectTask",
+      { action: "confirm_decision", decisionId: dec.id, projectId: dec.projectId },
+      ctxA.sessionId,
+    );
+
+    const mockFactory: any = { createSession: vi.fn(async () => ({ sendRealtimeInput: vi.fn(), close: vi.fn() })) };
+    const cm = new ConversationManager(mockFactory);
+    await cm.handleConnection(sockA.ws);
+    await cm.handleConnection(sockB.ws);
+
+    // Socket B attempts to use Socket A's token -> MUST FAIL with SESSION_MISMATCH
+    sockB.sentFrames.length = 0;
+    await sockB.dispatchMessage({
+      type: "confirm_decision",
+      decisionId: dec.id,
+      projectId: dec.projectId,
+      confirmationToken: tokenForA,
+    });
+    expect(
+      sockB.sentFrames.some(
+        (m) => m.type === "decision_confirmation_failed" && String(m.error).includes("SESSION_MISMATCH"),
+      ),
+    ).toBe(true);
+
+    // Socket A uses Socket A's token -> SUCCEEDS
+    sockA.sentFrames.length = 0;
+    await sockA.dispatchMessage({
+      type: "confirm_decision",
+      decisionId: dec.id,
+      projectId: dec.projectId,
+      confirmationToken: tokenForA,
+    });
+    expect(sockA.sentFrames.some((m) => m.type === "decision_confirmed" && m.success === true)).toBe(true);
+
+    await projectDecisionStore.deleteDecision(dec.id);
+  });
+
+  it("Scenario 8, 9 & 10: legitimate confirmation works; legitimate rejection revokes token; rejected token cannot be approved", async () => {
+    const { localLiveSessionRegistry } = await import("../../backend/server.ts");
+    const { ConversationManager } = await import("../../backend/conversation/ConversationManager.ts");
+    const { securityPolicyEngine } = await import("../../backend/security/SecurityPolicyEngine.ts");
+    const { projectDecisionStore } = await import("../../backend/projects/ProjectDecisionStore.ts");
+
+    const sock = createMockWebSocket();
+    localLiveSessionRegistry.markTrustedUpgrade(sock.ws, { ipAddress: "127.0.0.1", userAgent: "Client-8" });
+    const ctx = localLiveSessionRegistry.establishLocalSession(sock.ws)!;
+
+    const decConfirm = {
+      id: "dec-legit-confirm-8",
+      projectId: "proj-legit-8",
+      description: "Legitimate confirm",
+      timestamp: new Date().toISOString(),
+      type: "decision" as const,
+      source: "ai_proposed" as const,
+      confirmed: false,
+    };
+    const decReject = {
+      id: "dec-legit-reject-9",
+      projectId: "proj-legit-8",
+      description: "Legitimate reject",
+      timestamp: new Date().toISOString(),
+      type: "decision" as const,
+      source: "ai_proposed" as const,
+      confirmed: false,
+    };
+    await projectDecisionStore.saveDecision(decConfirm);
+    await projectDecisionStore.saveDecision(decReject);
+
+    const tokenConfirm = securityPolicyEngine.generateConfirmationToken(
+      "trackProjectTask",
+      { action: "confirm_decision", decisionId: decConfirm.id, projectId: decConfirm.projectId },
+      ctx.sessionId,
+    );
+    const tokenReject = securityPolicyEngine.generateConfirmationToken(
+      "trackProjectTask",
+      { action: "confirm_decision", decisionId: decReject.id, projectId: decReject.projectId },
+      ctx.sessionId,
+    );
+
+    const mockFactory: any = { createSession: vi.fn(async () => ({ sendRealtimeInput: vi.fn(), close: vi.fn() })) };
+    const cm = new ConversationManager(mockFactory);
+    await cm.handleConnection(sock.ws);
+
+    // 8. Legitimate confirmation
+    sock.sentFrames.length = 0;
+    await sock.dispatchMessage({
+      type: "confirm_decision",
+      decisionId: decConfirm.id,
+      projectId: decConfirm.projectId,
+      confirmationToken: tokenConfirm,
+    });
+    expect(sock.sentFrames.some((m) => m.type === "decision_confirmed" && m.success === true)).toBe(true);
+    expect((await projectDecisionStore.getDecision(decConfirm.id))?.confirmed).toBe(true);
+
+    // 9. Legitimate rejection revokes token
+    sock.sentFrames.length = 0;
+    await sock.dispatchMessage({
+      type: "reject_decision",
+      decisionId: decReject.id,
+      projectId: decReject.projectId,
+      confirmationToken: tokenReject,
+    });
+    expect(sock.sentFrames.some((m) => m.type === "decision_rejected" && m.revoked === true)).toBe(true);
+
+    // 10. Rejected token cannot subsequently be approved (fails closed)
+    sock.sentFrames.length = 0;
+    await sock.dispatchMessage({
+      type: "confirm_decision",
+      decisionId: decReject.id,
+      projectId: decReject.projectId,
+      confirmationToken: tokenReject,
+    });
+    expect(
+      sock.sentFrames.some(
+        (m) => m.type === "decision_confirmation_failed" && String(m.error).includes("CONFIRMATION_TOKEN_REPLAY"),
+      ),
+    ).toBe(true);
+
+    await projectDecisionStore.deleteDecision(decConfirm.id);
+    await projectDecisionStore.deleteDecision(decReject.id);
+  });
+
+  it("Scenario 11: reconnected socket cannot reuse previous connection's session-bound token", async () => {
+    const { localLiveSessionRegistry } = await import("../../backend/server.ts");
+    const { ConversationManager } = await import("../../backend/conversation/ConversationManager.ts");
+    const { securityPolicyEngine } = await import("../../backend/security/SecurityPolicyEngine.ts");
+    const { projectDecisionStore } = await import("../../backend/projects/ProjectDecisionStore.ts");
+
+    const sockOld = createMockWebSocket();
+    localLiveSessionRegistry.markTrustedUpgrade(sockOld.ws, { ipAddress: "127.0.0.1", userAgent: "Client-11" });
+    const ctxOld = localLiveSessionRegistry.establishLocalSession(sockOld.ws)!;
+
+    const dec = {
+      id: "dec-reconnect-11",
+      projectId: "proj-reconnect-11",
+      description: "Reconnect token reuse test",
+      timestamp: new Date().toISOString(),
+      type: "decision" as const,
+      source: "ai_proposed" as const,
+      confirmed: false,
+    };
+    await projectDecisionStore.saveDecision(dec);
+
+    const oldToken = securityPolicyEngine.generateConfirmationToken(
+      "trackProjectTask",
+      { action: "confirm_decision", decisionId: dec.id, projectId: dec.projectId },
+      ctxOld.sessionId,
+    );
+
+    // Old socket disconnects
+    localLiveSessionRegistry.cleanupLocalSession(sockOld.ws);
+
+    // Client reconnects fresh
+    const sockNew = createMockWebSocket();
+    localLiveSessionRegistry.markTrustedUpgrade(sockNew.ws, { ipAddress: "127.0.0.1", userAgent: "Client-11-New" });
+    const ctxNew = localLiveSessionRegistry.establishLocalSession(sockNew.ws)!;
+    expect(ctxNew.sessionId).not.toBe(ctxOld.sessionId);
+
+    const mockFactory: any = { createSession: vi.fn(async () => ({ sendRealtimeInput: vi.fn(), close: vi.fn() })) };
+    const cm = new ConversationManager(mockFactory);
+    await cm.handleConnection(sockNew.ws);
+
+    sockNew.sentFrames.length = 0;
+    await sockNew.dispatchMessage({
+      type: "confirm_decision",
+      decisionId: dec.id,
+      projectId: dec.projectId,
+      confirmationToken: oldToken,
+    });
+    expect(
+      sockNew.sentFrames.some(
+        (m) => m.type === "decision_confirmation_failed" && String(m.error).includes("SESSION_MISMATCH"),
+      ),
+    ).toBe(true);
+
+    await projectDecisionStore.deleteDecision(dec.id);
+  });
+
+  it("Scenario 12: Emergency Stop and Security Lockdown block both confirmation and rejection on local /live socket", async () => {
+    const { localLiveSessionRegistry } = await import("../../backend/server.ts");
+    const { ConversationManager } = await import("../../backend/conversation/ConversationManager.ts");
+    const { securityPolicyEngine } = await import("../../backend/security/SecurityPolicyEngine.ts");
+    const { emergencyStopCoordinator } = await import("../../backend/remote/EmergencyStopCoordinator.ts");
+    const { projectDecisionStore } = await import("../../backend/projects/ProjectDecisionStore.ts");
+
+    const sock = createMockWebSocket();
+    localLiveSessionRegistry.markTrustedUpgrade(sock.ws, { ipAddress: "127.0.0.1", userAgent: "Client-12" });
+    const ctx = localLiveSessionRegistry.establishLocalSession(sock.ws)!;
+
+    const dec = {
+      id: "dec-block-12",
+      projectId: "proj-block-12",
+      description: "E-Stop and Lockdown gate decision",
+      timestamp: new Date().toISOString(),
+      type: "decision" as const,
+      source: "ai_proposed" as const,
+      confirmed: false,
+    };
+    await projectDecisionStore.saveDecision(dec);
+
+    const token = securityPolicyEngine.generateConfirmationToken(
+      "trackProjectTask",
+      { action: "confirm_decision", decisionId: dec.id, projectId: dec.projectId },
+      ctx.sessionId,
+    );
+
+    const mockFactory: any = { createSession: vi.fn(async () => ({ sendRealtimeInput: vi.fn(), close: vi.fn() })) };
+    const cm = new ConversationManager(mockFactory);
+    await cm.handleConnection(sock.ws);
+
+    // 1. Emergency Stop blocks confirm & reject
+    await emergencyStopCoordinator.trigger({ source: "desktop_ui", reason: "Test E-Stop" });
+    sock.sentFrames.length = 0;
+    await sock.dispatchMessage({
+      type: "confirm_decision",
+      decisionId: dec.id,
+      projectId: dec.projectId,
+      confirmationToken: token,
+    });
+    expect(sock.sentFrames.some((m) => m.type === "decision_confirmation_failed" && m.error === "EMERGENCY_STOP_ACTIVE")).toBe(true);
+
+    sock.sentFrames.length = 0;
+    await sock.dispatchMessage({
+      type: "reject_decision",
+      decisionId: dec.id,
+      projectId: dec.projectId,
+      confirmationToken: token,
+    });
+    expect(sock.sentFrames.some((m) => m.type === "decision_rejection_failed" && m.error === "EMERGENCY_STOP_ACTIVE")).toBe(true);
+
+    await emergencyStopCoordinator.reset("test");
+
+    // 2. Security Lockdown blocks confirm & reject
+    securityPolicyEngine.setMode("LOCKDOWN");
+    sock.sentFrames.length = 0;
+    await sock.dispatchMessage({
+      type: "confirm_decision",
+      decisionId: dec.id,
+      projectId: dec.projectId,
+      confirmationToken: token,
+    });
+    expect(sock.sentFrames.some((m) => m.type === "decision_confirmation_failed" && m.error === "SECURITY_LOCKDOWN_ACTIVE")).toBe(true);
+
+    sock.sentFrames.length = 0;
+    await sock.dispatchMessage({
+      type: "reject_decision",
+      decisionId: dec.id,
+      projectId: dec.projectId,
+      confirmationToken: token,
+    });
+    expect(sock.sentFrames.some((m) => m.type === "decision_rejection_failed" && m.error === "SECURITY_LOCKDOWN_ACTIVE")).toBe(true);
+
+    securityPolicyEngine.setMode("BALANCED");
+    await projectDecisionStore.deleteDecision(dec.id);
+  });
+
+  // --- Compatibility (Scenarios 13–15) ---
+
+  it("Scenario 13: existing /remote-live identity propagation remains unchanged and isolated from local registry", async () => {
+    const { localLiveSessionRegistry } = await import("../../backend/server.ts");
+    const { remoteSessionManager } = await import("../../backend/remote/RemoteSessionManager.ts");
+
+    const remoteSock = createMockWebSocket();
+    const pairedDev = {
+      id: "dev-rem-13",
+      name: "Remote Companion",
+      deviceType: "mobile" as const,
+      role: "standard" as const,
+      roleExplicit: true,
+      tokenHash: "abc",
+      pairedAt: new Date().toISOString(),
+      lastSeenAt: new Date().toISOString(),
+      lastIp: "192.0.2.1",
+      userAgent: "Android",
+      revoked: false,
+    };
+
+    remoteSessionManager.registerClient(remoteSock.ws, pairedDev, "192.0.2.1", "Android");
+
+    expect(remoteSock.ws.remoteSession).toBeDefined();
+    expect(remoteSock.ws.remoteSessionId).toBeDefined();
+    expect(remoteSock.ws.remoteSession.deviceId).toBe("dev-rem-13");
+    // Must NOT be present in localLiveSessionRegistry
+    expect(localLiveSessionRegistry.isActiveSession(remoteSock.ws.remoteSessionId)).toBe(false);
+  });
+
+  it("Scenario 14 & 15: upstream Gemini session recreation preserves the client socket identity and confirmation binding", async () => {
+    const { localLiveSessionRegistry } = await import("../../backend/server.ts");
+    const { ConversationManager } = await import("../../backend/conversation/ConversationManager.ts");
+    const { securityPolicyEngine } = await import("../../backend/security/SecurityPolicyEngine.ts");
+    const { projectDecisionStore } = await import("../../backend/projects/ProjectDecisionStore.ts");
+
+    const sock = createMockWebSocket();
+    localLiveSessionRegistry.markTrustedUpgrade(sock.ws, { ipAddress: "127.0.0.1", userAgent: "Client-14" });
+    const localSess = localLiveSessionRegistry.establishLocalSession(sock.ws)!;
+
+    let rotateTrigger: (() => Promise<void>) | null = null;
+    const mockFactory: any = {
+      createSession: vi.fn(async (params: any) => {
+        rotateTrigger = params.onRotate;
+        return {
+          sendRealtimeInput: vi.fn(),
+          sendClientContent: vi.fn(),
+          close: vi.fn(),
+        };
+      }),
+    };
+    const cm = new ConversationManager(mockFactory);
+    await cm.handleConnection(sock.ws);
+
+    // Initial upstream creation occurred
+    expect(mockFactory.createSession).toHaveBeenCalledTimes(1);
+    const initialSessionId = sock.ws.remoteSessionId;
+    expect(initialSessionId).toBe(localSess.sessionId);
+
+    // Simulate upstream Gemini rotation / recreation
+    expect(rotateTrigger).not.toBeNull();
+    await rotateTrigger!();
+
+    // Upstream session was recreated, but client WebSocket session identity is strictly preserved
+    expect(mockFactory.createSession).toHaveBeenCalledTimes(2);
+    expect(sock.ws.remoteSessionId).toBe(initialSessionId);
+    expect(sock.ws.remoteSession.sessionId).toBe(initialSessionId);
+
+    // A confirmation token minted for this socket remains valid and verifiable after rotation
+    const dec = {
+      id: "dec-rot-14",
+      projectId: "proj-rot-14",
+      description: "Rotation resilience decision",
+      timestamp: new Date().toISOString(),
+      type: "decision" as const,
+      source: "ai_proposed" as const,
+      confirmed: false,
+    };
+    await projectDecisionStore.saveDecision(dec);
+
+    const token = securityPolicyEngine.generateConfirmationToken(
+      "trackProjectTask",
+      { action: "confirm_decision", decisionId: dec.id, projectId: dec.projectId },
+      initialSessionId,
+    );
+
+    sock.sentFrames.length = 0;
+    await sock.dispatchMessage({
+      type: "confirm_decision",
+      decisionId: dec.id,
+      projectId: dec.projectId,
+      confirmationToken: token,
+    });
+    expect(sock.sentFrames.some((m) => m.type === "decision_confirmed" && m.success === true)).toBe(true);
+    expect((await projectDecisionStore.getDecision(dec.id))?.confirmed).toBe(true);
+
+    await projectDecisionStore.deleteDecision(dec.id);
+  });
+});

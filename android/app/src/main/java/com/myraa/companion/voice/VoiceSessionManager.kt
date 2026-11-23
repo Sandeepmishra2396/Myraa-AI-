@@ -43,35 +43,59 @@ class VoiceSessionManager(
     private val _isUserSpeaking = MutableStateFlow(false)
     val isUserSpeaking: StateFlow<Boolean> = _isUserSpeaking.asStateFlow()
 
+    private val _isThinking = MutableStateFlow(false)
+    val isThinking: StateFlow<Boolean> = _isThinking.asStateFlow()
+
     init {
         // 1. Route incoming 24kHz PCM chunks from WebSocket directly to AudioTrackEngine
-        wsClient.onAudioReceived = { base64Pcm24k ->
+        val audioHandler: (String) -> Unit = { base64Pcm24k ->
             if (_isVoiceActive.value) {
+                _isThinking.value = false
                 _isModelSpeaking.value = true
                 trackEngine.enqueueAudio(base64Pcm24k)
             }
         }
+        wsClient.audioReceivedListeners.add(audioHandler)
+        wsClient.onAudioReceived = audioHandler
 
         // 2. Handle server-side Gemini Live turn interruption
-        wsClient.onInterrupted = {
+        val interruptHandler: () -> Unit = {
             onInterrupted()
         }
+        wsClient.interruptedListeners.add(interruptHandler)
+        wsClient.onInterrupted = interruptHandler
 
         // 3. Handle model turn completion
-        wsClient.onTurnComplete = {
+        val turnCompleteHandler: () -> Unit = {
             _isModelSpeaking.value = false
+            _isThinking.value = false
             Log.i(TAG, "Gemini Live model turn complete.")
         }
+        wsClient.turnCompleteListeners.add(turnCompleteHandler)
+        wsClient.onTurnComplete = turnCompleteHandler
 
         // 4. Client-side barge-in: local speech detection triggers instant cutoff
         recordEngine.onSpeechDetected = { peakAmplitude ->
             if (_isVoiceActive.value && !_isMicMuted.value) {
                 _isUserSpeaking.value = true
+                _isThinking.value = false
                 // If model audio is playing or queued, immediately flush playback
-                if (trackEngine.hasPendingAudio() || trackEngine.isPlaying) {
-                    Log.i(TAG, "Barge-in speech detected (peak=$peakAmplitude): flushing playback.")
+                if (trackEngine.hasPendingAudio() || trackEngine.isPlaying || _isModelSpeaking.value) {
+                    Log.i(TAG, "Barge-in speech detected (peak=$peakAmplitude): flushing playback and notifying server.")
                     trackEngine.flush()
                     _isModelSpeaking.value = false
+                    wsClient.sendInterruption()
+                }
+            }
+        }
+
+        // 5. Silence detected after user speech -> transition to THINKING while awaiting response
+        recordEngine.onSpeechEnded = {
+            if (_isVoiceActive.value && !_isMicMuted.value) {
+                _isUserSpeaking.value = false
+                if (!_isModelSpeaking.value) {
+                    _isThinking.value = true
+                    Log.i(TAG, "User speech ended; transitioning to THINKING state.")
                 }
             }
         }
@@ -114,6 +138,7 @@ class VoiceSessionManager(
         _isVoiceActive.value = false
         _isModelSpeaking.value = false
         _isUserSpeaking.value = false
+        _isThinking.value = false
         recordEngine.stopRecording()
         trackEngine.stop()
         Log.i(TAG, "Live voice session stopped.")
@@ -126,6 +151,7 @@ class VoiceSessionManager(
         _isMicMuted.value = muted
         if (muted) {
             _isUserSpeaking.value = false
+            _isThinking.value = false
         }
         Log.i(TAG, "Microphone mute set to: $muted")
     }
@@ -136,6 +162,7 @@ class VoiceSessionManager(
     fun onInterrupted() {
         trackEngine.flush()
         _isModelSpeaking.value = false
+        _isThinking.value = false
         Log.i(TAG, "Voice playback flushed on model interruption.")
     }
 

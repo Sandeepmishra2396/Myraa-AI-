@@ -9,13 +9,44 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { dataFile, DATA_DIR } from "../server_paths.ts";
+import crypto from "crypto";
+import { dataFile } from "../server_paths.ts";
+import { emergencyStopCoordinator } from "../remote/EmergencyStopCoordinator.ts";
+import { securityPolicyEngine } from "../security/SecurityPolicyEngine.ts";
+import { securityAuditLogger } from "../security/SecurityAuditLogger.ts";
+import { contentSanitizer } from "../security/ContentSanitizer.ts";
+import { assertActivePersistenceSession } from "../memory/MemoryPersistenceContext.ts";
 import type {
   CognitiveCategory,
   CognitiveMemory,
   CognitiveMemoryStatus,
   CommandPatternRecord,
 } from "./CognitiveTypes.ts";
+
+function assertCognitiveWriteAllowed(actorId = "system"): void {
+  if (emergencyStopCoordinator.isActive()) {
+    securityAuditLogger.logEvent({
+      eventType: "TOOL_BLOCKED",
+      actor: { identityId: actorId, role: "standard", ipAddress: "127.0.0.1" },
+      target: { resource: "cognitive_memories.json" },
+      decision: "BLOCK",
+      reason: "EMERGENCY_STOP_ACTIVE: Cognitive memory write blocked during Emergency Stop.",
+      riskLevel: "HIGH",
+    });
+    throw new Error("EMERGENCY_STOP_ACTIVE: Cognitive memory mutations are blocked during Emergency Stop.");
+  }
+  if (securityPolicyEngine.getMode() === "LOCKDOWN") {
+    securityAuditLogger.logEvent({
+      eventType: "TOOL_BLOCKED",
+      actor: { identityId: actorId, role: "standard", ipAddress: "127.0.0.1" },
+      target: { resource: "cognitive_memories.json" },
+      decision: "BLOCK",
+      reason: "SECURITY_LOCKDOWN_ACTIVE: Cognitive memory write blocked during Security Lockdown.",
+      riskLevel: "HIGH",
+    });
+    throw new Error("SECURITY_LOCKDOWN_ACTIVE: Cognitive memory mutations are blocked during Security Lockdown.");
+  }
+}
 
 export class CognitiveMemoryStore {
   private _memoryFilePath: string;
@@ -34,7 +65,8 @@ export class CognitiveMemoryStore {
   // ── Memory Persistence ───────────────────────────────────────────────────
 
   /**
-   * Load all memories from disk. Automatically flags expired records.
+   * Load all memories from disk (read-only). Flags expired records in memory
+   * without performing unauthenticated disk writes (FINDING-AUD-03).
    */
   public async loadMemories(): Promise<CognitiveMemory[]> {
     if (this._cachedMemories) {
@@ -62,10 +94,7 @@ export class CognitiveMemoryStore {
       const parsed = JSON.parse(content);
       if (Array.isArray(parsed)) {
         this._cachedMemories = parsed;
-        const expiredCount = this._expireMemories(this._cachedMemories);
-        if (expiredCount > 0) {
-          await this._persistMemories(this._cachedMemories);
-        }
+        this._expireMemories(this._cachedMemories);
         return [...this._cachedMemories];
       }
       this._cachedMemories = [];
@@ -78,26 +107,75 @@ export class CognitiveMemoryStore {
   }
 
   /**
-   * Atomically save a memory record (insert or update).
+   * Governed memory proposal path (FINDING-AUD-03):
+   * Never writes directly to cognitive_memories.json without governance.
+   * Enforces Emergency Stop, Security Lockdown, DLP secret screening,
+   * prompt-injection screening, and routes through GoverningMemoryGate.
    */
-  public async saveMemory(memory: CognitiveMemory): Promise<CognitiveMemory> {
-    const list = await this.loadMemories();
-    const existingIdx = list.findIndex((m) => m.id === memory.id);
+  public async saveMemory(
+    memory: CognitiveMemory,
+    actorContext?: { userId?: string; sessionId?: string },
+  ): Promise<CognitiveMemory> {
+    const actorId = actorContext?.userId || "system";
+    assertCognitiveWriteAllowed(actorId);
 
-    const updatedMemory = {
+    const textRepr = `${memory.key}: ${typeof memory.value === "string" ? memory.value : JSON.stringify(memory.value)}`;
+    const sourceText = String((memory as any).sourceUtterance || "");
+
+    const { isDlpClean } = await import("../memory/SharedMemoryManager.ts");
+    if (!isDlpClean(textRepr) || !isDlpClean(sourceText)) {
+      securityAuditLogger.logEvent({
+        eventType: "TOOL_BLOCKED",
+        actor: { identityId: actorId, role: "standard", ipAddress: "127.0.0.1", sessionId: actorContext?.sessionId },
+        target: { resource: "cognitive_memories.json" },
+        decision: "BLOCK",
+        reason: "DLP_SECRET_REJECTED: Secret/credential pattern detected in cognitive memory proposal.",
+        riskLevel: "HIGH",
+      });
+      throw new Error("DLP_SECRET_REJECTED: Secrets or credentials cannot be stored in cognitive memory.");
+    }
+
+    const scanVal = contentSanitizer.scanForPromptInjection(textRepr, { source: "cognitive_memory", identifier: memory.id });
+    const scanSrc = sourceText
+      ? contentSanitizer.scanForPromptInjection(sourceText, { source: "cognitive_memory_source", identifier: memory.id })
+      : { hasInjectionAttempt: false, matchedPatterns: [] };
+    if (scanVal.hasInjectionAttempt || scanSrc.hasInjectionAttempt) {
+      securityAuditLogger.logEvent({
+        eventType: "PROMPT_INJECTION_DETECTED",
+        actor: { identityId: actorId, role: "standard", ipAddress: "127.0.0.1", sessionId: actorContext?.sessionId },
+        target: { resource: "cognitive_memories.json" },
+        decision: "BLOCK",
+        reason: "PROMPT_INJECTION_BLOCKED: Injection pattern detected in cognitive memory content.",
+        riskLevel: "HIGH",
+      });
+      throw new Error("PROMPT_INJECTION_BLOCKED: Cognitive memory content contains unsafe prompt-injection instructions.");
+    }
+
+    const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+    const proposal = await governingMemoryGate.requestWrite({
+      action: "CREATE",
+      proposedMemory: {
+        category: "preference",
+        key: memory.key,
+        text: textRepr,
+        confidence: memory.confidence >= 0.8 ? "high" : memory.confidence >= 0.5 ? "medium" : "low",
+        source: "conversation_extracted",
+      },
+      reason: `Governed cognitive memory proposal for key '${memory.key}'`,
+      confidence: typeof memory.confidence === "number" ? memory.confidence : 0.7,
+      source: "conversation_extracted",
+      userId: actorId,
+      provenance: `cognitive_memory:${memory.id}`,
+      sessionId: actorContext?.sessionId,
+    } as any);
+
+    const updatedMemory: CognitiveMemory = {
       ...memory,
       updatedAt: new Date().toISOString(),
     };
-
-    if (existingIdx >= 0) {
-      list[existingIdx] = updatedMemory;
-    } else {
-      list.push(updatedMemory);
-    }
-
-    this._cachedMemories = list;
-    await this._persistMemories(list);
-    return { ...updatedMemory };
+    (updatedMemory as any).pendingApproval = true;
+    (updatedMemory as any).governanceRequestId = proposal.id;
+    return updatedMemory;
   }
 
   /**
@@ -152,7 +230,7 @@ export class CognitiveMemoryStore {
   }
 
   /**
-   * Record usage of a memory (bumps usageCount and lastUsedAt).
+   * Record usage of a memory in RAM cache only (no unauthenticated disk writes).
    */
   public async recordUsage(id: string): Promise<void> {
     const list = await this.loadMemories();
@@ -161,46 +239,84 @@ export class CognitiveMemoryStore {
       item.usageCount = (item.usageCount || 0) + 1;
       item.lastUsedAt = new Date().toISOString();
       item.updatedAt = new Date().toISOString();
-      await this._persistMemories(list);
     }
   }
 
   /**
-   * Marks a memory as superseded by a newer winner.
+   * Proposes superseding a memory via GoverningMemoryGate (never writes disk directly).
    */
-  public async supersedeMemory(oldId: string, newId: string, reason: string): Promise<void> {
+  public async supersedeMemory(
+    oldId: string,
+    newId: string,
+    reason: string,
+    actorContext?: { userId?: string; sessionId?: string },
+  ): Promise<void> {
+    const actorId = actorContext?.userId || "system";
+    assertCognitiveWriteAllowed(actorId);
+
     const list = await this.loadMemories();
     const oldItem = list.find((m) => m.id === oldId);
-    if (oldItem) {
-      oldItem.status = "superseded";
-      oldItem.supersededBy = newId;
-      oldItem.updatedAt = new Date().toISOString();
-      const history = oldItem.contradictionHistory || [];
-      history.push(`[${new Date().toISOString()}] Superseded by ${newId}: ${reason}`);
-      oldItem.contradictionHistory = history;
-      await this._persistMemories(list);
-    }
+    if (!oldItem) return;
+
+    const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+    await governingMemoryGate.requestWrite({
+      action: "ARCHIVE",
+      proposedMemory: {
+        id: oldId,
+        category: "preference",
+        key: oldItem.key,
+        text: `${oldItem.key}: superseded by ${newId} (${reason})`,
+      },
+      reason: `Supersede cognitive memory '${oldId}' with '${newId}': ${reason}`,
+      confidence: 0.85,
+      source: "system_generated",
+      userId: actorId,
+      provenance: `cognitive_supersede:${oldId}`,
+      sessionId: actorContext?.sessionId,
+    } as any);
   }
 
   /**
-   * Deletes a memory permanently.
+   * Proposes permanent deletion via GoverningMemoryGate (FINDING-AUD-03).
+   * Never deletes directly from cognitive_memories.json without governance.
    */
-  public async deleteMemory(id: string): Promise<boolean> {
+  public async deleteMemory(
+    id: string,
+    actorContext?: { userId?: string; sessionId?: string },
+  ): Promise<boolean> {
+    const actorId = actorContext?.userId || "system";
+    assertCognitiveWriteAllowed(actorId);
+
     const list = await this.loadMemories();
-    const initialLen = list.length;
-    const filtered = list.filter((m) => m.id !== id);
-    if (filtered.length !== initialLen) {
-      this._cachedMemories = filtered;
-      await this._persistMemories(filtered);
-      return true;
+    const existing = list.find((m) => m.id === id);
+    if (!existing) {
+      return false;
     }
-    return false;
+
+    const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+    await governingMemoryGate.requestWrite({
+      action: "DELETE",
+      proposedMemory: {
+        id,
+        category: "preference",
+        key: existing.key,
+        text: `${existing.key}: ${typeof existing.value === "string" ? existing.value : JSON.stringify(existing.value)}`,
+      },
+      reason: `Governed cognitive memory deletion for '${id}'`,
+      confidence: 0.85,
+      source: "user_explicit",
+      userId: actorId,
+      provenance: `cognitive_delete:${id}`,
+      sessionId: actorContext?.sessionId,
+    } as any);
+    return true;
   }
 
   /**
-   * Clears all stored memories.
+   * Direct disk clear is blocked outside an active verified persistence session.
    */
   public async clear(): Promise<void> {
+    assertActivePersistenceSession();
     this._cachedMemories = [];
     await this._persistMemories([]);
   }
@@ -327,15 +443,17 @@ export class CognitiveMemoryStore {
   }
 
   /**
-   * Atomic file write for memories.
+   * Atomic file write for memories — strictly requires an active verified
+   * persistence session (FINDING-AUD-03).
    */
   private async _persistMemories(memories: CognitiveMemory[]): Promise<void> {
+    assertActivePersistenceSession();
     const dir = path.dirname(this._memoryFilePath);
     try {
       fs.mkdirSync(dir, { recursive: true });
     } catch {}
 
-    const tmpFile = `${this._memoryFilePath}.${Date.now()}.tmp`;
+    const tmpFile = `${this._memoryFilePath}.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString("hex")}.tmp`;
     const json = JSON.stringify(memories, null, 2);
     fs.writeFileSync(tmpFile, json, "utf8");
     try {

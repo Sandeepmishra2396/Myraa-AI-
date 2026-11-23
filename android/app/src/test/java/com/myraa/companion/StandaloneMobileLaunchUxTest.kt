@@ -2,10 +2,21 @@ package com.myraa.companion
 
 import com.myraa.companion.capabilities.AndroidCapabilities
 import com.myraa.companion.capabilities.StandaloneMobileAssistant
+import com.myraa.companion.networking.ConnectionStatus
 import com.myraa.companion.networking.MyraaApiClient
 import com.myraa.companion.security.SecureTokenStorage
 import com.myraa.companion.ui.Screen
+import com.myraa.companion.ui.actions.ActionCatalog
+import com.myraa.companion.ui.actions.ActionCategory
+import com.myraa.companion.ui.errors.FeatureError
+import com.myraa.companion.ui.errors.FeatureErrorSanitizer
+import com.myraa.companion.ui.navigation.MainTab
 import com.myraa.companion.ui.resolveInitialScreen
+import com.myraa.companion.ui.status.FeatureStatus
+import com.myraa.companion.ui.status.FeatureStatusEvaluator
+import com.myraa.companion.ui.status.RealSystemSnapshot
+import com.myraa.companion.ui.voice.VoiceVisualState
+import com.myraa.companion.ui.voice.resolveVoiceVisualState
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -15,8 +26,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Phase 13A — Standalone Android Launch UX & Capability Verification Test Suite.
- * Covers Test Matrix A through L against the Release variant.
+ * Phase 13A & Phase 13A-WIN.5 — Standalone Android Launch UX, Feature Isolation & Manual QA Test Suite.
+ * Covers Test Matrix A through L plus Phase 13A-WIN.5 UI Architecture & Diagnostic invariants.
  */
 class StandaloneMobileLaunchUxTest {
 
@@ -250,5 +261,160 @@ class StandaloneMobileLaunchUxTest {
         assertEquals(Screen.SESSION, relaunchUnpaired)
         assertEquals(Screen.SESSION, relaunchPaired)
         assertNotNull(relaunchUnpaired)
+    }
+
+    // ── Phase 13A-WIN.5 — UI Architecture Redesign & Feature Isolation Tests ────
+
+    @Test
+    fun testM_fivePrimaryNavigationTabsAndHomeQuickActionsLimit() {
+        val tabs = MainTab.values()
+        assertEquals(5, tabs.size)
+        assertEquals(MainTab.HOME, tabs[0])
+        assertEquals(MainTab.VOICE, tabs[1])
+        assertEquals(MainTab.CHAT, tabs[2])
+        assertEquals(MainTab.ACTIONS, tabs[3])
+        assertEquals(MainTab.SETTINGS, tabs[4])
+
+        // Home Quick Actions must be strictly limited to 7 actions + 1 "More ->" tile (8 total)
+        assertEquals(7, ActionCatalog.HOME_QUICK_ACTION_IDS.size)
+        assertEquals(7, ActionCatalog.getHomeQuickActions().size)
+        assertTrue(ActionCatalog.ALL_ACTIONS.size >= 20)
+
+        val mediaActions = ActionCatalog.ALL_ACTIONS.filter { it.category == ActionCategory.MEDIA }
+        assertTrue(mediaActions.isNotEmpty())
+        assertNotNull(ActionCatalog.findById("youtube"))
+    }
+
+    @Test
+    fun testN_realSystemSnapshotDrivesTruthfulFeatureStatusBadges() {
+        val readySnapshot = RealSystemSnapshot(
+            isNetworkOnline = true,
+            hasMicPermission = true,
+            hasCalendarPermission = true,
+            hasCameraPermission = true,
+            screenContextApproved = false,
+            privacyShieldEnabled = true,
+            localOnlyMode = false,
+            hasDesktopSession = false,
+            connectionStatus = ConnectionStatus.DISCONNECTED,
+            emergencyStopActive = false,
+            securityLockdownActive = false,
+            isVoiceActive = false
+        )
+        assertEquals(
+            FeatureStatus.READY,
+            FeatureStatusEvaluator.evaluateBaselineStatus("voice", readySnapshot)
+        )
+        assertEquals(
+            FeatureStatus.PERMISSION_REQUIRED,
+            FeatureStatusEvaluator.evaluateBaselineStatus("screenshot", readySnapshot)
+        )
+        assertEquals(
+            FeatureStatus.REQUIRES_DESKTOP,
+            FeatureStatusEvaluator.evaluateBaselineStatus("desktop_bridge", readySnapshot)
+        )
+        assertEquals(
+            FeatureStatus.NOT_SUPPORTED,
+            FeatureStatusEvaluator.evaluateBaselineStatus("flashlight", readySnapshot)
+        )
+
+        val micDeniedSnapshot = readySnapshot.copy(hasMicPermission = false)
+        assertEquals(
+            FeatureStatus.PERMISSION_REQUIRED,
+            FeatureStatusEvaluator.evaluateBaselineStatus("voice", micDeniedSnapshot)
+        )
+
+        val offlineSnapshot = readySnapshot.copy(isNetworkOnline = false)
+        assertEquals(
+            FeatureStatus.OFFLINE,
+            FeatureStatusEvaluator.evaluateBaselineStatus("voice", offlineSnapshot)
+        )
+    }
+
+    @Test
+    fun testO_featureErrorSanitizerRedactsSecretsAndTokens() {
+        val raw = "Failed with Bearer sora_dev_987654321abcdef and key AIzaSyD-1234567890abcdef1234567890"
+        val sanitized = FeatureErrorSanitizer.sanitize(raw)
+        assertFalse(sanitized.contains("sora_dev_987654321abcdef"))
+        assertFalse(sanitized.contains("AIzaSyD-1234567890abcdef1234567890"))
+        assertTrue(sanitized.contains("[REDACTED_SECRET]"))
+
+        val err = FeatureError(
+            feature = "Voice",
+            operation = "startVoiceSession",
+            stage = "Auth",
+            reason = raw
+        )
+        assertFalse(err.safeReason.contains("sora_dev_987654321abcdef"))
+    }
+
+    @Test
+    fun testP_voiceVisualStateResolutionCoversAllSixStates() {
+        assertEquals(
+            VoiceVisualState.READY,
+            resolveVoiceVisualState(
+                isVoiceActive = false,
+                isConnecting = false,
+                isThinking = false,
+                isModelSpeaking = false,
+                hasError = false,
+                isSystemHalted = false
+            )
+        )
+        assertEquals(
+            VoiceVisualState.CONNECTING,
+            resolveVoiceVisualState(
+                isVoiceActive = false,
+                isConnecting = true,
+                isThinking = false,
+                isModelSpeaking = false,
+                hasError = false,
+                isSystemHalted = false
+            )
+        )
+        assertEquals(
+            VoiceVisualState.LISTENING,
+            resolveVoiceVisualState(
+                isVoiceActive = true,
+                isConnecting = false,
+                isThinking = false,
+                isModelSpeaking = false,
+                hasError = false,
+                isSystemHalted = false
+            )
+        )
+        assertEquals(
+            VoiceVisualState.THINKING,
+            resolveVoiceVisualState(
+                isVoiceActive = true,
+                isConnecting = false,
+                isThinking = true,
+                isModelSpeaking = false,
+                hasError = false,
+                isSystemHalted = false
+            )
+        )
+        assertEquals(
+            VoiceVisualState.SPEAKING,
+            resolveVoiceVisualState(
+                isVoiceActive = true,
+                isConnecting = false,
+                isThinking = false,
+                isModelSpeaking = true,
+                hasError = false,
+                isSystemHalted = false
+            )
+        )
+        assertEquals(
+            VoiceVisualState.ERROR,
+            resolveVoiceVisualState(
+                isVoiceActive = false,
+                isConnecting = false,
+                isThinking = false,
+                isModelSpeaking = false,
+                hasError = true,
+                isSystemHalted = false
+            )
+        )
     }
 }

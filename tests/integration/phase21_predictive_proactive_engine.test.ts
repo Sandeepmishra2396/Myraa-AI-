@@ -18,7 +18,7 @@
  *  14. REST Endpoints Integration (/api/proactive/*)
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import http from "http";
 import {
   predictiveContextCoordinator,
@@ -37,6 +37,11 @@ import { createHttpApp } from "../../backend/gateway/HttpGateway.ts";
 
 describe("Phase 21 — Predictive / Proactive Engine", () => {
   beforeEach(async () => {
+    // Pin deterministic test clock to local midday (14:00 local time) so getHours() === 14 across all timezones,
+    // guaranteeing execution outside Quiet Hours (23:00 - 07:00).
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 5, 15, 14, 0, 0));
+
     predictiveContextCoordinator.reset();
     proactiveDeduplicationEngine.clear();
     naturalConversationEngine.reset("default");
@@ -49,11 +54,13 @@ describe("Phase 21 — Predictive / Proactive Engine", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     if (emergencyStopCoordinator.isActive()) {
       await emergencyStopCoordinator.reset("phase21_test_teardown");
     }
     securityPolicyEngine.setMode("BALANCED");
     predictiveContextCoordinator.reset();
+    proactiveDeduplicationEngine.clear();
   });
 
   // ── 1. Build Failure Detection ─────────────────────────────────────────────
@@ -258,6 +265,39 @@ Tests: 1 failed, 12 passed
       expect(lastEvent.eventType).toBe("REPEATED_FAILURE");
       expect(lastEvent.repeatCount).toBe(10);
       expect(lastEvent.promptQuestion).toContain("Ye same error repeatedly aa raha hai");
+    });
+
+    it("suppresses proactive voice/alerts during quiet hours (e.g., 02:00 local time)", () => {
+      // Pin clock to 02:00 local time (overnight quiet hours: 23:00 - 07:00)
+      vi.setSystemTime(new Date(2026, 5, 15, 2, 0, 0));
+      const res = proactiveCooldownManager.checkCooldown("compiler:src/index.ts:TS2304");
+      expect(res.allowed).toBe(false);
+      expect(res.reason).toContain("QUIET_HOURS");
+    });
+
+    it("permits proactive alerts during non-quiet hours (e.g., 14:00 local time)", () => {
+      // Pin clock to 14:00 local time (daylight non-quiet hours)
+      vi.setSystemTime(new Date(2026, 5, 15, 14, 0, 0));
+      const res = proactiveCooldownManager.checkCooldown("compiler:src/index.ts:TS2304");
+      expect(res.allowed).toBe(true);
+    });
+
+    it("bypasses quiet hours when emergency or quietHoursOverride is specified", () => {
+      // Pin clock to 02:00 local time (quiet hours)
+      vi.setSystemTime(new Date(2026, 5, 15, 2, 0, 0));
+      const emergencyRes = proactiveCooldownManager.checkCooldown(
+        "compiler:src/index.ts:TS2304",
+        Date.now(),
+        { isEmergency: true },
+      );
+      expect(emergencyRes.allowed).toBe(true);
+
+      const overrideRes = proactiveCooldownManager.checkCooldown(
+        "compiler:src/index.ts:TS2304",
+        Date.now(),
+        { quietHoursOverride: true },
+      );
+      expect(overrideRes.allowed).toBe(true);
     });
   });
 

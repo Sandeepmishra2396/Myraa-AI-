@@ -12,10 +12,12 @@ grace period so apps can save work.
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import subprocess
 import time
 from typing import Any, Dict, Optional
+
 
 from .registry import ToolError, register
 
@@ -237,9 +239,65 @@ APP_COMMANDS: Dict[str, Dict[str, str]] = {
         "label": "Mozilla Firefox",
     },
     "spotify": {"shell": "spotify:", "image": "Spotify.exe", "label": "Spotify"},
-    "whatsapp": {"uwp": "whatsapp:", "image": "WhatsApp.exe", "label": "WhatsApp"},
+    "whatsapp": {
+        "exe": _find_windows_app_path(
+            "whatsapp",
+            "WhatsApp.exe",
+            [
+                os.path.expandvars(r"%LOCALAPPDATA%\Programs\WhatsApp\WhatsApp.exe"),
+                os.path.expandvars(r"%LOCALAPPDATA%\WhatsApp\WhatsApp.exe"),
+            ],
+        ),
+        "app_id": "5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App",
+        "shell": "whatsapp:",
+        "uwp": "whatsapp:",
+        "image": "WhatsApp.exe",
+        "label": "WhatsApp",
+    },
+    "telegram": {
+        "exe": _find_windows_app_path(
+            "telegram",
+            "Telegram.exe",
+            [
+                os.path.expandvars(r"%APPDATA%\Telegram Desktop\Telegram.exe"),
+                os.path.expandvars(r"%LOCALAPPDATA%\Programs\Telegram Desktop\Telegram.exe"),
+                r"C:\Program Files\Telegram Desktop\Telegram.exe",
+            ],
+        ),
+        "app_id": "TelegramMessengerLLP.TelegramDesktop_t4vj0pshhgkwm!Telegram.TelegramDesktop.Store",
+        "shell": "tg:",
+        "image": "Telegram.exe",
+        "label": "Telegram",
+    },
     "youtube": {"shell": "https://www.youtube.com", "image": "chrome.exe", "label": "YouTube"},
 }
+
+_START_APPS_CACHE: Optional[list[Dict[str, str]]] = None
+
+
+def _get_start_apps() -> list[Dict[str, str]]:
+    global _START_APPS_CACHE
+    if _START_APPS_CACHE is not None:
+        return _START_APPS_CACHE
+    _START_APPS_CACHE = []
+    if platform.system() == "Windows":
+        try:
+            res = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", "Get-StartApps | ConvertTo-Json"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                import json
+                data = json.loads(res.stdout)
+                if isinstance(data, list):
+                    _START_APPS_CACHE = data
+                elif isinstance(data, dict):
+                    _START_APPS_CACHE = [data]
+        except Exception:
+            pass
+    return _START_APPS_CACHE
 
 
 def _resolve_app(key: str) -> Dict[str, str]:
@@ -287,9 +345,30 @@ def _resolve_app(key: str) -> Dict[str, str]:
         "pwsh": "powershell",
         "command prompt": "cmd",
         "cmd": "cmd",
+        "telegram": "telegram",
+        "telegram desktop": "telegram",
+        "tg": "telegram",
+        "tele": "telegram",
+        "whatsapp": "whatsapp",
+        "whats app": "whatsapp",
+        "whatsapp desktop": "whatsapp",
+        "wa": "whatsapp",
     }
     if norm in aliases and aliases[norm] in APP_COMMANDS:
         return APP_COMMANDS[aliases[norm]]
+
+    # Dynamic Windows StartApps resolution
+    for app in _get_start_apps():
+        appName = (app.get("Name") or "").strip().lower()
+        if norm == appName or norm in appName or appName in norm:
+            app_id = app.get("AppID") or ""
+            return {
+                "app_id": app_id,
+                "shell": f"shell:AppsFolder\\{app_id}",
+                "image": f"{norm}.exe",
+                "label": app.get("Name") or key.title(),
+            }
+
     raise ToolError(
         f"Unrecognized application '{key}'. Supported: "
         f"{', '.join(sorted({v['label'] for v in APP_COMMANDS.values()}))}."
@@ -299,27 +378,35 @@ def _resolve_app(key: str) -> Dict[str, str]:
 def _launch(spec: Dict[str, str], extra_args: Optional[list[str]] = None) -> int:
     extra = [str(a) for a in extra_args] if extra_args else []
     try:
+        # 1. Check if explicit executable exists on disk
         if "exe" in spec:
             exe = spec["exe"]
             # If not an existing absolute path, attempt resolution
             if not (os.path.isabs(exe) and os.path.exists(exe)):
                 exe = _find_windows_app_path(spec.get("label", "").lower(), exe)
-            cmd = [exe] + extra
             if (os.path.isabs(exe) and os.path.exists(exe)) or shutil.which(exe):
                 # Detached so we don't block the agent.
                 proc = subprocess.Popen(
-                    cmd,
+                    [exe] + extra,
                     shell=False,
                     close_fds=True,
                     creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
                     | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
                 )
                 return int(proc.pid or 0)
-            else:
-                args_str = " ".join(f'"{a}"' for a in extra)
-                proc = subprocess.Popen(f'start "" "{exe}" {args_str}'.strip(), shell=True, close_fds=True)
-                return int(proc.pid or 0)
-        elif "shell" in spec:
+
+        # 2. Windows Store / AppUserModelId (AppX/UWP)
+        if "app_id" in spec and platform.system() == "Windows":
+            app_id = spec["app_id"]
+            proc = subprocess.Popen(
+                f'explorer.exe shell:AppsFolder\\{app_id}',
+                shell=True,
+                close_fds=True,
+            )
+            return int(proc.pid or 0)
+
+        # 3. Protocol or shell builtin
+        if "shell" in spec:
             args_str = " ".join(f'"{a}"' for a in extra)
             proc = subprocess.Popen(
                 f'start "" {spec["shell"]} {args_str}'.strip(), shell=True, close_fds=True
@@ -330,10 +417,15 @@ def _launch(spec: Dict[str, str], extra_args: Optional[list[str]] = None) -> int
                 f'start "" {spec["uwp"]}', shell=True, close_fds=True
             )
             return int(proc.pid or 0)
+        elif "exe" in spec:
+            args_str = " ".join(f'"{a}"' for a in extra)
+            proc = subprocess.Popen(f'start "" "{spec["exe"]}" {args_str}'.strip(), shell=True, close_fds=True)
+            return int(proc.pid or 0)
         else:
             raise ToolError(f"App spec for {spec.get('label')} is incomplete.")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise ToolError(f"Could not launch {spec.get('label')}: {e}") from e
+
 
 
 @register("openApplication")
@@ -354,6 +446,15 @@ def open_application(args: Dict[str, Any]) -> Dict[str, Any]:
             extra_args.append(str(target))
 
     pid = _launch(spec, extra_args)
+    # Bring newly opened window to foreground on desktop
+    import time
+    time.sleep(0.35)
+    try:
+        from .tools_windows import force_bring_to_foreground
+        force_bring_to_foreground(spec.get("label", "")) or force_bring_to_foreground(str(name))
+    except Exception:
+        pass
+
     if target:
         return {
             "result": f"{spec['label']} opened with {target}.",
@@ -395,6 +496,13 @@ def open_in_vscode(args: Dict[str, Any]) -> Dict[str, Any]:
         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
         | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
     )
+    import time
+    time.sleep(0.4)
+    try:
+        from .tools_windows import force_bring_to_foreground
+        force_bring_to_foreground("Visual Studio Code") or force_bring_to_foreground("Code")
+    except Exception:
+        pass
     return {
         "result": f"Opened {resolved} in Visual Studio Code.",
         "path": str(resolved),

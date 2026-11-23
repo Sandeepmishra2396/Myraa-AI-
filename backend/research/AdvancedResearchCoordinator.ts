@@ -36,6 +36,7 @@ import type {
   SynthesizedResearchResult,
   ResearchSession,
   ComparisonReport,
+  EpistemicQueryRequest,
 } from "./AdvancedResearchTypes.ts";
 import { researchQueryPlanner } from "./ResearchQueryPlanner.ts";
 import { multiSourceSearchEngine } from "./MultiSourceSearchEngine.ts";
@@ -48,6 +49,8 @@ import { browserContextResearcher } from "./BrowserContextResearcher.ts";
 import { projectResearchBridge } from "./ProjectResearchBridge.ts";
 import { documentationComparator } from "./DocumentationComparator.ts";
 import { citationManager } from "./CitationManager.ts";
+import { duplicateSourceDetector } from "./DuplicateSourceDetector.ts";
+import { epistemicVerifier } from "./EpistemicVerifier.ts";
 import { securityAuditLogger } from "../security/SecurityAuditLogger.ts";
 import { multiAgentContextManager } from "../multiagent/MultiAgentContextManager.ts";
 
@@ -106,6 +109,9 @@ export class AdvancedResearchCoordinator {
       );
       session.sources.push(...fetchedSources);
 
+      // Detect duplicate & syndicated sources
+      var duplicateReport = duplicateSourceDetector.detectDuplicates(session.sources);
+
       // 6. Extract + normalize claims from each source
       for (const source of fetchedSources) {
         const normalized = evidenceNormalizer.extractRelevantPortion(
@@ -136,7 +142,10 @@ export class AdvancedResearchCoordinator {
     // 8. Detect contradictions
     session.contradictions = contradictionDetector.detect(session.claims);
 
-    // 9. Optional: build project context
+    // 9. Epistemic verification across all claims
+    session.claims = epistemicVerifier.verifyAll(session.claims, session.sources, session.contradictions);
+
+    // 10. Optional: build project context
     let projectContext;
     if (req.projectPath) {
       projectContext = await projectResearchBridge.buildContext(
@@ -146,7 +155,7 @@ export class AdvancedResearchCoordinator {
       session.projectContext = projectContext;
     }
 
-    // 10. Synthesize final result
+    // 11. Synthesize final result
     const result = researchSynthesisEngine.synthesize({
       sessionId,
       query: sanitizedQuestion,
@@ -154,6 +163,7 @@ export class AdvancedResearchCoordinator {
       contradictions: session.contradictions,
       sources: session.sources,
       projectContext,
+      duplicateClusters: duplicateReport?.clusters || [],
     });
 
     session.status = "COMPLETE";
@@ -169,6 +179,78 @@ export class AdvancedResearchCoordinator {
     });
 
     return result;
+  }
+
+  /**
+   * Execute an epistemic research query with optional bounded refinement.
+   */
+  public async epistemicQuery(req: EpistemicQueryRequest): Promise<SynthesizedResearchResult> {
+    const baseResult = await this.query({
+      question: req.question,
+      maxSources: req.maxSources,
+      projectPath: req.projectPath,
+      requireOfficial: req.requireOfficial,
+    });
+
+    if (!req.allowRefinement) {
+      return baseResult;
+    }
+
+    // Bounded refinement if uncertainty or contradictions detected
+    const session = _sessions.get(baseResult.sessionId);
+    if (!session || (!baseResult.hasUncertainty && baseResult.contradictions.length === 0)) {
+      return baseResult;
+    }
+
+    const unverified = session.claims
+      .filter((c) => c.verificationStatus === "INSUFFICIENT_EVIDENCE" || c.verificationStatus === "UNVERIFIED")
+      .map((c) => c.claim);
+
+    if (unverified.length > 0) {
+      const refinedPlan = researchQueryPlanner.refinePlan(session.queryPlan, unverified, 1, 3);
+      session.queryPlan = refinedPlan;
+      // In refinement, execute targeted searches
+      for (const step of refinedPlan.refinements.slice(0, 3)) {
+        try {
+          const refinedSources = await multiSourceSearchEngine.search(
+            { ...refinedPlan, primaryQuery: step.refinedQuery },
+            2
+          );
+          for (const s of refinedSources) {
+            if (!session.sources.some((existing) => existing.url === s.url)) {
+              session.sources.push(s);
+              const claims = researchClaimExtractor.extract(s, req.question);
+              session.claims.push(...claims);
+            }
+          }
+        } catch {
+          // Bounded tolerance for refinement errors
+        }
+      }
+
+      // Re-run pipeline on combined evidence
+      duplicateSourceDetector.detectDuplicates(session.sources);
+      let processed = crossCheckEngine.crossCheck(session.claims);
+      processed = crossCheckEngine.deduplicate(processed);
+      session.claims = processed;
+      session.contradictions = contradictionDetector.detect(session.claims);
+      session.claims = epistemicVerifier.verifyAll(session.claims, session.sources, session.contradictions);
+
+      const reSynthesized = researchSynthesisEngine.synthesize({
+        sessionId: baseResult.sessionId,
+        query: session.query,
+        claims: session.claims,
+        contradictions: session.contradictions,
+        sources: session.sources,
+        projectContext: session.projectContext,
+        duplicateClusters: duplicateSourceDetector.detectDuplicates(session.sources).clusters,
+      });
+
+      _sessions.set(baseResult.sessionId, session);
+      return reSynthesized;
+    }
+
+    return baseResult;
   }
 
   /**

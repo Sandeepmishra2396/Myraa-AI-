@@ -24,6 +24,7 @@ import { searchMemories as _searchMemories } from "./MemorySearch.ts";
 import { makeEnhancedMemory } from "./MemoryExtractor.ts";
 import { emergencyStopCoordinator } from "../remote/EmergencyStopCoordinator.ts";
 import { securityPolicyEngine } from "../security/SecurityPolicyEngine.ts";
+import { outputDataFirewall } from "../security/OutputDataFirewall.ts";
 import type { SecurityContext } from "../security/SecurityTypes.ts";
 import type {
   EnhancedMemory,
@@ -63,6 +64,77 @@ const SENSITIVE_CREDENTIAL_PATTERNS: readonly RegExp[] = Object.freeze([
   /\b(?:otp(?:\s+code)?|one[- ]time[- ]password|verification(?:\s*code)?|auth(?:\s*code)?|pin)\s*(?:is|:|=)?\s*\d{4,8}\b/i,
 ]);
 
+const SENSITIVE_BROADCAST_CATEGORIES = new Set(["identity", "credentials", "behavior"]);
+
+export interface WsBroadcastRecipientContext {
+  identityId?: string;
+  role?: string;
+  isLocal?: boolean;
+  isStepUpAuthenticated?: boolean;
+}
+
+/**
+ * Filter and DLP-sanitize memory records before sending over WebSocket `memory_sync`
+ * (FINDING-AUD-09). Enforces:
+ *   1. Authenticated recipient required (returns [] if recipient has no identityId).
+ *   2. Ownership filtering: drops records explicitly owned by another actor unless
+ *      recipient is a local admin.
+ *   3. Sensitive-category gating: drops `identity`, `credentials`, and `behavior`
+ *      records unless the recipient session is step-up authenticated.
+ *   4. DLP filtering: drops records failing isDlpClean and redacts residual secrets,
+ *      stripping any token/proof fields.
+ */
+export function filterMemoriesForWsBroadcast<T extends Partial<EnhancedMemory>>(
+  memories: T[],
+  recipient?: WsBroadcastRecipientContext,
+): T[] {
+  if (!Array.isArray(memories) || memories.length === 0) return [];
+  if (!recipient || !recipient.identityId) return [];
+
+  const allowSensitive = Boolean(recipient.isStepUpAuthenticated);
+  const isLocalAdmin = Boolean(recipient.isLocal && recipient.role === "admin");
+
+  const filtered: T[] = [];
+  for (const mem of memories) {
+    if (!mem || typeof mem !== "object") continue;
+
+    // 1. Category policy: never broadcast sensitive categories without step-up auth
+    const cat = String(mem.category || "").toLowerCase();
+    if (SENSITIVE_BROADCAST_CATEGORIES.has(cat) && !allowSensitive) {
+      continue;
+    }
+
+    // 2. Ownership boundary check
+    const ownerId = (mem as any).ownerId as string | undefined;
+    if (
+      ownerId &&
+      ownerId !== "default" &&
+      ownerId !== "system" &&
+      ownerId !== recipient.identityId &&
+      !isLocalAdmin
+    ) {
+      continue;
+    }
+
+    // 3. DLP filtering — drop dirty secret records completely
+    if (!isDlpClean(mem.text) || (mem.key && !isDlpClean(mem.key))) {
+      continue;
+    }
+
+    // 4. Redact any residual secret patterns via OutputDataFirewall and strip sensitive/token properties
+    const { sanitized } = outputDataFirewall.sanitizeResult(mem.text || "");
+    const {
+      oneTimeToken: _tok,
+      proof: _proof,
+      signature: _sig,
+      ...safeCopy
+    } = mem as any;
+    safeCopy.text = sanitized;
+    filtered.push(safeCopy as T);
+  }
+  return filtered;
+}
+
 /**
  * Validates whether text contains any forbidden secrets or credentials.
  * Returns true if clean, false if sensitive credential detected.
@@ -82,12 +154,21 @@ export function isDlpClean(text?: string): boolean {
 // ---------------------------------------------------------------------------
 
 export class SharedMemoryManager {
-  private store: MemoryStore;
+  private _store?: MemoryStore;
   private _processedMutations = new Set<string>(); // clientMutationId idempotency cache
   private _syncListeners: Array<(event: SharedMemorySyncEvent) => void> = [];
 
-  constructor(store: MemoryStore = memoryStore) {
-    this.store = store;
+  constructor(store?: MemoryStore) {
+    if (store) {
+      this._store = store;
+    }
+  }
+
+  private get store(): MemoryStore {
+    if (!this._store) {
+      this._store = memoryStore;
+    }
+    return this._store;
   }
 
   // ── Sync Listener Registration ───────────────────────────────────────────
@@ -104,7 +185,8 @@ export class SharedMemoryManager {
   }
 
   /**
-   * Broadcast sync event to all local and remote subscribers.
+   * Broadcast sync event to local listeners and authenticated remote subscribers
+   * with per-client ownership, sensitive-category, and DLP filtering (FINDING-AUD-09).
    */
   private async _broadcastSync(
     action: "create" | "update" | "delete" | "batch_sync",
@@ -114,13 +196,25 @@ export class SharedMemoryManager {
     memoryId?: string,
     version?: number,
   ): Promise<void> {
-    const event: SharedMemorySyncEvent = {
+    if (emergencyStopCoordinator.isActive() || securityPolicyEngine.getMode() === "LOCKDOWN") {
+      return;
+    }
+
+    // Filter sensitive/DLP memories for general in-process listeners
+    const listenerSafeMemories = filterMemoriesForWsBroadcast(memories, {
+      identityId: deviceId || "local_operator",
+      role: "standard",
+      isLocal: true,
+      isStepUpAuthenticated: false,
+    });
+
+    const listenerEvent: SharedMemorySyncEvent = {
       type: "memory_sync",
       action,
       deviceId,
       deviceType,
       memoryId,
-      memories,
+      memories: listenerSafeMemories,
       timestamp: MemoryStore.now(),
       version,
     };
@@ -128,24 +222,46 @@ export class SharedMemoryManager {
     // 1. Notify direct in-process listeners
     for (const listener of this._syncListeners) {
       try {
-        listener(event);
+        listener(listenerEvent);
       } catch (err) {
         console.warn("[SharedMemoryManager] Listener error:", err);
       }
     }
 
-    // 2. Notify remote session manager (all connected mobile companions)
+    // 2. Notify remote session manager with strict per-client ownership/category/DLP filtering
     try {
       const { remoteSessionManager } = await import("../remote/RemoteSessionManager.ts");
       const sessions = remoteSessionManager.getActiveSessions();
       for (const s of sessions) {
         const client = remoteSessionManager.getClientForDevice(s.deviceId);
-        if (client && client.ws && client.ws.readyState === 1) {
-          try {
-            client.ws.send(JSON.stringify(event));
-          } catch {
-            /* ignore dropped frame */
-          }
+        if (!client || !client.ws || client.ws.readyState !== 1) continue;
+
+        const isStepUp = Boolean(
+          (s as any).isStepUpAuthenticated &&
+            (!(s as any).stepUpExpiresAt || Date.now() < (s as any).stepUpExpiresAt),
+        );
+        const clientSafeMemories = filterMemoriesForWsBroadcast(memories, {
+          identityId: s.deviceId,
+          role: (s as any).role || "standard",
+          isLocal: Boolean((s as any).isLocal),
+          isStepUpAuthenticated: isStepUp,
+        });
+
+        const clientEvent: SharedMemorySyncEvent = {
+          type: "memory_sync",
+          action,
+          deviceId,
+          deviceType,
+          memoryId,
+          memories: clientSafeMemories,
+          timestamp: MemoryStore.now(),
+          version,
+        };
+
+        try {
+          client.ws.send(JSON.stringify(clientEvent));
+        } catch {
+          /* ignore dropped frame */
         }
       }
     } catch {
@@ -195,110 +311,61 @@ export class SharedMemoryManager {
       throw new Error("DLP_SECRET_REJECTED: Secrets, credentials, or API keys cannot be stored in shared memory.");
     }
 
-    // Idempotency check
-    if (data.clientMutationId && this._processedMutations.has(data.clientMutationId)) {
-      const existingAll = await this.store.load();
-      const existing = existingAll.find((m) => m.clientMutationId === data.clientMutationId);
-      if (existing) return existing;
-    }
-
     const deviceId = data.deviceId || secContext?.deviceId || "desktop_local";
     const deviceType: DeviceType = data.deviceType || (secContext?.isLocal ? "desktop" : "android");
-    const all = await this.store.load();
 
-    const dedup = findSimilar(all, { category: data.category, text: data.text, key: data.key });
-
-    let finalRecord: EnhancedMemory;
-
-    if (dedup.match === "exact" && dedup.existing) {
-      // Exact match: update existing record with bumped version and updated timestamp
-      const nextVersion = (dedup.existing.version || 1) + 1;
-      const updated: EnhancedMemory = {
-        ...dedup.existing,
+    // SEC-P1-02: Route through GoverningMemoryGate
+    const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+    const req = await governingMemoryGate.requestWrite({
+      action: "CREATE",
+      proposedMemory: {
+        category: data.category,
         text: data.text,
-        updatedAt: MemoryStore.now(),
-        lastSyncedAt: MemoryStore.now(),
-        importance: data.importance ?? dedup.existing.importance,
-        confidence: data.confidence ?? dedup.existing.confidence,
+        key: data.key,
+        importance: data.importance,
+        confidence: data.confidence,
+        expiresAt: data.expiresAt,
         deviceId,
         deviceType,
-        version: nextVersion,
         clientMutationId: data.clientMutationId,
-      };
-      const newList = all.map((m) => (m.id === updated.id ? updated : m));
-      await this.store.save(newList);
-      finalRecord = updated;
-    } else if (dedup.match === "similar" && dedup.existing) {
-      // Similar match: merge text, bump version
-      const mergedText = mergeText(dedup.existing.text, data.text, dedup.score);
-      const nextVersion = (dedup.existing.version || 1) + 1;
-      const merged: EnhancedMemory = {
-        ...dedup.existing,
-        text: mergedText,
-        updatedAt: MemoryStore.now(),
-        lastSyncedAt: MemoryStore.now(),
-        deviceId,
-        deviceType,
-        version: nextVersion,
-        clientMutationId: data.clientMutationId,
-      };
-      const newList = all.map((m) => (m.id === merged.id ? merged : m));
-      await this.store.save(newList);
-      finalRecord = merged;
-    } else if (dedup.match === "conflict" && dedup.existing) {
-      // Conflict match: mark existing as needs_revalidation, add new with low confidence
-      const newList = all.map((m) =>
-        m.id === dedup.existing!.id
-          ? {
-              ...m,
-              status: "needs_revalidation" as MemoryStatus,
-              updatedAt: MemoryStore.now(),
-              version: (m.version || 1) + 1,
-            }
-          : m,
-      );
-      const newRecord = makeEnhancedMemory({
-        ...data,
-        confidence: "low",
-        source: data.source ?? (deviceType === "android" ? "user_explicit" : "system_generated"),
-      });
-      newRecord.deviceId = deviceId;
-      newRecord.deviceType = deviceType;
-      newRecord.version = 1;
-      newRecord.lastSyncedAt = MemoryStore.now();
-      newRecord.clientMutationId = data.clientMutationId;
-
-      newList.push(newRecord);
-      await this.store.save(newList);
-      finalRecord = newRecord;
-    } else {
-      // No match: add new record
-      const newRecord = makeEnhancedMemory({
-        ...data,
-        source: data.source ?? (deviceType === "android" ? "user_explicit" : "system_generated"),
-      });
-      newRecord.deviceId = deviceId;
-      newRecord.deviceType = deviceType;
-      newRecord.version = 1;
-      newRecord.lastSyncedAt = MemoryStore.now();
-      newRecord.clientMutationId = data.clientMutationId;
-
-      all.push(newRecord);
-      await this.store.save(all);
-      finalRecord = newRecord;
-    }
+      },
+      reason: "SharedMemoryManager createMemory proposal",
+      confidence: data.confidence === "high" ? 0.9 : data.confidence === "low" ? 0.4 : 0.8,
+      source: data.source ?? (deviceType === "android" ? "user_explicit" : "system_generated"),
+      userId: deviceId,
+      provenance: `device:${deviceId}`,
+    });
 
     if (data.clientMutationId) {
       this._processedMutations.add(data.clientMutationId);
     }
 
-    const updatedMemories = await this.listMemories();
-    await this._broadcastSync("create", deviceId, deviceType, updatedMemories, finalRecord.id, finalRecord.version);
-    return finalRecord;
+    if (req.approved) {
+      const all = await this.store.load();
+      const match = all.find((m) => m.text === data.text && m.category === data.category);
+      if (match) return match;
+    }
+
+    return {
+      id: req.id,
+      category: data.category,
+      text: data.text,
+      key: data.key,
+      source: data.source ?? (deviceType === "android" ? "user_explicit" : "system_generated"),
+      importance: data.importance ?? "medium",
+      confidence: data.confidence ?? "medium",
+      status: "pending_approval" as any,
+      createdAt: req.requestedAt,
+      updatedAt: req.requestedAt,
+      version: 1,
+      deviceId,
+      deviceType,
+      clientMutationId: data.clientMutationId,
+    };
   }
 
   /**
-   * Update an existing memory with deterministic conflict resolution (Last-Write-Wins with version tie-breaker).
+   * Update an existing memory proposal through GoverningMemoryGate.
    */
   async updateMemory(
     id: string,
@@ -324,81 +391,53 @@ export class SharedMemoryManager {
       throw new Error("DLP_SECRET_REJECTED: Secrets, credentials, or API keys cannot be stored in shared memory.");
     }
 
-    // Idempotency check
-    if (patch.clientMutationId && this._processedMutations.has(patch.clientMutationId)) {
-      const existingAll = await this.store.load();
-      const existing = existingAll.find((m) => m.id === id);
-      return { success: true, memory: existing };
-    }
-
     const all = await this.store.load();
-    const idx = all.findIndex((m) => m.id === id);
-    if (idx === -1) {
+    const existing = all.find((m) => m.id === id);
+    if (!existing) {
       return { success: false, error: `Memory '${id}' not found.` };
     }
 
-    const current = all[idx];
-    const deviceId = patch.deviceId || secContext?.deviceId || current.deviceId || "desktop_local";
+    const deviceId = patch.deviceId || secContext?.deviceId || existing.deviceId || "desktop_local";
     const deviceType = patch.deviceType || (secContext?.isLocal ? "desktop" : "android");
 
-    let conflictResolved = false;
-    let resolutionNote: string | undefined;
-
-    // ── Deterministic Conflict Resolution (Server-Authoritative LWW) ───────
-    const currentVersion = current.version || 1;
-    if (patch.clientVersion !== undefined && currentVersion > patch.clientVersion) {
-      // Concurrency conflict detected! Server has progressed beyond the client's base version.
-      conflictResolved = true;
-
-      const serverTime = new Date(current.updatedAt).getTime();
-      const clientTime = patch.timestamp ? new Date(patch.timestamp).getTime() : 0;
-
-      // Deterministic tie-breaker:
-      // If server timestamp is >= client timestamp, server record wins.
-      if (serverTime >= clientTime || isNaN(clientTime)) {
-        resolutionNote = `Conflict resolved: Server record v${currentVersion} retained (server timestamp >= client timestamp).`;
-        return {
-          success: true,
-          memory: current,
-          conflictResolved: true,
-          resolutionNote,
-        };
-      } else {
-        resolutionNote = `Conflict resolved: Client mutation accepted via LWW (client timestamp > server timestamp).`;
-      }
-    }
-
-    const updated: EnhancedMemory = {
-      ...current,
-      ...patch,
-      version: currentVersion + 1,
-      updatedAt: MemoryStore.now(),
-      lastSyncedAt: MemoryStore.now(),
-      deviceId,
-      deviceType,
-      clientMutationId: patch.clientMutationId,
-    };
-
-    all[idx] = updated;
-    await this.store.save(all);
+    // SEC-P1-02 + FINDING-AUD-07: Route through GoverningMemoryGate preserving target category & expectedVersion
+    const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+    const req = await governingMemoryGate.requestWrite({
+      action: "UPDATE",
+      proposedMemory: {
+        id,
+        category: existing.category,
+        ...patch,
+        deviceId,
+        deviceType,
+      },
+      reason: `SharedMemoryManager updateMemory proposal for ${id}`,
+      confidence: 0.85,
+      source: "user_explicit",
+      userId: deviceId,
+      provenance: `device:${deviceId}`,
+      expectedVersion: patch.clientVersion ?? existing.version ?? 1,
+    });
 
     if (patch.clientMutationId) {
       this._processedMutations.add(patch.clientMutationId);
     }
 
-    const updatedMemories = await this.listMemories();
-    await this._broadcastSync("update", deviceId, deviceType, updatedMemories, updated.id, updated.version);
-
     return {
       success: true,
-      memory: updated,
-      conflictResolved,
-      resolutionNote,
+      memory: {
+        ...existing,
+        ...patch,
+        status: "pending_approval" as any,
+        updatedAt: req.requestedAt,
+      },
+      conflictResolved: false,
     };
   }
 
   /**
-   * Delete a memory from the canonical store and broadcast removal.
+   * Propose deletion of a memory from the canonical store through GoverningMemoryGate.
+   * FINDING-AUD-07: Preserves target category and expectedVersion.
    */
   async deleteMemory(id: string, secContext?: SecurityContext): Promise<boolean> {
     this._assertSecurityClearance();
@@ -407,18 +446,29 @@ export class SharedMemoryManager {
     const target = all.find((m) => m.id === id);
     if (!target) return false;
 
-    const filtered = all.filter((m) => m.id !== id);
-    await this.store.save(filtered);
-
     const deviceId = secContext?.deviceId || target.deviceId || "desktop_local";
-    const deviceType: DeviceType = secContext?.isLocal ? "desktop" : "android";
 
-    const updatedMemories = await this.listMemories();
-    await this._broadcastSync("delete", deviceId, deviceType, updatedMemories, id);
+    const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+    await governingMemoryGate.requestWrite({
+      action: "DELETE",
+      proposedMemory: {
+        id,
+        category: target.category,
+        text: target.text,
+        key: target.key,
+      },
+      reason: `SharedMemoryManager delete proposal for ${id}`,
+      confidence: 0.9,
+      source: "user_explicit",
+      userId: deviceId,
+      provenance: `device:${deviceId}`,
+      expectedVersion: target.version ?? 1,
+    });
+
     return true;
   }
 
-  /**
+    /**
    * Get a single memory by ID.
    */
   async getMemory(id: string, _secContext?: SecurityContext): Promise<EnhancedMemory | undefined> {

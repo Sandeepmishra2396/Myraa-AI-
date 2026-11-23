@@ -41,9 +41,9 @@ export class OutputDataFirewall {
           redactedCount++;
         }
 
-        // MYRAA / Sora tokens
-        if (/(myraa_(at|rf)_[A-Za-z0-9_\-.]+|sora_(conf|tok)_[A-Za-z0-9_\-.]+)/g.test(str)) {
-          str = str.replace(/(myraa_(at|rf)_[A-Za-z0-9_\-.]+|sora_(conf|tok)_[A-Za-z0-9_\-.]+)/g, "[REDACTED_TOKEN]");
+        // MYRAA / Sora tokens (including sora_dev_ paired device tokens — FINDING-AUD-08)
+        if (/(myraa_(at|rf)_[A-Za-z0-9_\-.]+|sora_(conf|tok|dev)_[A-Za-z0-9_\-.]+)/g.test(str)) {
+          str = str.replace(/(myraa_(at|rf)_[A-Za-z0-9_\-.]+|sora_(conf|tok|dev)_[A-Za-z0-9_\-.]+)/g, "[REDACTED_TOKEN]");
           modified = true;
           redactedCount++;
         }

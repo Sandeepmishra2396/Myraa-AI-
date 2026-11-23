@@ -19,7 +19,7 @@
  *     - Voice-first interface
  *     - Project dashboard (active project, open files, multi-step code workflow stage tracker, quick cross-device handoff)
  *     - Active application / context (Desktop device-local window, app, file, website, screen vision, privacy shield)
- *     - Tools / capabilities view (Desktop capabilities, Mobile capabilities, and all 126 Gemini Live tools with risk & confirmation metadata)
+ *     - Tools / capabilities view (Desktop capabilities, Mobile capabilities, and all 129 Gemini Live tools with risk & confirmation metadata)
  *     - Memory (Shared Account Memory/Preferences/Tasks vs Desktop Device-Local Context)
  *     - Device / remote connection (DISCONNECTED by default; paired devices, active handoffs, Connect / Disconnect / Revoke)
  *

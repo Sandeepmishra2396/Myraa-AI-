@@ -140,6 +140,9 @@ export class MyraAudioSession {
   private onSessionUpdate?: (updated: StoredRemoteSession) => void;
   private onConnectionStateChange?: (state: CanonicalConnectionState) => void;
   private onProsodyChange?: (prosody: any) => void;
+  private onConfirmationRequired?: (confirmationData: any) => void;
+  private onDecisionResult?: (result: any) => void;
+  private onAudioWarning?: (warning: any) => void;
   private currentProsody: any = null;
   private token?: string;
 
@@ -153,6 +156,9 @@ export class MyraAudioSession {
     onSessionUpdate?: (updated: StoredRemoteSession) => void;
     onConnectionStateChange?: (state: CanonicalConnectionState) => void;
     onProsodyChange?: (prosody: any) => void;
+    onConfirmationRequired?: (confirmationData: any) => void;
+    onDecisionResult?: (result: any) => void;
+    onAudioWarning?: (warning: any) => void;
     token?: string;
   }) {
     this.onStateChange = handlers.onStateChange;
@@ -164,6 +170,9 @@ export class MyraAudioSession {
     this.onSessionUpdate = handlers.onSessionUpdate;
     this.onConnectionStateChange = handlers.onConnectionStateChange;
     this.onProsodyChange = handlers.onProsodyChange;
+    this.onConfirmationRequired = handlers.onConfirmationRequired;
+    this.onDecisionResult = handlers.onDecisionResult;
+    this.onAudioWarning = handlers.onAudioWarning;
     this.token = handlers.token;
 
     this.reconnectController = new RemoteReconnectController({
@@ -348,23 +357,24 @@ export class MyraAudioSession {
         }
         const rms = Math.sqrt(sumSquares / channelData.length);
 
-        const isSpeaking = this.activeSources.length > 0 || this.currentState === "speaking";
+        const hasActivePlayback = this.activeSources.length > 0;
+        const isSpeaking = hasActivePlayback || this.currentState === "speaking";
 
         if (isSpeaking) {
           const now = Date.now();
-          const cooldownMs = 600;
+          const cooldownMs = 350;
           const lastInterruptTime: number = this._lastBargeInTime;
           const playbackElapsed = now - (this._speechPlaybackStartTime || 0);
 
           // Grace period: First 350ms to ignore initial speaker startup pop
           if (playbackElapsed > 350 && now - lastInterruptTime > cooldownMs) {
-            // Conversational speech threshold: RMS > 0.065 for 4 consecutive frames (~50ms)
-            // allows natural conversational barge-in without shouting!
+            // Conversational speech threshold: RMS > 0.065 for 3 consecutive frames (~384ms)
+            // Rejects speaker acoustic bleed (< 0.050) while reliably detecting intentional human speech (> 0.075)
             if (rms > 0.065) {
               this.consecutiveSpeechFrames++;
-              if (this.consecutiveSpeechFrames >= 4) {
+              if (this.consecutiveSpeechFrames >= 3) {
                 console.log(
-                  `[Myraa Audio] Conversational speech barge-in detected (RMS: ${rms.toFixed(3)}). Flushing active playback queue immediately.`
+                  `[Myraa Audio] Conversational speech barge-in confirmed (RMS: ${rms.toFixed(3)}). Flushing active playback queue.`
                 );
                 this._lastBargeInTime = Date.now();
                 this.handleInterruption();
@@ -377,9 +387,10 @@ export class MyraAudioSession {
             this.consecutiveSpeechFrames = 0;
           }
 
-          // Acoustic echo isolation: While assistant is speaking, suppress mic transmission
-          // to Gemini Live until the user actually starts speaking to barge in
-          if (this.consecutiveSpeechFrames === 0 && (this.activeSources.length > 0 || this.currentState === "speaking")) {
+          // Acoustic echo isolation: While assistant is actively playing sound through speakers,
+          // suppress mic transmission to Gemini Live until the user actually starts speaking to barge in.
+          // CRITICAL: If no audio is playing through speakers (!hasActivePlayback), never suppress mic frames!
+          if (this.consecutiveSpeechFrames === 0 && hasActivePlayback) {
             return;
           }
         } else {
@@ -716,15 +727,13 @@ export class MyraAudioSession {
       source.connect(this.outputGainNode);
 
       const currentTime = this.outputAudioCtx.currentTime;
-      const queueAhead = this.nextStartTime - currentTime;
 
-      // Gapless scheduler sync & runaway queue prevention
+      // Gapless sequential audio scheduler:
+      // If no audio is currently playing/queued or playback fell behind the hardware clock,
+      // anchor nextStartTime to start immediately with a tiny 25ms jitter buffer.
+      // Sequential chunks are queued one after another (nextStartTime += duration)
+      // and NEVER clamped backwards, ensuring strictly one continuous voice without overlap.
       if (this.activeSources.length === 0 || this.nextStartTime < currentTime) {
-        this.nextStartTime = currentTime + 0.025;
-      } else if (queueAhead > 8) {
-        console.warn(`[Myraa Audio] Queue severely drifted (${queueAhead.toFixed(2)}s). Resetting.`);
-        this.activeSources.forEach((s) => { try { s.stop(); } catch {} });
-        this.activeSources = [];
         this.nextStartTime = currentTime + 0.025;
       }
 
@@ -746,16 +755,17 @@ export class MyraAudioSession {
           this.activeSources.splice(index, 1);
         }
         
-        // When all active sources finish AND server marked turnComplete, return to listening cleanly
-        if (this.activeSources.length === 0 && !this.isModelTurnActive && this.currentState === "speaking") {
-          const remainingTime = Math.max(0, (this.nextStartTime - (this.outputAudioCtx?.currentTime || 0)) * 1000);
-          if (this._speechEndTimer) clearTimeout(this._speechEndTimer);
-          this._speechEndTimer = setTimeout(() => {
-            if (this.activeSources.length === 0 && !this.isModelTurnActive && this.currentState === "speaking") {
-              this.setState("listening");
-              this.nextStartTime = 0;
+        // When all active audio buffers have finished playing through the speakers,
+        // if model turn is complete, IMMEDIATELY switch back to listening state with zero delay!
+        if (this.activeSources.length === 0) {
+          if (!this.isModelTurnActive && this.currentState === "speaking") {
+            this.setState("listening");
+            this.nextStartTime = 0;
+            if (this._speechEndTimer) {
+              clearTimeout(this._speechEndTimer);
+              this._speechEndTimer = null;
             }
-          }, Math.max(60, remainingTime));
+          }
         }
       };
 
@@ -949,14 +959,27 @@ export class MyraAudioSession {
       // Turn complete
       if (data.type === "turnComplete") {
         this.isModelTurnActive = false;
-        const remainingMs = Math.max(0, (this.nextStartTime - (this.outputAudioCtx?.currentTime || 0)) * 1000);
-        if (this._speechEndTimer) clearTimeout(this._speechEndTimer);
-        this._speechEndTimer = setTimeout(() => {
-          if (this.activeSources.length === 0 && this.currentState === "speaking") {
+        if (this.activeSources.length === 0) {
+          // If no audio chunks are actively playing on speakers, return to listening immediately!
+          if (this.currentState === "speaking") {
             this.setState("listening");
             this.nextStartTime = 0;
           }
-        }, Math.max(120, remainingMs + 50));
+          if (this._speechEndTimer) {
+            clearTimeout(this._speechEndTimer);
+            this._speechEndTimer = null;
+          }
+        } else {
+          // Only wait if buffers are currently playing through speakers
+          const remainingMs = Math.max(0, (this.nextStartTime - (this.outputAudioCtx?.currentTime || 0)) * 1000);
+          if (this._speechEndTimer) clearTimeout(this._speechEndTimer);
+          this._speechEndTimer = setTimeout(() => {
+            if (this.currentState === "speaking") {
+              this.setState("listening");
+              this.nextStartTime = 0;
+            }
+          }, Math.max(40, remainingMs + 50));
+        }
       }
 
       // Handle live captions transcription
@@ -969,6 +992,49 @@ export class MyraAudioSession {
       if (data.type === "memory_sync" && data.memories) {
         if (this.onMemorySync) {
           this.onMemorySync(data.memories);
+        }
+      }
+
+      // Handle real-time code change events (line-by-line progress/diff feedback)
+      if (data.type === "code_change") {
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("myraa:code_change", { detail: data }));
+        }
+      }
+
+      // Handle human confirmation required event (SEC-P3-R1.2-03)
+      if (data.type === "confirmation_required") {
+        if (this.onConfirmationRequired) {
+          this.onConfirmationRequired(data);
+        }
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("myraa:confirmation_required", { detail: data }));
+        }
+      }
+
+      // Handle explicit decision confirmation / rejection acknowledgements (SEC-P3-R1.3-01)
+      if (
+        data.type === "decision_confirmed" ||
+        data.type === "decision_confirmation_failed" ||
+        data.type === "decision_rejected" ||
+        data.type === "decision_rejection_failed"
+      ) {
+        if (this.onDecisionResult) {
+          this.onDecisionResult(data);
+        }
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("myraa:decision_result", { detail: data }));
+        }
+      }
+
+      // Handle explicit audio queue overflow / validation warnings (SEC-P4-A01)
+      if (data.type === "audio_warning") {
+        console.warn("[Myraa Audio] Server audio warning:", data.reason || "unknown");
+        if (this.onAudioWarning) {
+          this.onAudioWarning(data);
+        }
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("myraa:audio_warning", { detail: data }));
         }
       }
 
@@ -1046,5 +1112,45 @@ export class MyraAudioSession {
    */
   public getCurrentLanguage(): string {
     return this.currentProsody?.language || "english";
+  }
+
+  /**
+   * Submits a user decision confirmation to the server bridge (SEC-P3-R1.2-03).
+   */
+  public confirmDecision(decisionId: string, projectId: string, confirmationToken: string): boolean {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({
+        type: "confirm_decision",
+        decisionId,
+        projectId,
+        confirmationToken,
+      }));
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Submits a user decision rejection to the server bridge (SEC-P3-R1.3-01).
+   * Passes the confirmationToken so the server atomically revokes the capability.
+   */
+  public rejectDecision(
+    decisionId: string,
+    projectId: string,
+    confirmationToken?: string,
+  ): boolean {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      const payload: Record<string, string> = {
+        type: "reject_decision",
+        decisionId,
+        projectId,
+      };
+      if (confirmationToken) {
+        payload.confirmationToken = confirmationToken;
+      }
+      this.ws.send(JSON.stringify(payload));
+      return true;
+    }
+    return false;
   }
 }

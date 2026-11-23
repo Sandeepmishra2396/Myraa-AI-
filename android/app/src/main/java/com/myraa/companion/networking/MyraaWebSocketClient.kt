@@ -48,7 +48,7 @@ class MyraaWebSocketClient(
 
         fun buildWsUrl(host: String, port: Int, path: String = "/remote-live"): String {
             val trimmed = host.trim().removeSuffix("/")
-            if (trimmed.startsWith("wss://", ignoreCase = true)) {
+            if (trimmed.startsWith("wss://", ignoreCase = true) || trimmed.startsWith("ws://", ignoreCase = true)) {
                 return "$trimmed$path"
             }
             val cleanHost = trimmed
@@ -56,8 +56,14 @@ class MyraaWebSocketClient(
                 .removePrefix("ws://")
                 .removePrefix("https://")
                 .removePrefix("http://")
-            val includePort = port != 443 && port != 80 && port != 3000
+            val isLocal = cleanHost == "10.0.2.2" || cleanHost == "127.0.0.1" || cleanHost == "localhost" ||
+                cleanHost.startsWith("192.168.") || cleanHost.startsWith("10.") || cleanHost.startsWith("172.")
+            val includePort = port != 443 && port != 80
+            if (isLocal) {
+                return if (includePort) "ws://$cleanHost:$port$path" else "ws://$cleanHost$path"
+            }
             return if (includePort) "wss://$cleanHost:$port$path" else "wss://$cleanHost$path"
+
         }
     }
 
@@ -70,15 +76,23 @@ class MyraaWebSocketClient(
     private var currentHost: String = ""
     private var currentPort: Int = 3000
     private var currentToken: String = ""
+    private var currentPath: String = "/remote-live"
 
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.DISCONNECTED)
     val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus.asStateFlow()
+
+    // Multicast listener collections (prevent VoiceSessionManager and UI components clobbering each other)
+    val audioReceivedListeners = java.util.concurrent.CopyOnWriteArrayList<(base64Pcm24k: String) -> Unit>()
+    val turnCompleteListeners = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
+    val interruptedListeners = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
+    val transcriptListeners = java.util.concurrent.CopyOnWriteArrayList<(TranscriptItem) -> Unit>()
 
     // Callbacks
     var onAudioReceived: ((base64Pcm24k: String) -> Unit)? = null
     var onTranscriptReceived: ((TranscriptItem) -> Unit)? = null
     var onEmergencyStopChanged: ((EmergencyStopState) -> Unit)? = null
     var onStatusMessage: ((String) -> Unit)? = null
+    var onError: ((errorMessage: String) -> Unit)? = null
     var onInterrupted: (() -> Unit)? = null
     var onTurnComplete: (() -> Unit)? = null
     var tokenRefreshProvider: (suspend () -> String?)? = null
@@ -89,18 +103,36 @@ class MyraaWebSocketClient(
     var onProactiveNotificationReceived: ((event: com.myraa.companion.capabilities.MobileProactiveEvent) -> Unit)? = null
 
     /**
-     * Connect to /remote-live with Keystore bearer token.
+     * Connect standalone mobile device directly to /live canonical voice pipeline
+     * without requiring Desktop pairing or /remote-live.
+     */
+    fun connectStandalone(host: String, port: Int, standaloneDeviceId: String) {
+        val devId = standaloneDeviceId.ifBlank { "mob_standalone_default" }
+        currentHost = host
+        currentPort = port
+        currentToken = devId
+        currentPath = "/live"
+        isManualDisconnect.set(false)
+        reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS
+
+        initiateConnection()
+    }
+
+    /**
+     * Connect to /remote-live with Keystore bearer token (Desktop paired mode).
      */
     fun connect(host: String, port: Int, bearerToken: String) {
         if (bearerToken.isBlank()) {
             Log.e(TAG, "Cannot connect: bearer token is empty")
             _connectionStatus.value = ConnectionStatus.ERROR
+            onError?.invoke("Cannot connect: bearer token is empty")
             return
         }
 
         currentHost = host
         currentPort = port
         currentToken = bearerToken
+        currentPath = "/remote-live"
         isManualDisconnect.set(false)
         reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS
 
@@ -109,8 +141,8 @@ class MyraaWebSocketClient(
 
     private fun initiateConnection() {
         _connectionStatus.value = ConnectionStatus.CONNECTING
-        val wsUrl = buildWsUrl(currentHost, currentPort, "/remote-live")
-        Log.i(TAG, "Initiating WebSocket connection to: $wsUrl")
+        val wsUrl = buildWsUrl(currentHost, currentPort, currentPath)
+        Log.i(TAG, "Initiating WebSocket connection to: $wsUrl (path=$currentPath)")
 
         val request = Request.Builder()
             .url(wsUrl)
@@ -150,7 +182,9 @@ class MyraaWebSocketClient(
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                 val httpCode = response?.code ?: 0
-                Log.e(TAG, "WebSocket failure: ${t.message} (code: $httpCode)")
+                val errorMsg = t.message ?: "Connection failure (code $httpCode)"
+                Log.e(TAG, "WebSocket failure: $errorMsg (code: $httpCode)")
+                onError?.invoke(errorMsg)
                 val isTerminalHttp = httpCode in listOf(401, 403, 423)
                 if (!isManualDisconnect.get() && !isTerminalHttp) {
                     scheduleReconnect()
@@ -173,7 +207,10 @@ class MyraaWebSocketClient(
             // 1. Check for audio chunk: handles both {"audio": "<base64>"} and {"type": "audio", "audio": "<base64>"}
             if (json.has("audio") && (msgType.isEmpty() || msgType == "audio")) {
                 val base64 = json.getString("audio")
-                onAudioReceived?.invoke(base64)
+                audioReceivedListeners.forEach { it.invoke(base64) }
+                if (onAudioReceived != null && !audioReceivedListeners.contains(onAudioReceived)) {
+                    onAudioReceived?.invoke(base64)
+                }
                 return
             }
 
@@ -181,53 +218,82 @@ class MyraaWebSocketClient(
             when (msgType) {
                 "interrupted" -> {
                     onStatusMessage?.invoke("MYRAA interrupted")
-                    onInterrupted?.invoke()
+                    interruptedListeners.forEach { it.invoke() }
+                    if (onInterrupted != null && !interruptedListeners.contains(onInterrupted)) {
+                        onInterrupted?.invoke()
+                    }
                 }
                 "turnComplete" -> {
-                    onTurnComplete?.invoke()
+                    turnCompleteListeners.forEach { it.invoke() }
+                    if (onTurnComplete != null && !turnCompleteListeners.contains(onTurnComplete)) {
+                        onTurnComplete?.invoke()
+                    }
+                }
+                "transcription" -> {
+                    val role = json.optString("role", "model")
+                    val transcript = json.optString("text", "")
+                    if (transcript.isNotBlank()) {
+                        val speaker = if (role.equals("user", ignoreCase = true)) {
+                            TranscriptItem.Speaker.USER
+                        } else {
+                            TranscriptItem.Speaker.MYRAA
+                        }
+                        val item = TranscriptItem(
+                            sender = speaker,
+                            text = transcript
+                        )
+                        transcriptListeners.forEach { it.invoke(item) }
+                        if (onTranscriptReceived != null && !transcriptListeners.contains(onTranscriptReceived)) {
+                            onTranscriptReceived?.invoke(item)
+                        }
+                    }
                 }
                 "userTranscript" -> {
                     val transcript = json.optString("text", "")
                     if (transcript.isNotBlank()) {
-                        onTranscriptReceived?.invoke(
-                            TranscriptItem(
-                                sender = TranscriptItem.Speaker.USER,
-                                text = transcript
-                            )
+                        val item = TranscriptItem(
+                            sender = TranscriptItem.Speaker.USER,
+                            text = transcript
                         )
+                        transcriptListeners.forEach { it.invoke(item) }
+                        if (onTranscriptReceived != null && !transcriptListeners.contains(onTranscriptReceived)) {
+                            onTranscriptReceived?.invoke(item)
+                        }
                     }
                 }
-                "modelTranscript" -> {
+                "modelTranscript", "modelTurn" -> {
                     val transcript = json.optString("text", "")
                     if (transcript.isNotBlank()) {
-                        onTranscriptReceived?.invoke(
-                            TranscriptItem(
-                                sender = TranscriptItem.Speaker.MYRAA,
-                                text = transcript
-                            )
+                        val item = TranscriptItem(
+                            sender = TranscriptItem.Speaker.MYRAA,
+                            text = transcript
                         )
+                        transcriptListeners.forEach { it.invoke(item) }
+                        if (onTranscriptReceived != null && !transcriptListeners.contains(onTranscriptReceived)) {
+                            onTranscriptReceived?.invoke(item)
+                        }
                     }
                 }
                 "modelTurn" -> {
                     val transcript = json.optString("text", "")
                     if (transcript.isNotBlank()) {
-                        onTranscriptReceived?.invoke(
-                            TranscriptItem(
-                                sender = TranscriptItem.Speaker.MYRAA,
-                                text = transcript
-                            )
+                        val item = TranscriptItem(
+                            sender = TranscriptItem.Speaker.MYRAA,
+                            text = transcript
                         )
+                        transcriptListeners.forEach { it.invoke(item) }
+                        onTranscriptReceived?.invoke(item)
                     }
                 }
                 "userTurn" -> {
                     val transcript = json.optString("text", "")
                     if (transcript.isNotBlank()) {
-                        onTranscriptReceived?.invoke(
-                            TranscriptItem(
-                                sender = TranscriptItem.Speaker.USER,
-                                text = transcript
-                            )
+                        val item = TranscriptItem(
+                            sender = TranscriptItem.Speaker.USER,
+                            text = transcript
                         )
+                        transcriptListeners.forEach { it.invoke(item) }
+                        onTranscriptReceived?.invoke(item)
                     }
                 }
                 "emergency_stop" -> {
@@ -304,6 +370,7 @@ class MyraaWebSocketClient(
                 "error" -> {
                     val errMsg = json.optString("error", "Unknown server error")
                     onStatusMessage?.invoke("Error: $errMsg")
+                    onError?.invoke(errMsg)
                 }
             }
         } catch (e: Exception) {
@@ -344,6 +411,17 @@ class MyraaWebSocketClient(
         val frame = JSONObject().apply {
             put("type", "text")
             put("text", text)
+        }
+        return webSocket?.send(frame.toString()) ?: false
+    }
+
+    /**
+     * Send client-side barge-in interruption signal to server.
+     */
+    fun sendInterruption(): Boolean {
+        if (_connectionStatus.value != ConnectionStatus.AUTHENTICATED) return false
+        val frame = JSONObject().apply {
+            put("type", "interrupted")
         }
         return webSocket?.send(frame.toString()) ?: false
     }

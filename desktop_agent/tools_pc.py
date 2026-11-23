@@ -32,15 +32,16 @@ _vol_backend = None  # one of "pycaw" | "media_keys" | None
 
 def _init_pycaw():
     try:
-        from ctypes import cast, POINTER
-
-        import comtypes  # noqa: F401
-        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-
+        from pycaw.pycaw import AudioUtilities
         devices = AudioUtilities.GetSpeakers()
+        if hasattr(devices, "EndpointVolume"):
+            return devices.EndpointVolume
+        # Legacy pycaw fallback
+        from ctypes import cast, POINTER
+        import comtypes  # noqa: F401
+        from pycaw.pycaw import IAudioEndpointVolume
         interface = devices.Activate(IAudioEndpointVolume._iid_, comtypes.CLSCTX_ALL, None)
-        volume = cast(interface, POINTER(IAudioEndpointVolume))
-        return volume
+        return cast(interface, POINTER(IAudioEndpointVolume))
     except Exception:
         return None
 
@@ -124,9 +125,16 @@ def _set_volume_via_keys(target: float) -> None:
     # ~2% per keypress is a reasonable Windows approximation.
     steps = int(abs(diff) / 0.02) + 1
     vk = VK_VOLUME_UP if diff > 0 else VK_VOLUME_DOWN
-    for _ in range(min(steps, 50)):
+    for _ in range(min(steps, 25)):
         _press_vk(vk)
-        time.sleep(0.01)
+        time.sleep(0.02)
+
+
+def _step_keys(vk: int, count: int = 2) -> None:
+    """Issue a small, gentle number of keypresses for relative volume adjustments."""
+    for _ in range(max(1, min(count, 10))):
+        _press_vk(vk)
+        time.sleep(0.02)
 
 
 def _toggle_mute_pycaw() -> bool:
@@ -145,23 +153,52 @@ def _toggle_mute_pycaw() -> bool:
     return False
 
 
+def _normalize_step(val: Any, default: float = 0.05) -> float:
+    """Normalizes step to 0.01..0.25 (default 5% for gentle adjustment)."""
+    if val is None:
+        return default
+    try:
+        s = float(val)
+    except (ValueError, TypeError):
+        return default
+    if s > 1.0:
+        s = s / 100.0  # e.g., 5 -> 0.05, 10 -> 0.10
+    return max(0.01, min(0.25, s))
+
+
 # --- Tool handlers -----------------------------------------------------------
 
 
 @register("volumeUp")
 def volume_up(args: Dict[str, Any]) -> Dict[str, Any]:
-    step = float(args.get("amount", 0.10))
-    new = min(1.0, _current_volume() + step)
-    _set_volume_scalar(new)
-    return {"result": f"Volume increased to {int(new * 100)}%."}
+    step = _normalize_step(args.get("amount") or args.get("step"), default=0.05)
+    backend = _get_volume_interface()
+    if backend == "pycaw":
+        curr = _current_volume()
+        new = min(1.0, curr + step)
+        _set_volume_scalar(new)
+        return {"result": f"Volume increased to {int(round(new * 100))}%.", "level": int(round(new * 100))}
+    else:
+        # 2-3 key presses (~4-6%)
+        key_count = max(1, int(round(step / 0.02)))
+        _step_keys(VK_VOLUME_UP, key_count)
+        return {"result": f"Volume increased by {int(round(step * 100))}%.", "step": int(round(step * 100))}
 
 
 @register("volumeDown")
 def volume_down(args: Dict[str, Any]) -> Dict[str, Any]:
-    step = float(args.get("amount", 0.10))
-    new = max(0.0, _current_volume() - step)
-    _set_volume_scalar(new)
-    return {"result": f"Volume decreased to {int(new * 100)}%."}
+    step = _normalize_step(args.get("amount") or args.get("step"), default=0.05)
+    backend = _get_volume_interface()
+    if backend == "pycaw":
+        curr = _current_volume()
+        new = max(0.0, curr - step)
+        _set_volume_scalar(new)
+        return {"result": f"Volume decreased to {int(round(new * 100))}%.", "level": int(round(new * 100))}
+    else:
+        # 2-3 key presses (~4-6%)
+        key_count = max(1, int(round(step / 0.02)))
+        _step_keys(VK_VOLUME_DOWN, key_count)
+        return {"result": f"Volume decreased by {int(round(step * 100))}%.", "step": int(round(step * 100))}
 
 
 @register("setVolume")
@@ -170,11 +207,15 @@ def set_volume(args: Dict[str, Any]) -> Dict[str, Any]:
         pct = float(args["percent"])
     elif "level" in args:
         pct = float(args["level"])
+    elif "amount" in args:
+        pct = float(args["amount"])
     else:
         raise ToolError("Parameter 'percent' (0-100) is required.")
+    if pct <= 1.0 and pct > 0:
+        pct = pct * 100.0
     pct = max(0.0, min(100.0, pct))
     _set_volume_scalar(pct / 100.0)
-    return {"result": f"Volume set to {int(pct)}%."}
+    return {"result": f"Volume set to {int(round(pct))}%.", "level": int(round(pct))}
 
 
 @register("muteToggle")

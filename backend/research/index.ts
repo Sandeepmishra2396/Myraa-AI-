@@ -10,6 +10,10 @@
 export { advancedResearchCoordinator } from "./AdvancedResearchCoordinator.ts";
 export { documentationComparator } from "./DocumentationComparator.ts";
 export { citationManager } from "./CitationManager.ts";
+export { duplicateSourceDetector } from "./DuplicateSourceDetector.ts";
+export { epistemicVerifier } from "./EpistemicVerifier.ts";
+export { sourceReliabilityEngine } from "./SourceReliabilityEngine.ts";
+export { researchQueryPlanner } from "./ResearchQueryPlanner.ts";
 
 export type {
   ResearchQueryRequest,
@@ -26,4 +30,15 @@ export type {
   ContradictionRecord,
   BrowserPageContext,
   SourceType,
+  SourceReliabilityScore,
+  EpistemicLabel,
+  VerificationStatus,
+  EpistemicSummary,
+  DuplicateCluster,
+  DuplicateDetectionReport,
+  EpistemicQueryRequest,
+  DuplicateDetectionRequest,
+  VerifyClaimsRequest,
+  RefinedQueryPlan,
+  QueryRefinementStep,
 } from "./AdvancedResearchTypes.ts";

@@ -47,7 +47,7 @@ export const DEFAULT_SETTINGS: MyraaSettings = {
   micDeviceId: "",
   sensitivity: 60,
   animations: true,
-  languagePreference: "auto",
+  languagePreference: "hindi",
 };
 
 const STORAGE_KEY = "myraa.settings.v2";

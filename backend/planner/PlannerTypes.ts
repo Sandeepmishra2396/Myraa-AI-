@@ -82,6 +82,7 @@ export type StepPhase =
 export const MODIFYING_TOOLS: ReadonlySet<string> = new Set([
   // File operations
   "createFile",
+  "modifyFile",
   "deleteFile",
   "renameFile",
   "moveFile",
@@ -107,7 +108,17 @@ export type StepStatus =
   | "completed"
   | "failed"
   | "skipped"
-  | "waiting_for_approval";   // Halted at checkpoint — must NOT auto-resume
+  | "waiting_for_approval"   // Halted at checkpoint — must NOT auto-resume
+  | "outcome_unknown"        // Interrupted in-flight; external outcome uncertain
+  | "acknowledged_unverified"; // Operator acknowledged uncertainty to unblock next step without claiming success
+
+export interface StepReconciliationRecord {
+  reconciledAt: string;
+  reconciledBy: string;
+  mode: "operator_acknowledged" | "environmental_verified";
+  notes?: string;
+  observedState?: string;
+}
 
 // ---------------------------------------------------------------------------
 // PlanStep
@@ -159,6 +170,20 @@ export interface PlanStep {
 
   /** Execution result, populated after completion or failure. */
   result?: StepExecutionResult;
+
+  /** Observed real-world state (e.g. file existence on disk, stat bytes, process exit code). */
+  observedState?: string;
+
+  /** Formal postcondition verification status. */
+  verificationStatus?:
+    | "unverified"
+    | "outcome_unknown"
+    | "verified_success"
+    | "verified_failure"
+    | "acknowledged_unverified";
+
+  /** Durable reconciliation record if this step was recovered from an uncertain boundary. */
+  reconciliation?: StepReconciliationRecord;
 
   startedAt?: string;
   completedAt?: string;
@@ -309,7 +334,10 @@ export type PlanStatus =
   | "paused"               // manually paused by user or system
   | "completed"            // all steps done and verification passed
   | "failed"               // irrecoverable failure
-  | "cancelled";           // user or system cancelled
+  | "cancelled"            // user or system cancelled
+  | "recovery_required"    // interrupted steps require reconciliation
+  | "verifying"            // postcondition verification in progress
+  | "outcome_unknown";     // execution finished with unverified/uncertain outcome
 
 export interface ExecutionLogEntry {
   timestamp: string;
@@ -321,6 +349,8 @@ export interface ExecutionLogEntry {
 
 export interface TaskPlan {
   id: string;
+  /** Optional owning project ID for strict cross-project plan isolation (Stage 10.3 GAP-10.3-01). */
+  projectId?: string;
   goal: Goal;
   status: PlanStatus;
   steps: PlanStep[];

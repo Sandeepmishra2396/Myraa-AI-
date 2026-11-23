@@ -23,7 +23,7 @@
  */
 
 import type { SecurityContext } from "../security/SecurityTypes.ts";
-import { actionContextManager } from "./ActionContext.ts";
+import { actionContextManager, parseOrdinalOrIndex } from "./ActionContext.ts";
 import { capabilityRegistry } from "./CapabilityRegistry.ts";
 import type {
   CanonicalIntent,
@@ -354,14 +354,18 @@ export class IntentResolver {
       };
     }
 
-    // Ordinal play: "play the first one", "first wala play karo", "play second one", "play #1"
+    // Ordinal / Numeric play: "play the first one", "4th no wala song play karo", "tum 4th no wala sonng play karo", "chautha gaana play karo", "play #4"
     const ordinalPlayMatch =
       lower.match(
-        /\b(?:play\s+(?:the\s+)?(first|1st|second|2nd|third|3rd|pehla|doosra|dusra|teesra|#1|#2|#3)(?:\s+one|\s+result|\s+video|\s+song|\s+wala)?)\b/i,
+        /\b(?:play\s+(?:the\s+)?(\d+(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|pehla|doosra|dusra|teesra|tisra|chautha|paanchwa|panchwa|#\d+)(?:\s+no\.?|\s+number)?(?:\s+one|\s+result|\s+video|\s+song|\s+wala|\s+wali)?)\b/i,
       ) ||
       lower.match(
-        /\b(first|1st|second|2nd|third|3rd|pehla|doosra|dusra|teesra)\s+(?:wala|one|song|video|result)?\s*(?:play\s+karo|play\s+kar\s+do|chalao|chala\s+do|bajao|play)\b/i,
-      );
+        /\b(\d+(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|pehla|doosra|dusra|teesra|tisra|chautha|paanchwa|panchwa|#\d+)\s*(?:no\.?|number)?\s+(?:wala|wali|one|song|gaana|gana|video|result)\s*(?:play\s+karo|play\s+kar\s+do|chalao|chala\s+do|bajao|baja\s+do|lagao|laga\s+do|play)\b/i,
+      ) ||
+      (parseOrdinalOrIndex(lower) !== null &&
+        /\b(play|chalao|chala\s+do|bajao|baja\s+do|lagao|laga\s+do|start)\b/i.test(lower)
+        ? [lower, String(parseOrdinalOrIndex(lower)! + 1)]
+        : null);
 
     if (ordinalPlayMatch) {
       const ordToken = ordinalPlayMatch[1].toLowerCase();
@@ -375,7 +379,7 @@ export class IntentResolver {
         arguments: {
           action: "play",
           selector: ordToken,
-          index: chosen?.index ?? 0,
+          index: chosen?.index ?? (parseOrdinalOrIndex(ordToken) ?? 0),
           videoId: chosen?.videoId || null,
           title: chosen?.title || null,
           url: chosen?.url || null,
@@ -508,7 +512,7 @@ export class IntentResolver {
       const rawTarget = openAppMatch[1].trim();
       const aliasRes = capabilityRegistry.resolveApplicationAlias(rawTarget, ctx);
       const defaultDev: TargetDevice =
-        aliasRes.canonicalApp && ["gmail", "maps"].includes(aliasRes.canonicalApp)
+        aliasRes.isWebsiteApp || (aliasRes.canonicalApp && ["youtube", "gmail", "maps", "calendar"].includes(aliasRes.canonicalApp))
           ? "BROWSER"
           : "DESKTOP";
       const targetDevice = this.resolveTargetDevice(raw, defaultDev, secContext);
@@ -698,7 +702,7 @@ export class IntentResolver {
     // -------------------------------------------------------------------------
     // 4. Media Playback Controls (`browserMediaControl`, `browserClick` on video)
     // -------------------------------------------------------------------------
-    if (toolName === "browserMediaControl") {
+    if (toolName === "browserMediaControl" || toolName === "desktopBrowserMediaControl") {
       const rawAction = String(args.action || "play").toLowerCase().trim();
       const targetDevice = this.resolveTargetDevice(rawAction, "BROWSER", secContext, explicitDevice);
 
@@ -722,13 +726,46 @@ export class IntentResolver {
         capability = "youtube.previous";
       }
 
+      // Check user's latest spoken utterance for ordinal ("3 wala play karo", "9th no pe jo song")
+      const recentUtterance = (args._userUtterance as string) || actionContextManager.getLastUserUtterance(contextId);
+      const utteranceIdx = recentUtterance ? parseOrdinalOrIndex(recentUtterance) : null;
+
+      // Determine requested selector or index
+      let requestedSelector: string | number | undefined = undefined;
+      if (args.songNumber !== undefined && args.songNumber !== null) {
+        const sNum = parseInt(String(args.songNumber), 10);
+        if (!isNaN(sNum) && sNum >= 1) {
+          requestedSelector = sNum - 1; // 1-based songNumber to 0-based index
+        }
+      } else if (args.selector !== undefined && args.selector !== null && String(args.selector).trim()) {
+        requestedSelector = String(args.selector).trim();
+      } else if (typeof args.index === "number" && !isNaN(args.index)) {
+        // If Gemini passed index: 0 but user explicitly said e.g. "3 wala" or "9th no", prefer utteranceIdx!
+        if (args.index === 0 && utteranceIdx !== null && utteranceIdx > 0) {
+          requestedSelector = utteranceIdx;
+        } else {
+          requestedSelector = args.index;
+        }
+      } else if (rawAction === "play" && typeof args.value === "number" && args.value >= 1 && args.value <= 50) {
+        // Fallback when old schema passed song number in value
+        requestedSelector = args.value - 1;
+      } else if (utteranceIdx !== null) {
+        requestedSelector = utteranceIdx;
+      }
+
       // Resolve target media item from context or selector
       let targetItem = ctx.selectedResult || ctx.searchResults[0] || null;
-      if (args.index !== undefined || args.selector !== undefined) {
+      let effectiveIndex: number | undefined = undefined;
+
+      if (requestedSelector !== undefined) {
+        const parsed = parseOrdinalOrIndex(requestedSelector);
+        if (parsed !== null) {
+          effectiveIndex = parsed;
+        }
         targetItem =
           actionContextManager.selectMediaResult(
             contextId,
-            (args.index ?? args.selector) as number | string,
+            requestedSelector,
           ) || targetItem;
       } else if (typeof args.query === "string" && args.query.trim()) {
         const matched = actionContextManager.findMatchingMediaResult(contextId, args.query);
@@ -736,6 +773,28 @@ export class IntentResolver {
           targetItem = matched;
         }
       }
+
+      const finalIndex =
+        effectiveIndex !== undefined
+          ? effectiveIndex
+          : (typeof args.index === "number"
+            ? args.index
+            : (targetItem?.index ?? 0));
+
+      // Ensure targetItem truly matches finalIndex if a specific ordinal/index was requested
+      if (effectiveIndex !== undefined) {
+        if (!targetItem || targetItem.index !== finalIndex) {
+          if (ctx.searchResults && ctx.searchResults[finalIndex]) {
+            targetItem = ctx.searchResults[finalIndex];
+          } else {
+            targetItem = null;
+          }
+        }
+      }
+
+      const resolvedVideoId = (args.videoId as string) || targetItem?.videoId || (effectiveIndex === undefined ? ctx.currentMedia?.videoId : null) || null;
+      const resolvedTitle = (args.title as string) || targetItem?.title || (effectiveIndex === undefined ? ctx.currentMedia?.title : null) || null;
+      const resolvedUrl = (args.url as string) || targetItem?.url || (effectiveIndex === undefined ? ctx.currentMedia?.url : null) || null;
 
       return {
         intent,
@@ -750,10 +809,12 @@ export class IntentResolver {
         arguments: {
           ...args,
           action: rawAction === "skip" ? "next" : rawAction,
-          videoId: (args.videoId as string) || targetItem?.videoId || ctx.currentMedia?.videoId || null,
-          title: (args.title as string) || targetItem?.title || ctx.currentMedia?.title || null,
-          url: (args.url as string) || targetItem?.url || ctx.currentMedia?.url || null,
-          index: typeof args.index === "number" ? args.index : targetItem?.index ?? 0,
+          selector: effectiveIndex !== undefined ? `${finalIndex + 1}th` : (args.selector ? String(args.selector) : undefined),
+          songNumber: finalIndex + 1,
+          videoId: resolvedVideoId,
+          title: resolvedTitle,
+          url: resolvedUrl,
+          index: finalIndex,
         },
         contextId: ctx.contextId,
         conversationState: snapshot,
@@ -761,15 +822,22 @@ export class IntentResolver {
       };
     }
 
-    if (toolName === "browserClick") {
+    if (toolName === "browserClick" || toolName === "desktopBrowserClick") {
       const selector = String(args.selector || "").trim();
       const targetDevice = this.resolveTargetDevice(selector, "BROWSER", secContext, explicitDevice);
 
+      // Check user's latest spoken utterance for ordinal override
+      const recentUtterance = (args._userUtterance as string) || actionContextManager.getLastUserUtterance(contextId);
+      const utteranceIdx = recentUtterance ? parseOrdinalOrIndex(recentUtterance) : null;
+
       const isMediaClick =
         selector.startsWith("video-") ||
+        selector.startsWith("search-result-") ||
         selector === "play-button" ||
         selector === "pause-button" ||
-        /^(first|second|third|0|1|2|#1|#2|#3)$/i.test(selector);
+        parseOrdinalOrIndex(selector) !== null ||
+        (utteranceIdx !== null && (selector === "play-button" || selector === "video-0" || selector === "1st")) ||
+        /^(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|pehla|dusra|teesra|chautha|paanchwa|\d+(?:st|nd|rd|th)?|#\d+|\d+)$/i.test(selector);
 
       if (isMediaClick) {
         if (selector === "pause-button") {
@@ -785,7 +853,16 @@ export class IntentResolver {
           };
         }
 
-        const chosen = actionContextManager.selectMediaResult(contextId, selector);
+        // If selector was generic but user said "3 wala" or "9th no", use utteranceIdx
+        const effectiveSelector =
+          (utteranceIdx !== null && (selector === "play-button" || selector === "video-0" || selector === "1st"))
+            ? utteranceIdx
+            : selector;
+
+        const parsedSel = parseOrdinalOrIndex(effectiveSelector);
+        const chosen = actionContextManager.selectMediaResult(contextId, effectiveSelector);
+        const chosenIdx = parsedSel !== null ? parsedSel : (chosen?.index ?? 0);
+
         return {
           intent: "PLAY_MEDIA",
           targetDevice,
@@ -794,11 +871,11 @@ export class IntentResolver {
           arguments: {
             ...args,
             action: "play",
-            selector,
+            selector: String(effectiveSelector),
             videoId: chosen?.videoId || (selector.startsWith("video-") ? selector.slice(6) : null),
             title: chosen?.title || (args.description as string) || null,
             url: chosen?.url || null,
-            index: chosen?.index ?? 0,
+            index: chosenIdx,
           },
           contextId: ctx.contextId,
           conversationState: actionContextManager.getConversationSnapshot(contextId),

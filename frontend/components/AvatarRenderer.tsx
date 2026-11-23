@@ -14,6 +14,9 @@ export interface AvatarRendererProps {
   avatarMode?: "video" | "vrm";
   isFloatingMode?: boolean;
   enableChromaKey?: boolean;
+  isResearching?: boolean;
+  hasError?: boolean;
+  errorText?: string | null;
 }
 
 export const AvatarRenderer: React.FC<AvatarRendererProps> = ({
@@ -26,6 +29,9 @@ export const AvatarRenderer: React.FC<AvatarRendererProps> = ({
   avatarMode = "video",
   isFloatingMode = false,
   enableChromaKey = false,
+  isResearching = false,
+  hasError = false,
+  errorText = null,
 }) => {
   // Video element refs for MP4 playback
   const idleVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -231,54 +237,82 @@ export const AvatarRenderer: React.FC<AvatarRendererProps> = ({
 
   return (
     <div className="relative w-full h-full flex items-center justify-center select-none">
-      {/* 1. Behind Avatar: Live Voice-Reactive Audio Aura */}
-      <div
-        className={`absolute rounded-full blur-[60px] pointer-events-none bg-gradient-to-tr ${themeStyles.aura} transition-all duration-150`}
-        style={{
-          width: "280px",
-          height: "280px",
-          opacity: characterState === "talking" ? "calc(0.3 + var(--audio-level, 0) * 0.6)" : "0.2",
-          transform: characterState === "talking" ? "scale(calc(1 + var(--audio-level, 0) * 0.35))" : "scale(1)",
-        }}
-      />
+      {/* 1. Idle: Soft blue ambient light */}
+      {(liveState === "disconnected" || (liveState === "listening" && characterState === "idle")) && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
+          <div className="w-80 h-80 sm:w-96 sm:h-96 rounded-full bg-blue-600/15 blur-[65px] transition-all duration-1000 animate-pulse [animation-duration:4s]" />
+        </div>
+      )}
 
-      {/* 2. Thinking State: Holographic Neural Rings */}
+      {/* 2. Listening: Soft cyan pulse */}
+      {liveState === "listening" && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10 animate-fade-in">
+          <div className="w-72 h-72 sm:w-84 sm:h-84 rounded-full border border-[#00F0FF]/35 bg-[#00F0FF]/5 shadow-[0_0_35px_rgba(0,240,255,0.22)] animate-pulse [animation-duration:2s]" />
+          <div className="absolute w-88 h-88 sm:w-[400px] sm:h-[400px] rounded-full border border-[#00F0FF]/20 animate-ping [animation-duration:3s]" />
+        </div>
+      )}
+
+      {/* 3. Thinking: Subtle circular neural animation */}
       {characterState === "thinking" && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10 animate-fade-in">
-          {/* Outer Pulsing Ring */}
+          {/* Outer dashed rotating neural orbit */}
+          <div className="absolute w-72 h-72 sm:w-96 sm:h-96 rounded-full border border-dashed border-[#8B5CF6]/40 animate-spin [animation-duration:18s] opacity-70" />
+          {/* Concentric neural track with spinning nodes */}
+          <div className="absolute w-60 h-60 sm:w-76 sm:h-76 rounded-full border border-indigo-400/30 animate-spin [animation-duration:12s] [animation-direction:reverse]">
+            <div className="absolute -top-1.5 left-1/2 w-3 h-3 rounded-full bg-[#00F0FF] shadow-[0_0_8px_#00F0FF]" />
+            <div className="absolute -bottom-1.5 left-1/2 w-2.5 h-2.5 rounded-full bg-[#8B5CF6] shadow-[0_0_8px_#8B5CF6]" />
+          </div>
+          {/* Center soft neural glow */}
+          <div className="absolute w-44 h-44 rounded-full bg-indigo-500/10 blur-xl animate-pulse" />
+        </div>
+      )}
+
+      {/* 4. Speaking: Light waveform around avatar */}
+      {(characterState === "talking" || liveState === "speaking") && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
           <div
-            className={`absolute w-72 h-72 sm:w-96 sm:h-96 rounded-full border border-dashed ${themeStyles.ring} animate-spin-slow opacity-60`}
+            className="absolute rounded-full border border-[#8B5CF6]/35 transition-all duration-100 shadow-[0_0_20px_rgba(139,92,246,0.2)]"
+            style={{
+              width: "calc(250px + var(--audio-level, 0) * 150px)",
+              height: "calc(250px + var(--audio-level, 0) * 150px)",
+              opacity: "calc(0.4 + var(--audio-level, 0) * 1.2)",
+            }}
           />
-          {/* Inner Resonant Ring */}
           <div
-            className="absolute w-56 h-56 sm:w-72 sm:h-72 rounded-full border border-cyan-400/30 animate-pulse-ring"
+            className="absolute rounded-full border border-[#00F0FF]/30 transition-all duration-150"
+            style={{
+              width: "calc(300px + var(--audio-level, 0) * 190px)",
+              height: "calc(300px + var(--audio-level, 0) * 190px)",
+              opacity: "calc(0.3 + var(--audio-level, 0) * 1.0)",
+            }}
           />
-          {/* Concentric Halo */}
           <div
-            className="absolute w-40 h-40 rounded-full bg-cyan-400/10 blur-xl animate-pulse"
+            className="absolute rounded-full border border-sky-400/20 transition-all duration-200"
+            style={{
+              width: "calc(350px + var(--audio-level, 0) * 220px)",
+              height: "calc(350px + var(--audio-level, 0) * 220px)",
+              opacity: "calc(0.2 + var(--audio-level, 0) * 0.8)",
+            }}
           />
         </div>
       )}
 
-      {/* 3. Talking State: Live Audio Waveform Rings */}
-      {characterState === "talking" && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-          <div
-            className="absolute rounded-full border border-indigo-400/30 transition-all duration-100"
-            style={{
-              width: "calc(240px + var(--audio-level, 0) * 140px)",
-              height: "calc(240px + var(--audio-level, 0) * 140px)",
-              opacity: "calc(var(--audio-level, 0) * 1.5)",
-            }}
-          />
-          <div
-            className="absolute rounded-full border border-cyan-400/20 transition-all duration-150"
-            style={{
-              width: "calc(290px + var(--audio-level, 0) * 180px)",
-              height: "calc(290px + var(--audio-level, 0) * 180px)",
-              opacity: "calc(var(--audio-level, 0) * 1.2)",
-            }}
-          />
+      {/* 5. Error: Small amber/red status indicator */}
+      {hasError && (
+        <div className="absolute top-4 right-4 z-30 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-950/70 border border-amber-500/50 text-amber-300 font-mono text-[10px] shadow-lg animate-fade-in">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+          <span>STATUS: STANDBY</span>
+        </div>
+      )}
+
+      {/* 6. Researching: Tiny orbiting particles */}
+      {isResearching && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20 animate-fade-in">
+          <div className="w-80 h-80 sm:w-96 sm:h-96 rounded-full border border-dashed border-[#00F0FF]/25 animate-spin [animation-duration:8s] relative">
+            <div className="absolute -top-1.5 left-1/2 w-2.5 h-2.5 rounded-full bg-[#00F0FF] shadow-[0_0_10px_#00F0FF]" />
+            <div className="absolute -bottom-1.5 left-1/2 w-2 h-2 rounded-full bg-[#8B5CF6] shadow-[0_0_10px_#8B5CF6]" />
+            <div className="absolute top-1/2 -right-1.5 w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_10px_#10B981]" />
+          </div>
         </div>
       )}
 

@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import { MyraAudioSession, LiveState } from "../lib/audio";
 import { AvatarRenderer } from "./AvatarRenderer";
 
@@ -21,6 +21,9 @@ interface MyraaCoreVisualizerProps {
   themeColor: string; // Violet, crimson, emerald, celestial, gold, rose, charcoal
   activeEmotion?: MyraaEmotion;
   characterState: "idle" | "thinking" | "talking";
+  isResearching?: boolean;
+  hasError?: boolean;
+  errorText?: string | null;
 }
 
 export const MyraaCoreVisualizer: React.FC<MyraaCoreVisualizerProps> = ({
@@ -28,7 +31,10 @@ export const MyraaCoreVisualizer: React.FC<MyraaCoreVisualizerProps> = ({
   state,
   themeColor,
   activeEmotion = "idle",
-  characterState
+  characterState,
+  isResearching = false,
+  hasError = false,
+  errorText = null,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
@@ -95,15 +101,15 @@ export const MyraaCoreVisualizer: React.FC<MyraaCoreVisualizerProps> = ({
     let width = canvas.width = canvas.offsetWidth;
     let height = canvas.height = canvas.offsetHeight;
 
-    // Generate responsive background floating stars
+    // Generate very slow, subtle background floating stardust particles (Item 15)
     const generateParticles = () => {
-      const count = Math.min(60, Math.floor(width / 24));
+      const count = Math.min(18, Math.floor(width / 60));
       particlesRef.current = Array.from({ length: count }, () => ({
         x: Math.random() * width,
         y: Math.random() * height + height * 0.1,
-        speed: Math.random() * 0.35 + 0.12,
-        size: Math.random() * 1.5 + 0.5,
-        opacity: Math.random() * 0.6 + 0.2,
+        speed: Math.random() * 0.08 + 0.02,
+        size: Math.random() * 1.2 + 0.4,
+        opacity: Math.random() * 0.22 + 0.05,
       }));
     };
 
@@ -242,18 +248,44 @@ export const MyraaCoreVisualizer: React.FC<MyraaCoreVisualizerProps> = ({
     };
   }, [session, state, themeColor, activeEmotion, characterState]);
 
+  // Dynamic presence aura based on voice and character state
+  const getPresenceAura = () => {
+    if (state === "speaking") {
+      return {
+        outer: "bg-purple-600/25",
+        gradient: "from-purple-600/35 to-violet-600/10",
+      };
+    }
+    if (state === "listening") {
+      if (characterState === "thinking") {
+        return {
+          outer: "bg-blue-600/25",
+          gradient: "from-blue-600/30 to-sky-600/10",
+        };
+      }
+      return {
+        outer: "bg-cyan-500/25",
+        gradient: "from-cyan-500/30 to-blue-600/10",
+      };
+    }
+    if (state === "connecting") {
+      return {
+        outer: "bg-amber-500/20",
+        gradient: "from-amber-500/25 to-yellow-600/10",
+      };
+    }
+    return {
+      outer: "bg-indigo-600/15",
+      gradient: "from-indigo-600/20 to-cyan-600/05",
+    };
+  };
+
   return (
     <div className="relative w-full h-full flex items-center justify-center overflow-hidden">
       {/* 1. Behind Overlay / Atmospheric Backlight Glow (Z-index 0) */}
       <div className="absolute inset-0 bg-transparent flex items-center justify-center pointer-events-none z-0">
         <div className={`w-[500px] h-[500px] rounded-full blur-[140px] opacity-25 bg-gradient-to-tr transition-all duration-1000 ${
-          themeColor === "violet" ? "from-purple-600/30 to-fuchsia-600/5" :
-          themeColor === "crimson" ? "from-rose-600/30 to-orange-600/5" :
-          themeColor === "emerald" ? "from-emerald-600/30 to-teal-600/5" :
-          themeColor === "celestial" ? "from-sky-600/30 to-cyan-600/5" :
-          themeColor === "gold" ? "from-amber-600/30 to-yellow-600/5" :
-          themeColor === "rose" ? "from-rose-600/30 to-pink-600/5" :
-          "from-indigo-600/30 to-cyan-600/5"
+          getPresenceAura().gradient
         }`} />
       </div>
 
@@ -265,9 +297,11 @@ export const MyraaCoreVisualizer: React.FC<MyraaCoreVisualizerProps> = ({
       >
         <div className="relative w-full max-w-4xl aspect-[16/9] flex items-center justify-center scale-[0.95] sm:scale-110 select-none pointer-events-none md:max-h-[72vh] max-h-[62vh]">
           {/* Subtle Outer Ambient Shadow Cast */}
-          <div className="absolute inset-0 rounded-[2.5rem] blur-[30px] opacity-20 bg-cyan-600/15 pointer-events-none mix-blend-screen" />
+          <div className={`absolute inset-0 rounded-[2.5rem] blur-[30px] opacity-20 pointer-events-none mix-blend-screen transition-all duration-700 ${
+            getPresenceAura().outer
+          }`} />
 
-          {/* Modular Avatar Renderer (Default: MP4 Video) */}
+          {/* Modular Avatar Renderer (Living Interface States) */}
           <AvatarRenderer
             characterState={characterState}
             liveState={state}
@@ -276,6 +310,9 @@ export const MyraaCoreVisualizer: React.FC<MyraaCoreVisualizerProps> = ({
             session={session}
             mouseNorm={mouseRef.current}
             avatarMode="video"
+            isResearching={isResearching}
+            hasError={hasError}
+            errorText={errorText}
           />
 
           {/* Faint cybernetic visual edge grid guard */}

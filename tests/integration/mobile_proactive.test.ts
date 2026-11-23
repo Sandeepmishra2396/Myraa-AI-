@@ -43,6 +43,7 @@ import { sharedMemoryManager } from "../../backend/memory/SharedMemoryManager.ts
 import { crossDeviceHandoffManager } from "../../backend/handoff/CrossDeviceHandoffManager.ts";
 import { notificationManager } from "../../backend/companion/NotificationManager.ts";
 import { remoteSessionManager } from "../../backend/remote/RemoteSessionManager.ts";
+import { governingMemoryGate } from "../../backend/companion/GoverningMemoryGate.ts";
 import type { SecurityContext } from "../../backend/security/SecurityTypes.ts";
 
 const mockSecContext: SecurityContext = {
@@ -56,6 +57,7 @@ const mockSecContext: SecurityContext = {
 describe("Phase 26 — Mobile Proactive Companion", () => {
   beforeEach(async () => {
     mobileProactiveManager.clearAll();
+    governingMemoryGate.clearAllRequests();
     await emergencyStopCoordinator.reset("test_operator");
     securityPolicyEngine.resetForTesting();
     await sharedMemoryManager.clearCaches();
@@ -74,6 +76,7 @@ describe("Phase 26 — Mobile Proactive Companion", () => {
 
   afterEach(async () => {
     mobileProactiveManager.clearAll();
+    governingMemoryGate.clearAllRequests();
     await emergencyStopCoordinator.reset("test_operator");
     securityPolicyEngine.resetForTesting();
   });
@@ -609,7 +612,23 @@ describe("Phase 26 — Mobile Proactive Companion", () => {
     expect(memory.id).toBeDefined();
     expect(memory.text).toBe("Phase 26 regression test memory item");
 
-    const retrieved = await sharedMemoryManager.getMemory(memory.id);
+    // Approve through GoverningMemoryGate if pending
+    let targetId = memory.id;
+    const pending = governingMemoryGate.listPendingRequests();
+    for (const req of pending) {
+      const full = governingMemoryGate.getRequest(req.id);
+      if (full) {
+        const saved = await governingMemoryGate.approveWrite(full.id, full.oneTimeToken, {
+          actorId: full.userId || "desktop_primary",
+          role: "admin",
+          ipAddress: "127.0.0.1",
+          isStepUpAuthenticated: true,
+        });
+        targetId = saved.id;
+      }
+    }
+
+    const retrieved = await sharedMemoryManager.getMemory(targetId);
     expect(retrieved?.text).toBe("Phase 26 regression test memory item");
   });
 

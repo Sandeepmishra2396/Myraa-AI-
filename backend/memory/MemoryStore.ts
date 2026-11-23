@@ -15,8 +15,11 @@
  */
 
 import fs from "fs/promises";
+import crypto from "crypto";
 import path from "path";
 import { dataFile } from "../server_paths.ts";
+import { assertActivePersistenceSession } from "./MemoryPersistenceContext.ts";
+import { securityAuditLogger } from "../security/SecurityAuditLogger.ts";
 import type { Memory } from "./MemoryTypes.ts";
 import type {
   EnhancedMemory,
@@ -27,6 +30,9 @@ import type {
 } from "./MemoryTypes.ts";
 
 const MEMORY_FILE = dataFile("memories.json");
+
+// Module-level serialized write queue to prevent concurrent rename/write races (FINDING-AUD-09)
+let _saveQueue: Promise<void> = Promise.resolve();
 
 // ---------------------------------------------------------------------------
 // Default values for missing fields (migration from Phase 1 records)
@@ -44,8 +50,8 @@ const DEFAULTS = {
  * Existing fields are preserved as-is.
  */
 export function migrateRecord(raw: Memory): EnhancedMemory {
-  const r = raw as Partial<EnhancedMemory>;
-  return {
+  const r = raw as Partial<EnhancedMemory> & { ownerId?: string };
+  const record: EnhancedMemory = {
     id: raw.id,
     category: raw.category,
     text: raw.text,
@@ -64,6 +70,10 @@ export function migrateRecord(raw: Memory): EnhancedMemory {
     lastSyncedAt: r.lastSyncedAt,
     clientMutationId: r.clientMutationId,
   };
+  if (r.ownerId) {
+    (record as any).ownerId = r.ownerId;
+  }
+  return record;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,24 +122,55 @@ export class MemoryStore {
    * Persist the full memory list atomically.
    * Writes to a .tmp file then renames so the JSON is never half-written.
    * Invalidates the in-process cache after each save.
+   *
+   * SEC-P1-02: Runtime authorization boundary. Direct calls outside an
+   * authorized persistenceStorageContext throw FORBIDDEN_STORAGE_WRITE.
    */
   async save(memories: EnhancedMemory[]): Promise<void> {
-    const tmpFile = MEMORY_FILE + ".tmp";
-    try {
-      await fs.writeFile(tmpFile, JSON.stringify(memories, null, 2), "utf-8");
-      await fs.rename(tmpFile, MEMORY_FILE);
-      _cache = memories;
-      _cacheWriteTime = Date.now();
-      console.log(`[MemoryStore] Saved ${memories.length} memories.`);
-    } catch (err) {
-      console.error("[MemoryStore] Error saving memories:", err);
-      // Clean up temp file if rename failed
+    // Assert active verified persistence session synchronously in caller's ALS context
+    const session = assertActivePersistenceSession();
+
+    const payload = JSON.stringify(memories, null, 2);
+    const runWrite = async (): Promise<void> => {
+      const uniqueSuffix = `${process.pid}.${Date.now()}.${crypto.randomBytes(8).toString("hex")}`;
+      const tmpFile = `${MEMORY_FILE}.${uniqueSuffix}.tmp`;
       try {
-        await fs.unlink(tmpFile);
-      } catch {
-        /* ignore cleanup error */
+        await fs.mkdir(path.dirname(MEMORY_FILE), { recursive: true });
+        await fs.writeFile(tmpFile, payload, "utf-8");
+        try {
+          await fs.rename(tmpFile, MEMORY_FILE);
+        } catch (renameErr: any) {
+          // Windows transient EPERM/EBUSY lock fallback: copy + unlink temp
+          if (renameErr?.code === "EPERM" || renameErr?.code === "EBUSY" || renameErr?.code === "EACCES") {
+            await fs.copyFile(tmpFile, MEMORY_FILE);
+            try {
+              await fs.unlink(tmpFile);
+            } catch {
+              /* ignore cleanup error */
+            }
+          } else {
+            throw renameErr;
+          }
+        }
+        _cache = memories.map((m) => ({ ...m }));
+        _cacheWriteTime = Date.now();
+        console.log(`[MemoryStore] Saved ${memories.length} memories (Proof: ${session.proofId}).`);
+      } catch (err) {
+        console.error("[MemoryStore] Error saving memories:", err);
+        // Clean up unique temp file if write/rename failed
+        try {
+          await fs.unlink(tmpFile);
+        } catch {
+          /* ignore cleanup error */
+        }
+        throw err;
       }
-    }
+    };
+
+    // Serialize disk writes so concurrent saves never race or corrupt memories.json
+    const next = _saveQueue.then(runWrite, runWrite);
+    _saveQueue = next.catch(() => {});
+    return next;
   }
 
   /** Forcibly clear the in-process cache (useful in tests). */

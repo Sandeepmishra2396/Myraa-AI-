@@ -31,6 +31,8 @@ import {
   UNTRUSTED_STUDY_RESEARCH_START,
   UNTRUSTED_STUDY_RESEARCH_END,
 } from "../../backend/study/StudyTypes.ts";
+import { identityAuthManager } from "../../backend/security/IdentityAuthManager.ts";
+import type { SecurityContext } from "../../backend/security/SecurityTypes.ts";
 
 describe("Phase 9 — AI Study Companion: Stage 3 — AI Companion", () => {
   const workspaceRoot = path.resolve(process.cwd());
@@ -70,6 +72,7 @@ Ans: eta = 1 - (Tc / Th) = 1 - (300/500) = 40%.
   });
 
   afterEach(async () => {
+    identityAuthManager.resetForTesting();
     studySessionManager.closeDocument();
     courseProfileManager.clear();
     await emergencyStopCoordinator.reset("test-operator");
@@ -557,7 +560,7 @@ Question 3: A particle moves with velocity v. Find momentum. (Marks: 4)
       expect(toolNames).toContain("getAcademicProgress");
     });
 
-    it("dispatches configureCourseProfile through ToolOrchestrator", async () => {
+    it("dispatches configureCourseProfile through ToolOrchestrator with authenticated security context", async () => {
       const orchestrator = new ToolOrchestrator();
       let sentPayload: any = null;
       let broadcastEvent: any = null;
@@ -566,6 +569,22 @@ Question 3: A particle moves with velocity v. Find momentum. (Marks: 4)
         sendToolResponse: (payload: any) => {
           sentPayload = payload;
         },
+      };
+
+      const { session } = identityAuthManager.createSession({
+        identityId: "test-student-operator",
+        role: "standard",
+        deviceId: "desktop_local",
+        ipAddress: "127.0.0.1",
+      });
+
+      const testContext: SecurityContext = {
+        sessionId: session.sessionId,
+        identityId: session.identityId,
+        role: session.role,
+        deviceId: session.deviceId,
+        ipAddress: session.ipAddress,
+        isLocal: true,
       };
 
       await orchestrator.dispatch(
@@ -583,6 +602,7 @@ Question 3: A particle moves with velocity v. Find momentum. (Marks: 4)
           broadcastEvent = evt;
         },
         "mock-api-key",
+        testContext,
       );
 
       expect(sentPayload).toBeDefined();
@@ -591,6 +611,36 @@ Question 3: A particle moves with velocity v. Find momentum. (Marks: 4)
       expect(resp.profile.courseName).toBe("B.Tech Electrical Engineering");
       expect(broadcastEvent.type).toBe("study_event");
       expect(broadcastEvent.event).toBe("course_profile_configured");
+    });
+
+    it("rejects configureCourseProfile when security context is missing", async () => {
+      const orchestrator = new ToolOrchestrator();
+      let sentPayload: any = null;
+
+      const mockSession = {
+        sendToolResponse: (payload: any) => {
+          sentPayload = payload;
+        },
+      };
+
+      await orchestrator.dispatch(
+        {
+          name: "configureCourseProfile",
+          args: {
+            courseName: "B.Tech Electrical Engineering",
+          },
+          id: "call-profile-unauth",
+        },
+        mockSession as any,
+        () => {},
+        "mock-api-key",
+        // Deliberately omitted security context
+      );
+
+      expect(sentPayload).toBeDefined();
+      const resp = sentPayload.functionResponses[0].response.output;
+      expect(resp.error).toBe("MISSING_SECURITY_CONTEXT");
+      expect(resp.blocked).toBe(true);
     });
 
     it("dispatches getAcademicProgress through ToolOrchestrator", async () => {

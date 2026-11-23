@@ -16,20 +16,42 @@
 // Security: Localhost-only guard for sensitive endpoints.
 // ---------------------------------------------------------------------------
 export function requireLocalhost(req: any, res: any, next: () => void): void {
-  const forwardedIp = req.headers?.["x-forwarded-for"];
-  const ip = forwardedIp
-    ? String(forwardedIp).split(",")[0].trim()
-    : req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || "";
-  const isLocal =
-    ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1" || ip === "localhost";
-  if (!isLocal) {
-    res
-      .status(403)
-      .json({
-        error: "Forbidden: This endpoint is only accessible from localhost.",
-      });
+  const isLoopback = (ip: string): boolean => {
+    if (!ip || typeof ip !== "string") return false;
+    const clean = ip.trim().toLowerCase();
+    return (
+      clean === "127.0.0.1" ||
+      clean === "::1" ||
+      clean === "::ffff:127.0.0.1" ||
+      clean === "localhost"
+    );
+  };
+
+  // 1. The physical connection socket MUST be loopback
+  const socketIp = req.socket?.remoteAddress || req.connection?.remoteAddress || req.ip || "";
+  if (!isLoopback(socketIp)) {
+    res.status(403).json({
+      error: "Forbidden: This endpoint is only accessible from localhost.",
+    });
     return;
   }
+
+  // 2. If X-Forwarded-For is present (e.g. from local reverse proxy), all forwarded hops must also be loopback
+  const forwardedHeader = req.headers?.["x-forwarded-for"];
+  if (forwardedHeader) {
+    const forwardedIps = String(forwardedHeader)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const hasExternalHop = forwardedIps.some((fIp) => !isLoopback(fIp));
+    if (hasExternalHop) {
+      res.status(403).json({
+        error: "Forbidden: Proxied request originates from a non-localhost client.",
+      });
+      return;
+    }
+  }
+
   next();
 }
 

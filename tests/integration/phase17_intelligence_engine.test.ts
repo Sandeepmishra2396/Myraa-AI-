@@ -547,8 +547,18 @@ describe("Phase 17 — MYRAA Intelligence 2.0", () => {
   describe("13. REST Endpoints Integration", () => {
     let server: http.Server | null = null;
     let port = 0;
+    let authToken = "";
 
     beforeEach(async () => {
+      const { identityAuthManager } = await import("../../backend/security/IdentityAuthManager.ts");
+      const { tokens } = identityAuthManager.createSession({
+        deviceId: "operator_pc",
+        identityId: "operator_alex",
+        role: "admin",
+        ipAddress: "127.0.0.1",
+      });
+      authToken = tokens.accessToken;
+
       const app = createHttpApp();
       server = http.createServer(app);
       await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
@@ -556,6 +566,9 @@ describe("Phase 17 — MYRAA Intelligence 2.0", () => {
     });
 
     afterEach(async () => {
+      const { identityAuthManager } = await import("../../backend/security/IdentityAuthManager.ts");
+      identityAuthManager.resetForTesting();
+      authToken = "";
       if (server) {
         await new Promise<void>((resolve) => server!.close(() => resolve()));
         server = null;
@@ -580,7 +593,7 @@ describe("Phase 17 — MYRAA Intelligence 2.0", () => {
     it("updates and retrieves context via POST /api/intelligence/context", async () => {
       const res = await fetch(`http://127.0.0.1:${port}/api/intelligence/context`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({
           contextId: "ctx_http_update",
           file: "D:/SORA AI/Sora AI/src/server.ts",

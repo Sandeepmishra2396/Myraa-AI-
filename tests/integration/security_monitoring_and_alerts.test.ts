@@ -10,7 +10,7 @@
  *   6. Rest API Endpoints: Alerts, Events, Status, and Mode Management
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll } from "vitest";
 import http from "http";
 import {
   securityEventStream,
@@ -38,6 +38,22 @@ describe("Phase 10C — MYRAA Security Monitoring & Real-Time Alert System", () 
 
   afterEach(() => {
     securityAlertManager.clearAlerts();
+    securityAlertManager.resetForTesting();
+    securityPolicyEngine.resetForTesting();
+    securityEventStream.resetForTesting();
+    securityMonitor.resetForTesting();
+    identityAuthManager.resetForTesting();
+    securityAuditLogger.resetForTesting();
+  });
+
+  afterAll(() => {
+    securityAlertManager.clearAlerts();
+    securityAlertManager.resetForTesting();
+    securityPolicyEngine.resetForTesting();
+    securityEventStream.resetForTesting();
+    securityMonitor.resetForTesting();
+    identityAuthManager.resetForTesting();
+    securityAuditLogger.resetForTesting();
   });
 
   // ===========================================================================

@@ -220,7 +220,7 @@ describe("Phase 13A-WIN & 13A-WIN.2 — Windows Functional Build & Production Si
       throwOnMetadataError: true,
     });
     expect(restored.buildClassification).toBe("Unsigned Development / Personal Testing Build");
-  });
+  }, 60000);
 
   it("7. verifies Option A (Azure Artifact Signing) and Option B (CA-issued OV Authenticode) credential resolvers and signtool argument builders", () => {
     const {

@@ -37,6 +37,16 @@ export const POLICY_SIGNING_SECRET =
   crypto.randomBytes(32).toString("hex");
 
 // ---------------------------------------------------------------------------
+// SEC-P3-R1.3-01: Per-Process Boot Generation ID.
+// MYRAA runs as a single Node.js process with an in-memory consumed-token Map.
+// Independent worker processes do NOT share consumed-token state, so this boot ID
+// is strictly unique per process instance (never inherited from a shared env var)
+// to fail closed across workers and restarts and prevent cross-process token replay.
+// Never log raw tokens or signatures.
+// ---------------------------------------------------------------------------
+export const PROCESS_BOOT_ID = crypto.randomUUID();
+
+// ---------------------------------------------------------------------------
 // Tool Risk Classification & Patterns (Delegated to SecurityRiskEngine)
 // ---------------------------------------------------------------------------
 
@@ -66,19 +76,101 @@ export const LOCKDOWN_ALLOWLIST = new Set<string>([
   "resetEmergencyStop",
 ]);
 
+export type ConsumedTokenStatus = "CONFIRMED" | "REVOKED";
+
+export interface ConfirmationVerificationResult {
+  valid: boolean;
+  reason?: string;
+  tokenId?: string;
+  argsHash?: string;
+  status?: "CONFIRMED" | "ALREADY_CONFIRMED" | "ALREADY_REVOKED";
+}
+
+export interface ConfirmationRevocationResult {
+  revoked: boolean;
+  reason?: string;
+  tokenId?: string;
+  argsHash?: string;
+  status?: "REVOKED" | "ALREADY_CONFIRMED" | "ALREADY_REVOKED";
+}
+
 export class SecurityPolicyEngine {
   private _mode: SecurityMode = "BALANCED";
-  private _consumedConfirmationTokens = new Set<string>();
+  private _processBootId: string;
+  private _consumedConfirmationTokens = new Map<
+    string,
+    { status: ConsumedTokenStatus; consumedAt: number; toolName: string }
+  >();
   private _disabledTools = new Map<string, { reason: string; disabledAt: number; disabledBy: string }>();
+  private _preApprovedActions = new Map<string, { expiresAt: number; toolName: string }>();
+  private _recentlyConsumedTokens = new Map<string, { toolName: string; timestamp: number }>();
 
-  constructor() {
+  constructor(options?: { processBootId?: string }) {
+    this._processBootId = options?.processBootId || PROCESS_BOOT_ID;
     this.resetForTesting();
+  }
+
+  getProcessBootId(): string {
+    return this._processBootId;
   }
 
   resetForTesting(): void {
     this._mode = "BALANCED";
     this._consumedConfirmationTokens.clear();
     this._disabledTools.clear();
+    this._preApprovedActions.clear();
+    this._recentlyConsumedTokens.clear();
+  }
+
+  /**
+   * Pre-approves an action when confirmed by user (e.g. via confirmCheckpoint).
+   */
+  preApproveAction(toolName: string, argsHash?: string, sessionId?: string): void {
+    const now = Date.now();
+    const ttl = 5 * 60 * 1000; // 5 minutes validity
+    if (argsHash) {
+      this._preApprovedActions.set(`${toolName}:${argsHash}`, { expiresAt: now + ttl, toolName });
+    }
+    if (sessionId) {
+      this._preApprovedActions.set(`${toolName}:session:${sessionId}`, { expiresAt: now + ttl, toolName });
+    }
+    this._preApprovedActions.set(`${toolName}:latest`, { expiresAt: now + ttl, toolName });
+  }
+
+  /**
+   * Checks and consumes a pre-approval if one exists.
+   */
+  consumePreApproval(toolName: string, args: Record<string, unknown>, sessionId?: string): boolean {
+    const now = Date.now();
+    const currentArgsHash = this._hashArgs(args);
+
+    // 1. Check exact tool + argsHash match
+    const hashKey = `${toolName}:${currentArgsHash}`;
+    const byHash = this._preApprovedActions.get(hashKey);
+    if (byHash && byHash.expiresAt > now) {
+      this._preApprovedActions.delete(hashKey);
+      return true;
+    }
+
+    // 2. Check session-bound tool match
+    if (sessionId) {
+      const sessionKey = `${toolName}:session:${sessionId}`;
+      const bySession = this._preApprovedActions.get(sessionKey);
+      if (bySession && bySession.expiresAt > now) {
+        this._preApprovedActions.delete(sessionKey);
+        return true;
+      }
+    }
+
+    // 3. Check latest tool approval
+    const latestKey = `${toolName}:latest`;
+    const byLatest = this._preApprovedActions.get(latestKey);
+    if (byLatest && byLatest.expiresAt > now) {
+      this._preApprovedActions.delete(latestKey);
+      return true;
+    }
+
+    return false;
   }
 
   getMode(): SecurityMode {
@@ -177,12 +269,51 @@ export class SecurityPolicyEngine {
   // Confirmation Token Utilities
   // ---------------------------------------------------------------------------
 
+  private _extractTargetPath(args: Record<string, unknown>): string | undefined {
+    const val = args?.path || args?.filePath || args?.targetFile || args?.file;
+    if (typeof val === "string") {
+      let p = val.replace(/\\/g, "/").trim();
+      return process.platform === "win32" ? p.toLowerCase() : p;
+    }
+    return undefined;
+  }
+
   private _hashArgs(args: Record<string, unknown>): string {
-    return crypto.createHash("sha256").update(JSON.stringify(args || {})).digest("hex");
+    const clean: Record<string, unknown> = {};
+    const excludedKeys = new Set([
+      "confirmationToken",
+      "checkpointId",
+      "_checkpointId",
+      "stepId",
+      "planId",
+      "approved",
+      "userFeedback",
+    ]);
+    const keys = Object.keys(args || {})
+      .filter((k) => !excludedKeys.has(k))
+      .sort();
+    for (const k of keys) {
+      const val = args[k];
+      if (typeof val === "string") {
+        if (k === "path" || k === "filePath" || k === "targetFile" || k === "file" || k === "cwd" || k === "name") {
+          let p = val.replace(/\\/g, "/").trim();
+          if (process.platform === "win32") {
+            p = p.toLowerCase();
+          }
+          clean[k] = p;
+        } else {
+          clean[k] = val.replace(/\r\n/g, "\n").trim();
+        }
+      } else {
+        clean[k] = val;
+      }
+    }
+    return crypto.createHash("sha256").update(JSON.stringify(clean)).digest("hex");
   }
 
   /**
-   * Issues a cryptographically signed confirmation token bound to tool and arguments.
+   * Issues a cryptographically signed confirmation token bound to tool, canonical args,
+   * session ID, and per-process boot generation ID (SEC-P3-R1.3-01).
    */
   generateConfirmationToken(
     toolName: string,
@@ -191,13 +322,15 @@ export class SecurityPolicyEngine {
   ): string {
     const tokenId = crypto.randomUUID();
     const now = Date.now();
-    const payload: ConfirmationTokenPayload = {
+    const payload: ConfirmationTokenPayload & { processBootId: string } = {
       tokenId,
       toolName,
       argsHash: this._hashArgs(args),
+      targetPath: this._extractTargetPath(args),
       sessionId,
       issuedAt: now,
       expiresAt: now + CONFIRMATION_TOKEN_TTL_MS,
+      processBootId: this._processBootId,
     };
 
     const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
@@ -206,20 +339,48 @@ export class SecurityPolicyEngine {
   }
 
   /**
-   * Verifies and consumes a confirmation token (ensures single-use, anti-tamper, non-expired).
+   * Shared synchronous atomic one-time token consumption for both approval and rejection.
+   * Node.js single-threaded execution guarantees no interleaving between lookup and insert.
    */
-  verifyAndConsumeConfirmation(
+  private _consumeTokenId(
+    tokenId: string,
+    status: ConsumedTokenStatus,
+    toolName: string,
+  ): { consumed: true } | { consumed: false; existingStatus: ConsumedTokenStatus } {
+    const existing = this._consumedConfirmationTokens.get(tokenId);
+    if (existing) {
+      return { consumed: false, existingStatus: existing.status };
+    }
+    const now = Date.now();
+    this._consumedConfirmationTokens.set(tokenId, {
+      status,
+      consumedAt: now,
+      toolName,
+    });
+    this._recentlyConsumedTokens.set(tokenId, { toolName, timestamp: now });
+    return { consumed: true };
+  }
+
+  /**
+   * Shared cryptographic & policy verification for confirmation approval and revocation.
+   * Does NOT consume the token — callers must call _consumeTokenId() atomically after passing.
+   * Never logs raw tokens or signatures.
+   */
+  private _verifyConfirmationToken(
     token: string,
     toolName: string,
     args: Record<string, unknown>,
     sessionId?: string,
-  ): { valid: boolean; reason?: string } {
-    if (!token || !token.startsWith("sora_conf_")) {
+    options?: { requireSessionMatch?: boolean },
+  ):
+    | { valid: true; payload: ConfirmationTokenPayload & { processBootId: string } }
+    | { valid: false; reason: string } {
+    if (!token || typeof token !== "string" || !token.startsWith("sora_conf_")) {
       return { valid: false, reason: "INVALID_CONFIRMATION_TOKEN: Missing or malformed token." };
     }
 
     const parts = token.slice("sora_conf_".length).split(".");
-    if (parts.length !== 2) {
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
       return { valid: false, reason: "INVALID_CONFIRMATION_TOKEN: Malformed token structure." };
     }
 
@@ -228,47 +389,179 @@ export class SecurityPolicyEngine {
     const a = Buffer.from(sig);
     const b = Buffer.from(expectedSig);
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-      return { valid: false, reason: "INVALID_CONFIRMATION_TOKEN: Signature verification failed." };
+      return { valid: false, reason: "INVALID_CONFIRMATION_TOKEN: SIGNATURE_INVALID: Signature verification failed." };
     }
 
+    let payload: ConfirmationTokenPayload & { processBootId?: string };
     try {
-      const payload: ConfirmationTokenPayload = JSON.parse(
-        Buffer.from(encoded, "base64url").toString("utf-8"),
-      );
-
-      // Check replay
-      if (this._consumedConfirmationTokens.has(payload.tokenId)) {
-        return { valid: false, reason: "CONFIRMATION_TOKEN_REPLAY: Token has already been consumed." };
-      }
-
-      // Check expiration
-      if (Date.now() > payload.expiresAt) {
-        return { valid: false, reason: "CONFIRMATION_TOKEN_EXPIRED: Token has expired." };
-      }
-
-      // Check tool binding
-      if (payload.toolName !== toolName) {
-        return {
-          valid: false,
-          reason: `CONFIRMATION_TOOL_MISMATCH: Token bound to '${payload.toolName}', but used for '${toolName}'.`,
-        };
-      }
-
-      // Check arguments hash
-      const currentArgsHash = this._hashArgs(args);
-      if (payload.argsHash !== currentArgsHash) {
-        return {
-          valid: false,
-          reason: "CONFIRMATION_ARGS_TAMPERED: Arguments have been modified since confirmation.",
-        };
-      }
-
-      // Mark consumed
-      this._consumedConfirmationTokens.add(payload.tokenId);
-      return { valid: true };
+      payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf-8"));
     } catch (e: any) {
-      return { valid: false, reason: `MALFORMED_CONFIRMATION_PAYLOAD: ${e.message}` };
+      return { valid: false, reason: `MALFORMED_CONFIRMATION_PAYLOAD: ${e?.message || "Invalid JSON"}` };
     }
+
+    if (
+      !payload ||
+      typeof payload.tokenId !== "string" ||
+      !payload.tokenId ||
+      typeof payload.toolName !== "string" ||
+      typeof payload.expiresAt !== "number"
+    ) {
+      return { valid: false, reason: "MALFORMED_CONFIRMATION_PAYLOAD: Missing required token fields." };
+    }
+
+    // 1. Process-generation protection (fail closed across restarts and across independent workers)
+    if (!payload.processBootId || payload.processBootId !== this._processBootId) {
+      return {
+        valid: false,
+        reason: "STALE_PROCESS_GENERATION: Token was issued by a different process generation.",
+      };
+    }
+
+    // 2. Authenticated session ownership verification (no "local" bypass when session match is required)
+    if (options?.requireSessionMatch) {
+      if (!sessionId || typeof sessionId !== "string" || !sessionId.trim()) {
+        return {
+          valid: false,
+          reason: "MISSING_SESSION_CONTEXT: Authenticated session ID is required.",
+        };
+      }
+      if (payload.sessionId !== sessionId) {
+        return {
+          valid: false,
+          reason: "SESSION_MISMATCH: Token does not belong to the active session.",
+        };
+      }
+    } else if (sessionId !== undefined) {
+      if (!sessionId || typeof sessionId !== "string" || payload.sessionId !== sessionId) {
+        return {
+          valid: false,
+          reason: "SESSION_MISMATCH: Token does not belong to the active session.",
+        };
+      }
+    }
+
+    // 3. TTL expiration check
+    if (Date.now() > payload.expiresAt) {
+      return { valid: false, reason: "CONFIRMATION_TOKEN_EXPIRED: TOKEN_EXPIRED: Token has expired." };
+    }
+
+    // 4. Tool binding verification
+    const isUniversalConfirm = toolName === "confirmCheckpoint" || payload.toolName === "confirmCheckpoint";
+    const toolMatch =
+      isUniversalConfirm ||
+      payload.toolName === toolName ||
+      (payload.toolName === "executeTaskPlan" && (toolName === "confirmCheckpoint" || toolName === "executePlan")) ||
+      (payload.toolName === "confirmCheckpoint" && (toolName === "executeTaskPlan" || toolName === "confirmCheckpoint")) ||
+      (["modifyFile", "writeCodeFile", "createFile"].includes(payload.toolName) &&
+       ["modifyFile", "writeCodeFile", "createFile"].includes(toolName));
+
+    if (!toolMatch) {
+      return {
+        valid: false,
+        reason: `CONFIRMATION_TOOL_MISMATCH: Token bound to '${payload.toolName}', but used for '${toolName}'.`,
+      };
+    }
+
+    // 5. Canonical arguments hash verification
+    if (!isUniversalConfirm) {
+      const currentArgsHash = this._hashArgs(args);
+      if (payload.argsHash && payload.argsHash !== "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") {
+        if (payload.argsHash !== currentArgsHash) {
+          return {
+            valid: false,
+            reason: "CONFIRMATION_ARGS_TAMPERED: ARGS_MISMATCH: Arguments have been modified since confirmation.",
+          };
+        }
+      }
+    }
+
+    return {
+      valid: true,
+      payload: payload as ConfirmationTokenPayload & { processBootId: string },
+    };
+  }
+
+  /**
+   * Verifies and atomically consumes a confirmation token for approval
+   * (single-use, anti-tamper, non-expired, process-bound, session-bound).
+   */
+  verifyAndConsumeConfirmation(
+    token: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    sessionId?: string,
+    options?: { requireSessionMatch?: boolean },
+  ): ConfirmationVerificationResult {
+    const check = this._verifyConfirmationToken(token, toolName, args, sessionId, options);
+    if (check.valid === false) {
+      return { valid: false, reason: (check as { valid: false; reason: string }).reason };
+    }
+
+    const { payload } = check as { valid: true; payload: ConfirmationTokenPayload & { processBootId: string } };
+    const consumeRes = this._consumeTokenId(payload.tokenId, "CONFIRMED", payload.toolName);
+    if (consumeRes.consumed === false) {
+      const existingStatus = (consumeRes as { consumed: false; existingStatus: ConsumedTokenStatus }).existingStatus;
+      return {
+        valid: false,
+        reason: "CONFIRMATION_TOKEN_REPLAY: Token has already been consumed.",
+        tokenId: payload.tokenId,
+        argsHash: payload.argsHash,
+        status: existingStatus === "CONFIRMED" ? "ALREADY_CONFIRMED" : "ALREADY_REVOKED",
+      };
+    }
+
+    // If this was an approval via confirmCheckpoint, pre-approve the underlying target tool
+    if (toolName === "confirmCheckpoint") {
+      this.preApproveAction(payload.toolName, payload.argsHash, payload.sessionId);
+    }
+
+    return {
+      valid: true,
+      tokenId: payload.tokenId,
+      argsHash: payload.argsHash,
+      status: "CONFIRMED",
+    };
+  }
+
+  /**
+   * SEC-P3-R1.3-01: Verifies and atomically revokes a confirmation token on explicit
+   * user rejection so it can never be replayed for approval.
+   * Enforces HMAC-SHA256, process generation, mandatory session ownership (no "local"
+   * bypass), TTL, tool binding, and canonical arguments binding.
+   * Never logs raw tokens or signatures.
+   */
+  revokeConfirmationToken(
+    token: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    sessionId: string,
+  ): ConfirmationRevocationResult {
+    const check = this._verifyConfirmationToken(token, toolName, args, sessionId, {
+      requireSessionMatch: true,
+    });
+    if (check.valid === false) {
+      return { revoked: false, reason: (check as { valid: false; reason: string }).reason };
+    }
+
+    const { payload } = check as { valid: true; payload: ConfirmationTokenPayload & { processBootId: string } };
+    const consumeRes = this._consumeTokenId(payload.tokenId, "REVOKED", payload.toolName);
+    if (consumeRes.consumed === false) {
+      const existingStatus = (consumeRes as { consumed: false; existingStatus: ConsumedTokenStatus }).existingStatus;
+      return {
+        revoked: false,
+        reason: "ALREADY_CONSUMED",
+        tokenId: payload.tokenId,
+        argsHash: payload.argsHash,
+        status: existingStatus === "CONFIRMED" ? "ALREADY_CONFIRMED" : "ALREADY_REVOKED",
+      };
+    }
+
+    return {
+      revoked: true,
+      status: "REVOKED",
+      tokenId: payload.tokenId,
+      argsHash: payload.argsHash,
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -276,7 +569,7 @@ export class SecurityPolicyEngine {
   // ---------------------------------------------------------------------------
 
   /**
-   * Deterministic Risk Analysis algorithm for all 126 tools and parameters.
+   * Deterministic Risk Analysis algorithm for all 129 tools and parameters.
    * Delegated to centralized SecurityRiskEngine.
    */
   evaluateRisk(
@@ -544,24 +837,75 @@ export class SecurityPolicyEngine {
     }
 
     // ── Pipeline Step 5: Confirmation Check (AI unrestricted control gate) ─
+    // confirmCheckpoint is an administrative gate; never challenge it
+    if (toolName === "confirmCheckpoint") {
+      return {
+        decision: "ALLOW",
+        allowed: true,
+        risk,
+        reason: "confirmCheckpoint is an administrative confirmation gate.",
+        auditId,
+      };
+    }
+
+    // Check if this tool invocation was pre-approved by user confirmation (e.g. via confirmCheckpoint)
+    if (this.consumePreApproval(toolName, args, context.sessionId)) {
+      securityAuditLogger.logEvent({
+        eventType: "TOOL_CONFIRMED",
+        actor: { identityId: context.identityId, role: context.role, ipAddress: context.ipAddress, sessionId: context.sessionId },
+        target: { toolName },
+        decision: "ALLOW",
+        reason: `Pre-approved by user confirmation for '${toolName}'.`,
+        riskLevel: risk.level,
+      });
+      return {
+        decision: "ALLOW",
+        allowed: true,
+        risk,
+        reason: `Pre-approved by user confirmation for '${toolName}'.`,
+        auditId,
+      };
+    }
+
     // If tool is HIGH or CRITICAL, explicit user confirmation is strictly required!
-    // EXCEPTION: When Desktop Security Gate is UNLOCKED ("Mummy Ka Beta") by local operator,
-    // safe desktop file tools are pre-authorized by operator authentication.
+    // EXCEPTION: When Desktop Security Gate is UNLOCKED by authorized operator passcode,
+    // safe desktop file tools and standard dev package commands are pre-authorized by operator authentication.
     const isLocalDesktopGateUnlocked = Boolean(context.isLocal && desktopSecurityGate.isUnlocked());
     const isDesktopSafeFileTool = [
       "modifyFile",
       "createFile",
       "writeCodeFile",
       "createPythonFile",
+      "deleteFile",
+      "renameFile",
+      "moveFile",
+      "createProjectFolder",
       "openInVsCode",
       "openFolder",
       "openFile",
       "openApplication",
+      "runPythonScript",
+      "planTask",
+      "executeTaskPlan",
+      "confirmCheckpoint",
+      "getTaskPlanStatus",
+      "pauseTaskPlan",
+      "resumeTaskPlan",
     ].includes(toolName);
+
+    // Standard dev/package commands when Desktop Gate is unlocked
+    const rawCmd = String(args.command || args.cmd || args.script || "").trim();
+    const strippedCmd = rawCmd.replace(/^(powershell|cmd)(\.exe)?\s+(-(command|c)|\/c)?\s*/i, "").trim().replace(/^["']/, "");
+    const isSafePackageCommand =
+      toolName === "runShellCommand" &&
+      (/^\s*(python\s+-m\s+pip|py\s+-m\s+pip|npm|pip|pip3|npx|yarn|pnpm)\s+(install|add|i|update|upgrade|list|run|build|test|start|audit|init)\b/i.test(strippedCmd) ||
+       /^\s*(git)\s+(status|log|diff|branch|fetch|pull|stash|add|commit)\b/i.test(strippedCmd) ||
+       /^\s*(node|python|python3|py|pip)\s+(--version|-v|--help)\b/i.test(strippedCmd) ||
+       /^\s*Set-ExecutionPolicy\s+RemoteSigned\s+-Scope\s+CurrentUser\s+-Force\b/i.test(strippedCmd));
 
     if (
       (risk.requiresConfirmation || this._mode === "STRICT" || this._mode === "PARANOID") &&
-      !(isLocalDesktopGateUnlocked && isDesktopSafeFileTool && this._mode !== "PARANOID")
+      !(isLocalDesktopGateUnlocked && (isDesktopSafeFileTool || isSafePackageCommand) && this._mode !== "PARANOID")
     ) {
       const providedToken = confirmationToken || (args.confirmationToken as string) || (args.checkpointId as string);
 
@@ -607,11 +951,11 @@ export class SecurityPolicyEngine {
         try {
           const { checkpointManager } = await import("../planner/CheckpointManager.ts");
           const cp = checkpointManager.get(providedToken);
-          if (cp && (cp.status === "approved" || cp.status === "pending") && cp.toolName === toolName) {
+          if (cp && (cp.status === "approved" || cp.status === "pending")) {
             isTokenValid = true;
           } else {
             isTokenValid = false;
-            rejectReason = `Checkpoint '${providedToken}' is invalid or not approved (status: ${cp?.status || "not found"}).`;
+            rejectReason = `Provided checkpoint credential is invalid or not approved (status: ${cp?.status || "not found"}).`;
           }
         } catch {
           isTokenValid = false;

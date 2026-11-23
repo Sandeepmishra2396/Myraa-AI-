@@ -59,24 +59,52 @@ class AudioTrackEngine {
         }
 
         try {
-            audioTrack = AudioTrack.Builder()
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build()
-                )
-                .setAudioFormat(
-                    AudioFormat.Builder()
-                        .setSampleRate(SAMPLE_RATE_HZ)
-                        .setChannelMask(CHANNEL_CONFIG)
-                        .setEncoding(AUDIO_FORMAT)
-                        .build()
-                )
-                .setBufferSizeInBytes(minBufferSize * 2)
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
+            var track: AudioTrack? = null
+            try {
+                track = AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setSampleRate(SAMPLE_RATE_HZ)
+                            .setChannelMask(CHANNEL_CONFIG)
+                            .setEncoding(AUDIO_FORMAT)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(minBufferSize * 2)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+            } catch (e: Exception) {
+                Log.w(TAG, "AudioTrack USAGE_VOICE_COMMUNICATION build failed: ${e.message}")
+            }
 
+            if (track == null || track.state != AudioTrack.STATE_INITIALIZED) {
+                Log.w(TAG, "AudioTrack USAGE_VOICE_COMMUNICATION uninitialized; attempting USAGE_MEDIA.")
+                try { track?.release() } catch (_: Exception) {}
+                track = AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setSampleRate(SAMPLE_RATE_HZ)
+                            .setChannelMask(CHANNEL_CONFIG)
+                            .setEncoding(AUDIO_FORMAT)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(minBufferSize * 2)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+            }
+
+            audioTrack = track
             if (audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
                 Log.e(TAG, "AudioTrack failed to initialize.")
                 audioTrack?.release()
@@ -150,12 +178,15 @@ class AudioTrackEngine {
         audioQueue.clear()
 
         try {
+            playbackThread?.interrupt()
+            playbackThread?.join(300)
+        } catch (_: Exception) {}
+
+        try {
             audioTrack?.pause()
             audioTrack?.flush()
             audioTrack?.stop()
             audioTrack?.release()
-            playbackThread?.interrupt()
-            playbackThread?.join(500)
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping AudioTrack: ${e.message}")
         } finally {

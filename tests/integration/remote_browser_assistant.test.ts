@@ -27,6 +27,7 @@ import { securityPolicyEngine } from "../../backend/security/SecurityPolicyEngin
 import { securityRiskEngine, MEDIUM_RISK_TOOLS } from "../../backend/security/SecurityRiskEngine.ts";
 import { contentSanitizer, UNTRUSTED_WEB_START, UNTRUSTED_WEB_END } from "../../backend/security/ContentSanitizer.ts";
 import { ToolOrchestrator } from "../../backend/tools/ToolOrchestrator.ts";
+import { desktopSecurityGate } from "../../backend/security/DesktopSecurityGate.ts";
 import { LIVE_TOOLS } from "../../backend/ai/GeminiSessionFactory.ts";
 import {
   ANDROID_CAPABILITIES,
@@ -42,6 +43,7 @@ describe("Phase 20 — Browser Assistant", () => {
   beforeEach(async () => {
     await emergencyStopCoordinator.reset("Phase 20 test setup");
     securityPolicyEngine.resetForTesting();
+    desktopSecurityGate.reset();
 
     // Register a valid paired Android test device
     const { code } = pairingManager.generatePairCode("127.0.0.1");
@@ -65,6 +67,7 @@ describe("Phase 20 — Browser Assistant", () => {
   afterEach(async () => {
     await emergencyStopCoordinator.reset("Phase 20 test cleanup");
     securityPolicyEngine.resetForTesting();
+    desktopSecurityGate.reset();
   });
 
   // ── 1. Individual Browser Capabilities Dispatch (All 6) ───────────────────
@@ -654,39 +657,44 @@ describe("Phase 20 — Browser Assistant", () => {
     });
 
     it("9.4 ToolOrchestrator forwards browser tools to client in remote session", async () => {
-      const clientMessages: any[] = [];
-      const sendToClient = (msg: any) => clientMessages.push(msg);
+      desktopSecurityGate.verifyPasscode("Mummy Ka Beta");
+      try {
+        const clientMessages: any[] = [];
+        const sendToClient = (msg: any) => clientMessages.push(msg);
 
-      const mockLiveSession = {
-        sendToolResponse: () => {},
-      };
+        const mockLiveSession = {
+          sendToolResponse: () => {},
+        };
 
-      const remoteSecContext: SecurityContext = {
-        identityId: testDeviceId,
-        role: "admin",
-        ipAddress: "192.168.1.155",
-        deviceId: testDeviceId,
-        isLocal: false,
-      };
+        const remoteSecContext: SecurityContext = {
+          identityId: testDeviceId,
+          role: "admin",
+          ipAddress: "192.168.1.155",
+          deviceId: testDeviceId,
+          isLocal: false,
+        };
 
-      const orchestrator = new ToolOrchestrator();
-      await orchestrator.dispatch(
-        {
-          name: "searchWeb",
-          args: { query: "Python dataclasses" },
-          id: "call_search_1",
-        },
-        mockLiveSession as any,
-        sendToClient,
-        "dummy_key",
-        remoteSecContext
-      );
+        const orchestrator = new ToolOrchestrator();
+        await orchestrator.dispatch(
+          {
+            name: "searchWeb",
+            args: { query: "Python dataclasses" },
+            id: "call_search_1",
+          },
+          mockLiveSession as any,
+          sendToClient,
+          "dummy_key",
+          remoteSecContext
+        );
 
-      expect(clientMessages.length).toBe(1);
-      expect(clientMessages[0].type).toBe("toolCall");
-      expect(clientMessages[0].name).toBe("searchWeb");
-      expect(clientMessages[0].args.query).toBe("Python dataclasses");
-      expect(clientMessages[0].callId).toBe("call_search_1");
+        expect(clientMessages.length).toBe(1);
+        expect(clientMessages[0].type).toBe("toolCall");
+        expect(clientMessages[0].name).toBe("searchWeb");
+        expect(clientMessages[0].args.query).toBe("Python dataclasses");
+        expect(clientMessages[0].callId).toBe("call_search_1");
+      } finally {
+        desktopSecurityGate.reset();
+      }
     });
   });
 });

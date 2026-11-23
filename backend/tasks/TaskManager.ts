@@ -15,6 +15,7 @@
 import path from "path";
 import { spawn, execSync } from "child_process";
 import * as fs from "fs";
+import { runtimeMetrics } from "../diagnostics/RuntimeObservability.ts";
 
 // Re-use the shared logger functions injected at startup.
 // We accept them as function references so this module stays side-effect-free
@@ -390,6 +391,7 @@ export async function callDesktopAgent(
   }
   const controller = new AbortController();
   activeControllers.add(controller);
+  const startRpcMs = Date.now();
 
   try {
     _logCommand(`EXECUTE ${effectiveTool} ${JSON.stringify(effectiveArgs)}`);
@@ -408,6 +410,7 @@ export async function callDesktopAgent(
     clearTimeout(timer);
 
     if (!res.ok) {
+      runtimeMetrics.incrementCounter("desktop_agent_rpc_errors_total");
       const text = await res.text().catch(() => "");
       _logError(`AGENT_HTTP_${res.status} ${tool}: ${text.substring(0, 200)}`);
       _logJson("error", "tool_error", {
@@ -421,9 +424,12 @@ export async function callDesktopAgent(
       };
     }
     const result = await res.json();
-    _logJson("info", "tool_done", { tool, ok: result?.ok });
+    const rpcDurationMs = Date.now() - startRpcMs;
+    runtimeMetrics.recordTiming("desktop_agent_rpc_duration_ms", rpcDurationMs);
+    _logJson("info", "tool_done", { tool, ok: result?.ok, durationMs: rpcDurationMs });
     return result;
   } catch (err: any) {
+    runtimeMetrics.incrementCounter("desktop_agent_rpc_errors_total");
     desktopAgentVerified = false; // mark stale so next call retries the spawn
 
     // If local agent is unreachable on this server (e.g. Render Cloud), check for a connected Windows desktop companion

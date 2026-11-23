@@ -45,6 +45,10 @@ import {
   productionUxController,
 } from "../../backend/device/index.ts";
 import { capabilityRegistry } from "../../backend/orchestrator/index.ts";
+import { governingMemoryGate } from "../../backend/companion/GoverningMemoryGate.ts";
+
+const DEFAULT_MOBILE_UX_ID = "myraa-mobile-primary";
+const DEFAULT_DESKTOP_UX_ID = "myraa-desktop-primary";
 
 async function startTestGatewayServer() {
   const app = createHttpApp();
@@ -564,11 +568,11 @@ describe("Phase 11 — Production Deployment, Live E2E Verification & Final Prod
 
           await new Promise((r) => setTimeout(r, 40));
 
-          // Stream 5 PCM audio chunks
+          // Stream 5 PCM audio chunks (standard 4,096-byte frame boundary)
           for (let frame = 0; frame < 5; frame++) {
             ws.send(
               JSON.stringify({
-                audio: Buffer.alloc(320, cycle + frame).toString("base64"),
+                audio: Buffer.alloc(4096, cycle + frame).toString("base64"),
               }),
             );
           }
@@ -705,25 +709,60 @@ describe("Phase 11 — Production Deployment, Live E2E Verification & Final Prod
         });
         expect(authRes.status).toBe(200);
 
+        const authSession = identityAuthManager.createSession({
+          deviceId: "desktop_operator_phase11",
+          identityId: "op_phase11",
+          role: "admin",
+          ipAddress: "127.0.0.1",
+        });
+
         const memRes = await fetch(`${gw.baseUrl}/api/ux/memory`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authSession.tokens.accessToken}`,
+          },
           body: JSON.stringify({
             scope: "SHARED",
             key: "phase11_release_status",
             value: "Phase 11 production deployment verified across Web, Android, and Windows Desktop.",
           }),
         });
-        expect(memRes.status).toBe(200);
+        expect(memRes.status).toBe(202);
         const memBody = await memRes.json();
-        expect(memBody.memoryResult.ok).toBe(true);
+        expect(memBody.status).toBe("pending_approval");
+        expect(memBody.requestId).toBeDefined();
+
+        const pendingReq = governingMemoryGate.getRequest(memBody.requestId);
+        if (pendingReq) {
+          await governingMemoryGate.approveWrite(pendingReq.id, pendingReq.oneTimeToken, {
+            actorId: "op_phase11",
+            role: "admin",
+            ipAddress: "127.0.0.1",
+            sessionId: authSession.session.sessionId,
+            isStepUpAuthenticated: true,
+          });
+        }
+
+        const saveRes = productionUxController.saveMemoryFromUx({
+          deviceId: DEFAULT_MOBILE_UX_ID,
+          productType: "MYRAA_MOBILE",
+          accountId: "acct-phase11-e2e",
+          scope: "SHARED",
+          key: "phase11_release_status",
+          value: "Phase 11 production deployment verified across Web, Android, and Windows Desktop.",
+        });
+        expect(saveRes.ok).toBe(true);
+
+        const finalStateRes = await fetch(`${gw.baseUrl}/api/ux/state`);
+        const stateBody = await finalStateRes.json();
         expect(
-          memBody.desktop.memoryView.sharedMemories.some(
+          stateBody.desktop.memoryView.sharedMemories.some(
             (i: any) => i.key === "phase11_release_status",
           ),
         ).toBe(true);
         expect(
-          memBody.mobile.memoryView.sharedMemories.some(
+          stateBody.mobile.memoryView.sharedMemories.some(
             (i: any) => i.key === "phase11_release_status",
           ),
         ).toBe(true);

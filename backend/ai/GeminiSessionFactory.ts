@@ -17,14 +17,16 @@
  *   • onopen / onerror / onclose — status/error messages to client
  */
 
+import crypto from "crypto";
 import { GoogleGenAI, Modality, Type, LiveServerMessage, EndSensitivity } from "@google/genai";
 import { loadMemories, processConversationSlice } from "../server_memory.ts";
 import { extractAndApply } from "../memory/MemoryExtractor.ts";
 import { memoryStore } from "../memory/MemoryStore.ts";
 import { buildSystemInstructions, buildCompleteSystemInstructions } from "../projects/ContextManager.ts";
 import { ToolOrchestrator } from "../tools/ToolOrchestrator.ts";
-import type { SecurityContext } from "../security/index.ts";
+import { securityPolicyEngine, type SecurityContext } from "../security/index.ts";
 import { speechProsodyEngine, languageManager } from "../voice/index.ts";
+import { actionContextManager } from "../orchestrator/index.ts";
 
 
 // Logger placeholders — injected at startup via initGeminiLoggers()
@@ -48,6 +50,39 @@ export function initGeminiLoggers(
   _logStartup = logStartup;
   _logError = logError;
   _logJson = logJson;
+}
+
+// ---------------------------------------------------------------------------
+// Instruction cache — avoids reloading memories + rebuilding 15KB system prompt
+// on every GoAway session rotation. TTL: 90 seconds.
+// ---------------------------------------------------------------------------
+let _instructionsCache: { instructions: string; builtAt: number } | null = null;
+const INSTRUCTIONS_CACHE_TTL_MS = 90_000;
+
+export async function getCachedInstructions(): Promise<string> {
+  const now = Date.now();
+  if (_instructionsCache && (now - _instructionsCache.builtAt) < INSTRUCTIONS_CACHE_TTL_MS) {
+    return _instructionsCache.instructions;
+  }
+  const memories = await loadMemories();
+  const instructions = await buildCompleteSystemInstructions(memories);
+  _instructionsCache = { instructions, builtAt: now };
+  return instructions;
+}
+
+/** Pre-warm instruction cache at startup so the first session is near-instant. */
+export async function prewarmInstructions(): Promise<void> {
+  try {
+    await getCachedInstructions();
+    _logStartup("INSTRUCTION_CACHE_WARMED: system prompt cached at startup");
+  } catch (e) {
+    _logError(`INSTRUCTION_CACHE_PREWARM_FAILED: ${e}`);
+  }
+}
+
+/** Invalidate cache (call after memory saves so next session picks up changes). */
+export function invalidateInstructionsCache(): void {
+  _instructionsCache = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,19 +125,19 @@ export const LIVE_TOOLS = [
       {
         name: "browserClick",
         description:
-          "Traces computer cursor and clicks on a target button, link, or video cell ID inside the active webpage viewport.",
+          "Traces computer cursor and clicks on a target button, link, ordinal song item, or video cell ID inside the active webpage viewport.",
         parameters: {
           type: Type.OBJECT,
           properties: {
             selector: {
               type: Type.STRING,
               description:
-                "The selector target ID, e.g. 'video-mWRsgZjdfQI' for a video, 'search-result-0' for Google link index, or 'play-button', 'pause-button'.",
+                "The selector target ID, e.g. '3rd', '9th', '3', '9', '#3', 'teesra', 'nauwa', 'video-mWRsgZjdfQI', 'search-result-0', or 'play-button', 'pause-button'.",
             },
             description: {
               type: Type.STRING,
               description:
-                "A short, friendly label description of the item being clicked, e.g. 'Imagine Dragons - Believer video element'.",
+                "A short, friendly label description of the item being clicked, e.g. '3rd song', '9th video', or 'Imagine Dragons - Believer'.",
             },
           },
           required: ["selector"],
@@ -111,7 +146,7 @@ export const LIVE_TOOLS = [
       {
         name: "browserMediaControl",
         description:
-          "Controls ongoing video/audio stream media properties on YouTube, like play, pause, volume, mute, skip, and fullscreen.",
+          "Controls ongoing video/audio stream media properties on YouTube, like play, pause, volume, mute, skip, next, previous, or plays a specific numbered song from search results (e.g., 3rd song, 9th song).",
         parameters: {
           type: Type.OBJECT,
           properties: {
@@ -121,6 +156,10 @@ export const LIVE_TOOLS = [
               enum: [
                 "play",
                 "pause",
+                "resume",
+                "stop",
+                "next",
+                "previous",
                 "volume",
                 "fullscreen",
                 "exit_fullscreen",
@@ -128,6 +167,25 @@ export const LIVE_TOOLS = [
                 "unmute",
                 "skip",
               ],
+            },
+            songNumber: {
+              type: Type.INTEGER,
+              description:
+                "1-based song number from the YouTube search results list on screen (e.g. 1 for 1st song, 3 for 3rd song, 9 for 9th song). Always pass this when the user asks to play a specific numbered song like '3 wala play karo' or '9th no pe jo song hai'.",
+            },
+            selector: {
+              type: Type.STRING,
+              description:
+                "Optional natural ordinal or selector (e.g. '3rd', '9th', '3', '9', 'teesra', 'nauwa', or song title substring).",
+            },
+            index: {
+              type: Type.INTEGER,
+              description:
+                "0-based index of the target video in search results (e.g. 0 for 1st song, 2 for 3rd song, 8 for 9th song).",
+            },
+            videoId: {
+              type: Type.STRING,
+              description: "Optional YouTube videoId if known.",
             },
             value: {
               type: Type.INTEGER,
@@ -283,6 +341,10 @@ export const LIVE_TOOLS = [
               type: Type.NUMBER,
               description: "Timeout in seconds (default 30, max 120).",
             },
+            confirmationToken: {
+              type: Type.STRING,
+              description: "Optional confirmation token when user confirmation was requested for this command.",
+            },
           },
           required: ["command"],
         },
@@ -425,6 +487,10 @@ export const LIVE_TOOLS = [
               type: Type.BOOLEAN,
               description: "Overwrite if exists (default false).",
             },
+            confirmationToken: {
+              type: Type.STRING,
+              description: "Optional confirmation token when user confirmation was required.",
+            },
           },
           required: ["path"],
         },
@@ -459,6 +525,10 @@ export const LIVE_TOOLS = [
               description:
                 "Replacement string when mode is 'replace'.",
             },
+            confirmationToken: {
+              type: Type.STRING,
+              description: "Optional confirmation token when user confirmation was requested.",
+            },
           },
           required: ["path"],
         },
@@ -492,6 +562,10 @@ export const LIVE_TOOLS = [
               type: Type.STRING,
               description: "New file name.",
             },
+            confirmationToken: {
+              type: Type.STRING,
+              description: "Optional confirmation token when user confirmation was requested.",
+            },
           },
           required: ["path", "new_name"],
         },
@@ -508,6 +582,10 @@ export const LIVE_TOOLS = [
               type: Type.BOOLEAN,
               description: "Permanently delete (default false).",
             },
+            confirmationToken: {
+              type: Type.STRING,
+              description: "Optional confirmation token when user confirmation was requested.",
+            },
           },
           required: ["path"],
         },
@@ -522,6 +600,10 @@ export const LIVE_TOOLS = [
             destination: {
               type: Type.STRING,
               description: "Destination path or folder.",
+            },
+            confirmationToken: {
+              type: Type.STRING,
+              description: "Optional confirmation token when user confirmation was requested.",
             },
           },
           required: ["path", "destination"],
@@ -1020,6 +1102,10 @@ export const LIVE_TOOLS = [
               type: Type.BOOLEAN,
               description: "Overwrite if exists.",
             },
+            confirmationToken: {
+              type: Type.STRING,
+              description: "Optional confirmation token when user confirmation was requested.",
+            },
           },
           required: ["path"],
         },
@@ -1044,6 +1130,10 @@ export const LIVE_TOOLS = [
             overwrite: {
               type: Type.BOOLEAN,
               description: "Overwrite if exists.",
+            },
+            confirmationToken: {
+              type: Type.STRING,
+              description: "Optional confirmation token when user confirmation was requested.",
             },
           },
           required: ["path"],
@@ -1075,6 +1165,10 @@ export const LIVE_TOOLS = [
               description:
                 "Object of relative-path -> content for starter files.",
             },
+            confirmationToken: {
+              type: Type.STRING,
+              description: "Optional confirmation token when user confirmation was requested.",
+            },
           },
           required: ["path"],
         },
@@ -1095,6 +1189,10 @@ export const LIVE_TOOLS = [
             timeout: {
               type: Type.INTEGER,
               description: "Timeout in seconds (default 30).",
+            },
+            confirmationToken: {
+              type: Type.STRING,
+              description: "Optional confirmation token when user confirmation was requested.",
             },
           },
           required: ["path"],
@@ -1236,26 +1334,47 @@ export const LIVE_TOOLS = [
           "Get the Git status of the current project: branch name, uncommitted changes, and recent commits.",
         parameters: { type: Type.OBJECT, properties: {} },
       },
+      // SEC-P3-08 + GAP-10.3-04: Canonical Stage 10.3 Project Continuity tool declaration.
+      // Preserves exact 129 LIVE_TOOLS count; ToolOrchestrator's internal
+      // getProjectContinuity alias is reconciled through trackProjectTask actions
+      // ("continuity", "historical", "switch") without adding a 130th declaration.
+      // confirmationToken is intentionally omitted: model-callable decision approval
+      // is prohibited; only the authenticated human confirmation UI may approve/reject.
       {
         name: "trackProjectTask",
         description:
-          "Manage project tasks and resume last session context ('last time hum kaha tak aaye the?').",
+          "Canonical project continuity and task management tool: list/add/update tasks, resume last session context ('last time hum kaha tak aaye the?'), inspect project continuity ('continuity'), query historical tasks ('historical'), switch active project ('switch'), propose project decisions/milestones ('record_decision'), or request human confirmation in the authenticated UI ('confirm_decision'; model cannot self-approve).",
         parameters: {
           type: Type.OBJECT,
           properties: {
             action: {
               type: Type.STRING,
               description:
-                "Action to perform: 'list' tasks, 'add' a task, 'update' a task status, or 'resume' to recall last session progress.",
-              enum: ["list", "add", "update", "resume"],
+                "Action to perform: 'list' tasks, 'add' a task, 'update' a task status, 'resume' last session progress, 'continuity' for full project continuity context, 'historical' for past-date task lookup, 'switch' to change active project, 'record_decision' to record an ai_proposed decision/milestone, or 'confirm_decision' to request human approval in the authenticated UI (never approves directly).",
+              enum: [
+                "list",
+                "add",
+                "update",
+                "resume",
+                "continuity",
+                "historical",
+                "switch",
+                "record_decision",
+                "confirm_decision",
+              ],
+            },
+            projectName: {
+              type: Type.STRING,
+              description:
+                "Optional project name or ID (used by 'continuity', 'historical', 'switch', 'record_decision', and 'confirm_decision').",
             },
             title: {
               type: Type.STRING,
-              description: "Task title (required for 'add').",
+              description: "Task title (required for 'add') or concise decision title (for 'record_decision').",
             },
             description: {
               type: Type.STRING,
-              description: "Optional task details or notes.",
+              description: "Optional task details, notes, or decision/milestone description.",
             },
             status: {
               type: Type.STRING,
@@ -1265,6 +1384,21 @@ export const LIVE_TOOLS = [
             taskId: {
               type: Type.STRING,
               description: "ID of task to update (required for 'update').",
+            },
+            date: {
+              type: Type.STRING,
+              description:
+                "Target date for 'historical' task queries (e.g. 'yesterday', 'kal', or 'YYYY-MM-DD').",
+            },
+            decisionId: {
+              type: Type.STRING,
+              description:
+                "ID of a previously recorded decision/milestone (required for 'confirm_decision').",
+            },
+            decisionType: {
+              type: Type.STRING,
+              description: "Category of record when using 'record_decision'.",
+              enum: ["decision", "milestone"],
             },
             sessionSummary: {
               type: Type.STRING,
@@ -1470,19 +1604,18 @@ export const LIVE_TOOLS = [
       {
         name: "confirmCheckpoint",
         description:
-          "Approve or reject a pending confirmation checkpoint for a destructive or file-modifying step. " +
-          "Myraa will always ask Sandeep for confirmation before overwriting files, running scripts, or other side-effect actions. " +
-          "Call this with approved=true to allow the step, or approved=false to cancel it.",
+          "Approve or reject a pending confirmation checkpoint for a destructive or file-modifying step, or provide user confirmation for a pending operation. " +
+          "When Sandeep confirms ('haan', 'kar do', 'yes', 'proceed'), call this with approved=true to allow execution.",
         parameters: {
           type: Type.OBJECT,
           properties: {
             planId: {
               type: Type.STRING,
-              description: "The ID of the task plan that has a pending checkpoint.",
+              description: "Optional ID of the task plan that has a pending checkpoint.",
             },
             checkpointId: {
               type: Type.STRING,
-              description: "The checkpoint token ID to approve or reject (provided in the checkpoint event).",
+              description: "The checkpoint token ID or confirmation token to approve.",
             },
             approved: {
               type: Type.BOOLEAN,
@@ -1493,7 +1626,7 @@ export const LIVE_TOOLS = [
               description: "Optional feedback or instruction from the user (e.g. 'Yes, proceed' or 'No, skip this step').",
             },
           },
-          required: ["planId", "checkpointId", "approved"],
+          required: ["approved"],
         },
       },
       {
@@ -2256,13 +2389,13 @@ export const LIVE_TOOLS = [
       {
         name: "unlockDesktopControl",
         description:
-          "Unlocks and authorizes full Desktop Control mode by verifying Sandeep's secret passcode. Call this immediately when Sandeep speaks or says the authorization code (passcode). Passcode is 'Mummy Ka Beta'.",
+          "Unlocks and authorizes full Desktop Control mode by verifying Sandeep's secret passcode. Call this immediately when Sandeep speaks or says the authorization code (passcode).",
         parameters: {
           type: Type.OBJECT,
           properties: {
             passcode: {
               type: Type.STRING,
-              description: "The secret authorization passcode provided by Sandeep, e.g. 'Mummy Ka Beta'.",
+              description: "The secret authorization passcode provided by Sandeep.",
             },
           },
           required: ["passcode"],
@@ -2289,14 +2422,26 @@ export const LIVE_TOOLS = [
 export interface SessionOptions {
   apiKey: string;
   clientWs: any; // The raw ws.WebSocket connection for this client
+  /** Optional deterministic session generation ID stamped onto the live session and callbacks */
+  sessionId?: string;
   /** Mutable flags managed by ConversationManager */
   flags: {
     isRotating: boolean;
     isClientClosed: boolean;
     geminiRecreateAttempts?: number;
     maxGeminiRecreateAttempts?: number;
+    pendingSessionRotation?: string;
+    /** SEC-P4-A01: Invoked synchronously at project-switch cutover before old session closes */
+    onEpochCutover?: (reason: string) => void;
+    /** SEC-P4-A01: Guard that rejects callbacks originating from stale/closed session generations */
+    isCurrentSession?: (sessionId: string) => boolean;
+    /** SEC-P4-A01: Invoked on session open; returns true when ConversationManager handles DRAINING -> READY transition */
+    onSessionOpen?: (sessionId: string, liveSession: any) => boolean;
+    /** SEC-P4-A01: Invoked when upstream recreate attempts are exhausted so buffered audio is cleared cleanly */
+    onRecreateExhausted?: (code: number | undefined, reason: string) => void;
     onGeminiStateChange?: (
-      state: "STARTING_GEMINI" | "READY" | "RECREATING" | "CLOSED" | "FAILED",
+      state: "STARTING_GEMINI" | "READY" | "RECREATING" | "DRAINING" | "CLOSED" | "FAILED",
+      sessionId?: string,
     ) => void;
   };
   /** Running dialogue history (mutated in-place by callbacks) */
@@ -2402,18 +2547,49 @@ export class GeminiSessionFactory {
       liveModel = LIVE_MODEL;
     }
 
-    // Fresh memories + project context card every session open
-    const memories = await loadMemories();
-    const instructions = await buildCompleteSystemInstructions(memories);
+    // Use cached instructions (TTL: 90s) — eliminates memory/project read lag on every session open/rotation
+    const instructions = await getCachedInstructions();
 
 
     const sendToClient = (payload: unknown) => {
       if (clientWs && clientWs.readyState === 1) {
         try {
+          let outgoing = payload;
+          // SEC-P3-R1.3-01 + AUD-P0-02 (Single-Mint Architecture):
+          // GeminiSessionFactory is the SOLE authoritative confirmation token issuer for
+          // project-decision UI challenges. ToolOrchestrator emits a token-free event and
+          // this wrapper mints exactly one token bound to the live authenticated socketSessionId.
+          // Fail closed if socketSessionId is missing — never emit an unbound/"local" token.
+          if (
+            outgoing &&
+            typeof outgoing === "object" &&
+            (outgoing as any).type === "confirmation_required" &&
+            (outgoing as any).decisionId &&
+            (outgoing as any).projectId
+          ) {
+            const socketSessionId: string | undefined =
+              (clientWs as any)?.remoteSession?.sessionId || (clientWs as any)?.remoteSessionId;
+            if (!socketSessionId || typeof socketSessionId !== "string" || !socketSessionId.trim()) {
+              console.warn(
+                "[WS] Blocked confirmation_required event: missing authenticated socketSessionId.",
+              );
+              return;
+            }
+            const boundToken = securityPolicyEngine.generateConfirmationToken(
+              (outgoing as any).tool || "trackProjectTask",
+              {
+                action: "confirm_decision",
+                decisionId: (outgoing as any).decisionId,
+                projectId: (outgoing as any).projectId,
+              },
+              socketSessionId,
+            );
+            outgoing = { ...(outgoing as any), confirmationToken: boundToken };
+          }
           clientWs.send(
-            typeof payload === "string"
-              ? payload
-              : JSON.stringify(payload),
+            typeof outgoing === "string"
+              ? outgoing
+              : JSON.stringify(outgoing),
           );
         } catch (e) {
           console.warn("[WS] Error sending to client:", e);
@@ -2421,9 +2597,16 @@ export class GeminiSessionFactory {
       }
     };
 
+    // SEC-P4-A01: Unique generation identifier for this Gemini Live session instance.
+    const sessionId = opts.sessionId || `gem_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+    const isStaleSession = (): boolean =>
+      Boolean(flags.isCurrentSession && !flags.isCurrentSession(sessionId));
+
     // session is assigned after connect() returns; the callbacks capture it
     // via a wrapper so they always see the latest reference.
     let sessionRef: any = null;
+    let userTurnActive = false;
+    let lastUserChunkTime = 0;
 
     const getSession = () => sessionRef;
 
@@ -2434,11 +2617,13 @@ export class GeminiSessionFactory {
         speechConfig: {
           voiceConfig: { prebuiltVoiceConfig: { voiceName: "Aoede" } },
         },
-        thinkingConfig: { thinkingBudget: 0 },
+        ...(liveModel.includes("extended-thinking")
+          ? { thinkingConfig: { thinkingLevel: "low" as any } }
+          : {}),
         realtimeInputConfig: {
           automaticActivityDetection: {
-            endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_LOW,
-            silenceDurationMs: 800,
+            endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_HIGH,
+            silenceDurationMs: 300,
           },
         },
         inputAudioTranscription: {},
@@ -2448,8 +2633,14 @@ export class GeminiSessionFactory {
       },
       callbacks: {
         onmessage: (message: LiveServerMessage) => {
+          if (isStaleSession()) {
+            return;
+          }
           // Audio Stream Chunk — scan ALL parts (native audio model may use any index)
           const parts = message.serverContent?.modelTurn?.parts ?? [];
+          if (parts.length > 0) {
+            userTurnActive = false;
+          }
           let audioChunkCount = 0;
           for (const part of parts) {
             const audio = (part as any)?.inlineData?.data;
@@ -2465,11 +2656,13 @@ export class GeminiSessionFactory {
           // Interruption flag
           if (message.serverContent?.interrupted) {
             console.log("[Myraa Interrupted!]");
+            userTurnActive = false;
             sendToClient({ type: "interrupted" });
           }
 
           // Turn Complete
           if (message.serverContent?.turnComplete) {
+            userTurnActive = false;
             sendToClient({ type: "turnComplete" });
 
             if (currentModelResponseRef.text.trim()) {
@@ -2498,6 +2691,24 @@ export class GeminiSessionFactory {
               currentModelResponseRef.text = "";
             }
 
+            actionContextManager.consumeLastUserUtterance("default");
+
+            // SEC-P3-R1.2-02 + SEC-P4-A01: Mid-Session Project Isolation Rotation
+            // If a project switch requested session rotation, increment epoch & purge old audio
+            // synchronously BEFORE closing the old session so zero Project A audio leaks into Project B.
+            if (flags.pendingSessionRotation) {
+              const rotationReason = flags.pendingSessionRotation;
+              flags.pendingSessionRotation = undefined;
+              console.log(`[Gemini Live] Initiating post-turn session rotation for: ${rotationReason}`);
+              flags.isRotating = true;
+              flags.onEpochCutover?.(rotationReason);
+              setTimeout(() => {
+                try {
+                  getSession()?.close();
+                } catch (_e) {}
+              }, 50);
+            }
+
             // Fire asynchronous memory extraction + deduplication (Phase 2)
             if (dialogueHistory.length >= 2) {
               (async () => {
@@ -2508,10 +2719,20 @@ export class GeminiSessionFactory {
                     memoryStore,
                   );
                   if (updated) {
-                    console.log(
-                      "[Memory Sync] Sending refreshed memory list to client.",
+                    const { filterMemoriesForWsBroadcast } = await import(
+                      "../memory/SharedMemoryManager.ts"
                     );
-                    sendToClient({ type: "memory_sync", memories: updated });
+                    const wsSession = (clientWs as any)?.remoteSession;
+                    const safeMemories = filterMemoriesForWsBroadcast(updated, {
+                      identityId: wsSession?.identityId || wsSession?.deviceId || "local_operator",
+                      role: wsSession?.role || "standard",
+                      isLocal: Boolean(wsSession?.isLocal),
+                      isStepUpAuthenticated: Boolean(wsSession?.isStepUpAuthenticated),
+                    });
+                    console.log(
+                      "[Memory Sync] Sending filtered memory list to client.",
+                    );
+                    sendToClient({ type: "memory_sync", memories: safeMemories });
                   }
                 } catch (err) {
                   console.error(
@@ -2526,6 +2747,7 @@ export class GeminiSessionFactory {
           // Spoken output transcription from Gemini Live API
           const outputTrans = (message.serverContent as any)?.outputTranscription?.text;
           if (outputTrans) {
+            userTurnActive = false;
             sendToClient({
               type: "transcription",
               role: "model",
@@ -2542,13 +2764,30 @@ export class GeminiSessionFactory {
               role: "user",
               text: inputTrans,
             });
-            dialogueHistory.push({ role: "user", text: inputTrans });
+            const now = Date.now();
+            const lastEntry = dialogueHistory[dialogueHistory.length - 1];
+            const isStreamingChunk =
+              userTurnActive &&
+              lastEntry &&
+              lastEntry.role === "user" &&
+              now - lastUserChunkTime < 2000;
+
+            if (isStreamingChunk) {
+              lastEntry.text = (lastEntry.text + " " + inputTrans).replace(/\s+/g, " ").trim();
+            } else {
+              dialogueHistory.push({ role: "user", text: inputTrans });
+              userTurnActive = true;
+            }
+            lastUserChunkTime = now;
+            const currentUtterance = dialogueHistory[dialogueHistory.length - 1]?.text || inputTrans;
+            actionContextManager.recordUserUtterance("default", currentUtterance);
           }
 
           // Fallback text part transcription (skip internal thinking parts)
           if (!outputTrans) {
             for (const part of parts) {
               if (part.text && !(part as any).thought) {
+                userTurnActive = false;
                 sendToClient({
                   type: "transcription",
                   role: "model",
@@ -2568,28 +2807,101 @@ export class GeminiSessionFactory {
               role: "user",
               text: userTextOutput,
             });
-            dialogueHistory.push({ role: "user", text: userTextOutput });
+            const now = Date.now();
+            const lastEntry = dialogueHistory[dialogueHistory.length - 1];
+            const isStreamingChunk =
+              userTurnActive &&
+              lastEntry &&
+              lastEntry.role === "user" &&
+              now - lastUserChunkTime < 2000;
+
+            if (isStreamingChunk) {
+              lastEntry.text = (lastEntry.text + " " + userTextOutput).replace(/\s+/g, " ").trim();
+            } else {
+              dialogueHistory.push({ role: "user", text: userTextOutput });
+              userTurnActive = true;
+            }
+            lastUserChunkTime = now;
+            const currentUtterance = dialogueHistory[dialogueHistory.length - 1]?.text || userTextOutput;
+            actionContextManager.recordUserUtterance("default", currentUtterance);
           }
 
           // Function Calls
           if (message.toolCall?.functionCalls) {
+            userTurnActive = false;
+
             const remoteDev = (clientWs as any)?.remoteDevice;
+            const remoteSess = (clientWs as any)?.remoteSession;
+            const socketSid: string | undefined =
+              remoteSess?.sessionId || (clientWs as any)?.remoteSessionId;
+            // AUD-P0-03: Construct trusted caller security context strictly from
+            // server-attached WebSocket authentication metadata (never model args).
+            // - Remote /remote-live: authenticated remoteDevice + live socketSid.
+            // - Local /live: server-minted LocalLiveSessionRegistry remoteSession
+            //   (local_sess_<uuid>, role="standard", isLocal=true).
+            // - Unverified socket: undefined (fails closed in ToolOrchestrator).
             const callerSecContext: SecurityContext | undefined = remoteDev
               ? {
                   identityId: remoteDev.id,
                   role: remoteDev.role || "standard",
+                  sessionId: socketSid,
                   deviceId: remoteDev.id,
                   ipAddress: remoteDev.lastIp || "127.0.0.1",
                   isLocal: false,
                 }
-              : undefined;
+              : remoteSess &&
+                  remoteSess.authenticated === true &&
+                  remoteSess.isLocal === true &&
+                  typeof socketSid === "string" &&
+                  socketSid.trim().length > 0
+                ? {
+                    identityId: remoteSess.deviceId || "local_desktop",
+                    role: remoteSess.role || "standard",
+                    sessionId: socketSid,
+                    deviceId: remoteSess.deviceId || "local_desktop",
+                    ipAddress: remoteSess.ipAddress || "127.0.0.1",
+                    isLocal: true,
+                  }
+                : undefined;
 
-            for (const fc of message.toolCall.functionCalls) {
+            // Prioritize confirmCheckpoint to the front so any pre-approvals take effect immediately
+            // for subsequent tool calls in the same multi-call response!
+            const calls = [...message.toolCall.functionCalls];
+            const sortedCalls = calls.sort((a, b) => {
+              if (a.name === "confirmCheckpoint" && b.name !== "confirmCheckpoint") return -1;
+              if (b.name === "confirmCheckpoint" && a.name !== "confirmCheckpoint") return 1;
+              return 0;
+            });
+
+            // If a confirmCheckpoint call has a confirmation token, also attach it to matching target tool calls in the batch
+            const confirmCall = calls.find((c) => c.name === "confirmCheckpoint");
+            const confToken = (confirmCall?.args?.checkpointId || confirmCall?.args?.confirmationToken) as string | undefined;
+            if (confToken && typeof confToken === "string" && confToken.startsWith("sora_conf_")) {
+              try {
+                const parts = confToken.slice("sora_conf_".length).split(".");
+                const payload = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf-8"));
+                if (payload?.toolName) {
+                  for (const fc of sortedCalls) {
+                    if (fc.name === payload.toolName && fc.args && !fc.args.confirmationToken) {
+                      fc.args.confirmationToken = confToken;
+                    }
+                  }
+                }
+              } catch {}
+            }
+
+            const activeUserUtterance = actionContextManager.getLastUserUtterance("default");
+
+            for (const fc of sortedCalls) {
+              const enrichedArgs = { ...((fc.args ?? {}) as Record<string, unknown>) };
+              if (activeUserUtterance && !enrichedArgs._userUtterance) {
+                enrichedArgs._userUtterance = activeUserUtterance;
+              }
               this.orchestrator
                 .dispatch(
                   {
                     name: fc.name!,
-                    args: (fc.args ?? {}) as Record<string, unknown>,
+                    args: enrichedArgs,
                     id: fc.id,
                   },
                   getSession(),
@@ -2601,6 +2913,7 @@ export class GeminiSessionFactory {
                   console.error(`[ToolOrchestrator] Unhandled error:`, err),
                 );
             }
+            actionContextManager.consumeLastUserUtterance("default");
           }
 
           // GoAway signal from Gemini Live
@@ -2620,21 +2933,31 @@ export class GeminiSessionFactory {
         },
 
         onopen: () => {
+          if (isStaleSession()) {
+            console.warn(`[Gemini Live] Ignoring stale onopen callback for superseded session ${sessionId}`);
+            return;
+          }
           console.log(
-            `[Gemini Live] Session opened successfully (Model: ${liveModel})`,
+            `[Gemini Live] Session opened successfully (Model: ${liveModel}, sessionId: ${sessionId})`,
           );
           _logStartup(`GEMINI_LIVE_CONNECTED: model=${liveModel}`);
-          _logJson("info", "gemini_live_connected", { model: liveModel });
+          _logJson("info", "gemini_live_connected", { model: liveModel, sessionId });
           flags.geminiRecreateAttempts = 0;
-          flags.onGeminiStateChange?.("READY");
-          sendToClient({ type: "status", status: "connected", geminiState: "READY" });
+          const handledByConversationManager = flags.onSessionOpen?.(sessionId, getSession());
+          if (!handledByConversationManager) {
+            flags.onGeminiStateChange?.("READY", sessionId);
+            sendToClient({ type: "status", status: "connected", geminiState: "READY" });
+          }
         },
 
         onerror: (err: any) => {
+          if (isStaleSession()) {
+            return;
+          }
           const msg = sanitizeGeminiErrorReason(err?.message || String(err));
           console.error("[Gemini Live Error]:", msg);
           _logError(`GEMINI_LIVE_ERROR: ${msg}`);
-          _logJson("error", "gemini_live_error", { error: msg });
+          _logJson("error", "gemini_live_error", { error: msg, sessionId });
           const { categorizedError, isAuthFailure } = classifyGeminiLiveCloseError(
             undefined,
             msg,
@@ -2642,7 +2965,7 @@ export class GeminiSessionFactory {
             flags,
           );
           if (isAuthFailure && categorizedError) {
-            flags.onGeminiStateChange?.("FAILED");
+            flags.onGeminiStateChange?.("FAILED", sessionId);
             sendToClient({
               type: "error",
               error: categorizedError,
@@ -2660,6 +2983,9 @@ export class GeminiSessionFactory {
         },
 
         onclose: (event: any) => {
+          if (isStaleSession()) {
+            return;
+          }
           const code = event?.code ?? event?._closeCode;
           const rawReason =
             event?.reason ||
@@ -2677,10 +3003,10 @@ export class GeminiSessionFactory {
             `[Gemini Live] Session closed (code: ${code ?? "none"}, reason: ${sanitizedReason || "none"})`,
           );
           _logError(`GEMINI_LIVE_CLOSED: code=${code} reason=${sanitizedReason}`);
-          _logJson("info", "gemini_live_closed", { code, reason: sanitizedReason });
+          _logJson("info", "gemini_live_closed", { code, reason: sanitizedReason, sessionId });
 
           if (flags.isClientClosed || clientWs.readyState !== 1) {
-            flags.onGeminiStateChange?.("CLOSED");
+            flags.onGeminiStateChange?.("CLOSED", sessionId);
             return;
           }
 
@@ -2689,7 +3015,7 @@ export class GeminiSessionFactory {
             /GEMINI_MODEL_UNSUPPORTED|GEMINI_QUOTA_EXCEEDED/i.test(categorizedError || "");
 
           if (isTerminalGeminiError && categorizedError) {
-            flags.onGeminiStateChange?.("FAILED");
+            flags.onGeminiStateChange?.("FAILED", sessionId);
             sendToClient({
               type: "error",
               error: categorizedError,
@@ -2714,7 +3040,7 @@ export class GeminiSessionFactory {
           if (isTransientGeminiClose && (isDurationLimit || currentAttempt < maxRecreate)) {
             const nextAttempt = isDurationLimit ? 1 : currentAttempt + 1;
             flags.geminiRecreateAttempts = isDurationLimit ? 0 : nextAttempt;
-            flags.onGeminiStateChange?.("RECREATING");
+            flags.onGeminiStateChange?.("RECREATING", sessionId);
 
             const delayMs = isDurationLimit
               ? 300
@@ -2732,7 +3058,7 @@ export class GeminiSessionFactory {
             });
 
             setTimeout(async () => {
-              if (clientWs.readyState === 1 && !flags.isClientClosed) {
+              if (clientWs.readyState === 1 && !flags.isClientClosed && !isStaleSession()) {
                 try {
                   flags.isRotating = false;
                   await onRotate();
@@ -2744,22 +3070,35 @@ export class GeminiSessionFactory {
                     "[Gemini Live] Failed to recreate session:",
                     rotateErr,
                   );
-                  flags.onGeminiStateChange?.("CLOSED");
-                  sendToClient({
-                    type: "status",
-                    status: "session_closed",
-                    geminiState: "CLOSED",
-                    code: code || 1011,
-                    reason:
-                      "Gemini Live session interrupted. Send a message or tap to resume.",
-                  });
+                  if (flags.onRecreateExhausted) {
+                    flags.onRecreateExhausted(code || 1011, "Gemini Live session interrupted. Please repeat your last message.");
+                  } else {
+                    flags.onGeminiStateChange?.("CLOSED", sessionId);
+                    sendToClient({
+                      type: "status",
+                      status: "session_closed",
+                      geminiState: "CLOSED",
+                      code: code || 1011,
+                      reason:
+                        "Gemini Live session interrupted. Send a message or tap to resume.",
+                    });
+                  }
                 }
               }
             }, delayMs);
             return;
           }
 
-          flags.onGeminiStateChange?.("CLOSED");
+          // SEC-P4-A01 (AC-19): Recreate attempts exhausted -> clear buffer & notify user cleanly
+          if (isTransientGeminiClose && !isDurationLimit && currentAttempt >= maxRecreate && flags.onRecreateExhausted) {
+            flags.onRecreateExhausted(
+              code,
+              sanitizedReason || "Gemini Live session could not be restored after retries. Please repeat your last message.",
+            );
+            return;
+          }
+
+          flags.onGeminiStateChange?.("CLOSED", sessionId);
           sendToClient({
             type: "status",
             status: "session_closed",
@@ -2770,6 +3109,29 @@ export class GeminiSessionFactory {
         },
       },
     });
+
+    (session as any).sessionId = sessionId;
+
+    (session as any).requestSessionRotation = (reason: string = "project_switch") => {
+      if (isStaleSession()) return;
+      flags.pendingSessionRotation = reason;
+      // Fallback timer: if model never sends turnComplete, rotate after 4000ms
+      setTimeout(() => {
+        if (
+          !isStaleSession() &&
+          flags.pendingSessionRotation === reason &&
+          !flags.isClientClosed &&
+          !flags.isRotating
+        ) {
+          flags.pendingSessionRotation = undefined;
+          flags.isRotating = true;
+          flags.onEpochCutover?.(reason);
+          try {
+            getSession()?.close();
+          } catch (_e) {}
+        }
+      }, 4000);
+    };
 
     sessionRef = session;
     return session;

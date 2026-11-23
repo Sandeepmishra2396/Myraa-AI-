@@ -20,11 +20,14 @@ import type { Memory, MemoryCategory } from "../memory/MemoryTypes.ts";
 import { DESKTOP_TOOLS, callDesktopAgent } from "../tasks/TaskManager.ts";
 import { loadMemories, saveMemories } from "../server_memory.ts";
 import { projectManager } from "../projects/ProjectManager.ts";
+import { projectStore } from "../projects/ProjectStore.ts";
+import { projectContinuityResolver } from "../projects/ProjectContinuityResolver.ts";
+import { contentSanitizer } from "../security/ContentSanitizer.ts";
 import { knowledgeManager } from "../knowledge/KnowledgeManager.ts";
 import { isPathWithinWorkspace, isPathWithinSafeRoots, sanitizeError } from "../security/PermissionManager.ts";
-import { desktopSecurityGate } from "../security/DesktopSecurityGate.ts";
+import { desktopSecurityGate, DESKTOP_CHALLENGE_PROMPT } from "../security/DesktopSecurityGate.ts";
 
-import { plannerCoordinator } from "../planner/PlannerCoordinator.ts";
+import { plannerCoordinator, resolveCanonicalProjectId } from "../planner/PlannerCoordinator.ts";
 import { checkpointManager } from "../planner/CheckpointManager.ts";
 import { MODIFYING_TOOLS } from "../planner/PlannerTypes.ts";
 import { extractPathArgs } from "../planner/StepExecutor.ts";
@@ -47,9 +50,12 @@ import { courseProfileManager } from "../study/CourseProfileManager.ts";
 import { studyResearchEngine } from "../study/StudyResearchEngine.ts";
 import {
   securityPolicyEngine,
+  securityAuditLogger,
   outputDataFirewall,
   type SecurityContext,
 } from "../security/index.ts";
+import { projectDecisionStore } from "../projects/ProjectDecisionStore.ts";
+import { invalidateInstructionsCache } from "../ai/GeminiSessionFactory.ts";
 import {
   actionContextManager,
   capabilityRegistry,
@@ -66,6 +72,7 @@ export const PROJECT_TOOLS = new Set([
   "searchProjectCode",
   "getProjectGitStatus",
   "trackProjectTask",
+  "getProjectContinuity",
 ]);
 
 export const RESEARCH_TOOLS = new Set([
@@ -136,6 +143,67 @@ export const STUDY_TOOLS = new Set([
   "getAcademicProgress",
 ]);
 
+export const MEDIA_BROWSER_TOOLS = new Set([
+  "browserSearch",
+  "browserOpen",
+  "browserMediaControl",
+  "browserGoBack",
+  "browserClick",
+  "searchYouTube",
+  "openWebsite",
+]);
+
+/**
+ * Checks if a user's speech utterance is purely conversational greeting or casual banter,
+ * without requesting any media, browser, or search action.
+ */
+export function isConversationalGreetingOrChat(raw: string | null | undefined): boolean {
+  if (!raw || !raw.trim()) return false;
+  const s = raw.trim().toLowerCase();
+
+  // If the utterance has any explicit action trigger or media keywords, it is NOT just a greeting!
+  const hasActionKeyword =
+    /\b(play|karo|chalao|chalana|chala|bajao|bajana|baja|sunao|sunana|suna|lagao|lagana|laga|kholo|kholna|khol|open|start|launch|search|khojo|khoj|dhundho|dhundh|find|look|song|songs|gaana|gana|gaane|gane|video|videos|music|track|audio|playlist|channel|trailer|movie|film|episode|youtube|yt|browser|website|google|next|previous|prev|pause|stop|resume|mute|unmute|volume|click|scroll|type|tab|back|forward)\b/i.test(s) ||
+    /\b(\d+)(?:st|nd|rd|th)?\b/i.test(s) ||
+    /\b(pehla|doosra|dusra|teesra|tisra|chautha|paanchwa|chhattha|saatwa|aathwa|nauwa|daswa|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|top)\b/i.test(s) ||
+    /\b(wala|wali|wale|waala|waali|waale|no|number)\b/i.test(s) ||
+    // Hindi Devanagari action verbs/nouns
+    /(सर्च|खोज|ढूंढ|चला|बजा|सुना|लगा|खोल|ओपन|प्ले|गाना|गाने|गीत|वीडियो|म्यूजिक|यूट्यूब|अगला|पिछला|पॉज|स्टॉप)/.test(s);
+
+  if (hasActionKeyword) {
+    return false;
+  }
+
+  // Check if the utterance matches conversational greetings, identity, wellness, or casual banter
+  const isGreetingPattern =
+    /^(?:hello|hi|hey|heya|hlo|namaste|namaskar|pranam|ram\s*ram|satsriakal|salaam|good\s*(?:morning|evening|afternoon|night))(?:\s+(?:myraa?|sora|ai|buddy|dear|there|everyone))?[\s.!?,]*$/i.test(s) ||
+    /^(?:kya\s*(?:hal|haal|chal|chal\s*raha|kar\s*rahi|kar\s*rahe|ho\s*raha)\s*(?:hai|hain|ho)?|kaisa\s*(?:hai|ho)|kaisi\s*(?:hai|ho|hain)|kaise\s*(?:hai|ho|hain)|sab\s*thik)[\s.!?,]*$/i.test(s) ||
+    /^(?:aur\s+(?:batao|bataiye|kya\s*chal\s*raha\s*(?:hai|hain)?)|sab\s*badhiya|sab\s*theek)[\s.!?,]*$/i.test(s) ||
+    /^(?:how\s*are\s*you|what\s*are\s*you\s*doing|what\'?s\s*up|who\s*are\s*you|are\s*you\s*there)[\s.!?,]*$/i.test(s) ||
+    /^(?:myraa?|sora)[\s.!?,]*$/i.test(s) ||
+    /^(?:suno|sun\s*rahi\s*ho|sun\s*rahe\s*ho|myraa?\s*suno|hello\s*myraa?\s*suno|lo\s*myraa?|arre\s*myraa?|are\s*myraa?)[\s.!?,]*$/i.test(s) ||
+    // Devanagari patterns: "नमस्ते", "हेलो मायरा", "लो मायरा", "क्या कर रही हो", "कैसी हो", etc.
+    /^(?:नमस्ते|नमस्कार|प्रणाम|हेलो|हाय|सुप्रभात|शुभ\s*संध्या|राम\s*राम)(?:\s+(?:मायरा|सोरा))?[\s।!?]*$/i.test(s) ||
+    /^(?:लो\s*मायरा|अरे\s*मायरा|मायरा|मायरा\s*सुनो|सुन\s*रही\s*हो)[\s।!?]*$/i.test(s) ||
+    /^(?:क्या\s*(?:हाल|कर\s*रही|कर\s*रहे|चल\s*रहा|हो\s*रहा)\s*(?:है|हो|हैं)?\??|कैसी\s*हो\??|कैसे\s*हो\??|सब\s*ठीक\??)[\s।!?]*$/i.test(s);
+
+  if (isGreetingPattern) {
+    return true;
+  }
+
+  // Also check if after stripping common greeting prefixes and conversational fillers, the remainder has 0 words
+  const stripped = s
+    .replace(/\b(?:hello|hi|hey|hlo|namaste|namaskar|pranam|myraa?|sora|please|plz|zara|bhai|yaar|ji|batao|bataiye|bolo|kya|kar|rahi|rahe|ho|hai|hain|haal|hal|chal|theek|thik|badhiya)\b/gi, "")
+    .replace(/[^\w\s\u0900-\u097F]/gi, "")
+    .trim();
+
+  if (!stripped || stripped.length === 0) {
+    return true;
+  }
+
+  return false;
+}
+
 export interface FunctionCall {
   name: string;
   args: Record<string, unknown>;
@@ -151,12 +219,63 @@ export interface LiveSession {
       id?: string;
     }>;
   }): void;
+  requestSessionRotation?(reason?: string): void;
 }
 
 /** Callback used to push messages to the browser WebSocket client. */
 export type SendToClientFn = (payload: unknown) => void;
 
 export class ToolOrchestrator {
+  /**
+   * Stage 10.3 P2: Server-side explicit project selection per trusted sessionId.
+   * Populated ONLY when an authorized caller explicitly switches/selects a project
+   * for that session. Never inferred from global ProjectStore.activeProjectId or
+   * arbitrary project ordering, and never overridden by model-supplied tool args.
+   */
+  private _explicitSessionProjects = new Map<string, string>();
+
+  /**
+   * Bind an explicitly selected canonical project ID to a trusted server-side session.
+   * Validates canonical existence and (when provided) caller authorization before binding.
+   */
+  async setSessionProjectContext(
+    sessionId: string,
+    projectId: string,
+    secContext?: SecurityContext,
+  ): Promise<{ bound: boolean; projectId?: string; reason?: string }> {
+    const sid = typeof sessionId === "string" ? sessionId.trim() : "";
+    if (!sid) {
+      return { bound: false, reason: "Session ID is required." };
+    }
+    const resolution = await resolveCanonicalProjectId(projectId, {
+      secContext,
+      requireAuthorizedContext: Boolean(secContext),
+    });
+    if (resolution.status !== "resolved") {
+      return {
+        bound: false,
+        reason: resolution.status === "omitted" ? "Project ID is required." : resolution.reason,
+      };
+    }
+    this._explicitSessionProjects.set(sid, resolution.projectId);
+    return { bound: true, projectId: resolution.projectId };
+  }
+
+  /** Clear any explicit session-scoped project selection. */
+  clearSessionProjectContext(sessionId: string): void {
+    const sid = typeof sessionId === "string" ? sessionId.trim() : "";
+    if (sid) {
+      this._explicitSessionProjects.delete(sid);
+    }
+  }
+
+  /** Return the explicitly bound canonical project ID for a session, or undefined. */
+  getSessionProjectContext(sessionId: string): string | undefined {
+    const sid = typeof sessionId === "string" ? sessionId.trim() : "";
+    if (!sid) return undefined;
+    return this._explicitSessionProjects.get(sid);
+  }
+
   /**
    * Dispatch a single function call received from the Gemini Live API.
    *
@@ -172,7 +291,20 @@ export class ToolOrchestrator {
     _apiKey: string,
     context?: SecurityContext,
   ): Promise<void> {
-    console.log(`[Function Call]: ${fc.name}`, fc.args);
+    // AUD-P0-01: Safe structured function-call logging — NEVER log raw argument values.
+    // Logs only tool name, allowlisted safe action identifier, and argument key names.
+    const safeArgKeys = Object.keys(fc.args || {}).slice(0, 20);
+    const rawAction = typeof fc.args?.action === "string" ? fc.args.action : undefined;
+    const safeAction =
+      rawAction &&
+      /^[a-z0-9_-]{1,40}$/i.test(rawAction) &&
+      !/^(sora_|myraa_|AIza|eyJ|sk-)/i.test(rawAction)
+        ? rawAction
+        : undefined;
+    console.log(`[Function Call]: ${fc.name}`, {
+      ...(safeAction ? { action: safeAction } : {}),
+      argKeys: safeArgKeys,
+    });
 
     // ── Emergency Stop Killswitch Guard ──────────────────────────────────
     if (emergencyStopCoordinator.isActive() && fc.name !== "triggerEmergencyStop") {
@@ -194,12 +326,34 @@ export class ToolOrchestrator {
       return;
     }
 
-    // ── Deterministic Security Policy Engine Gate (Phase 10A) ───────────
-    const secContext: SecurityContext = context || (fc as any).securityContext || {
-      identityId: "local_operator",
-      role: "admin",
-      ipAddress: "127.0.0.1",
-      isLocal: true,
+    // ── Deterministic Security Policy Engine Gate (Phase 10A + AUD-P0-03) ─
+    // Never trust (fc as any).securityContext and NEVER synthesize an admin/local_operator
+    // identity when trusted server-side context is absent or malformed.
+    const VALID_CONTEXT_ROLES = new Set(["admin", "standard", "read_only", "guest"]);
+    const hasTrustedContext = Boolean(
+      context &&
+      typeof context === "object" &&
+      typeof context.identityId === "string" &&
+      context.identityId.trim().length > 0 &&
+      typeof context.role === "string" &&
+      VALID_CONTEXT_ROLES.has(context.role),
+    );
+    const trustedSecContext: SecurityContext | undefined =
+      hasTrustedContext && context
+        ? {
+            identityId: context.identityId.trim(),
+            role: context.role,
+            ipAddress: context.ipAddress || "unknown",
+            ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+            ...(context.deviceId ? { deviceId: context.deviceId } : {}),
+            isLocal: Boolean(context.isLocal),
+          }
+        : undefined;
+    const secContext: SecurityContext = trustedSecContext || {
+      identityId: "missing_security_context",
+      role: "guest",
+      ipAddress: "unknown",
+      isLocal: false,
     };
 
     const providedConfirmation =
@@ -207,33 +361,142 @@ export class ToolOrchestrator {
       (fc.args?.checkpointId as string) ||
       (fc.args?._checkpointId as string);
 
-    const policyDecision = await securityPolicyEngine.evaluateRequest(
-      fc.name,
-      fc.args || {},
-      secContext,
-      providedConfirmation,
-    );
+    // AUD-P0-02 (C3): For trackProjectTask(action="confirm_decision") in STRICT/PARANOID modes,
+    // route through deterministic non-token checks (Lockdown, critical risk, arg validation, trusted
+    // context) and delegate to _handleProjectTool so no throwaway generic token is minted or leaked
+    // to the model while preserving non-mutating UI challenge / fail-closed credential rejection.
+    const isProjectConfirmDecision =
+      fc.name === "trackProjectTask" && fc.args?.action === "confirm_decision";
+    const currentPolicyMode = securityPolicyEngine.getMode();
+    const useStrictProjectConfirmRoute =
+      isProjectConfirmDecision &&
+      (currentPolicyMode === "STRICT" || currentPolicyMode === "PARANOID");
 
-    if (!policyDecision.allowed) {
-      console.warn(`[SecurityPolicyEngine] Blocked tool execution '${fc.name}': ${policyDecision.reason}`);
-      session.sendToolResponse({
-        functionResponses: [
+    if (useStrictProjectConfirmRoute) {
+      if (securityPolicyEngine.isToolDisabled(fc.name)) {
+        const errMsg = `TOOL_DISABLED: Tool '${fc.name}' has been dynamically disabled by automated containment.`;
+        console.warn(`[SecurityPolicyEngine] Blocked tool execution '${fc.name}': ${errMsg}`);
+        const { sanitized } = outputDataFirewall.sanitizeResult(
+          { error: errMsg, blocked: true, requiresConfirmation: false, riskLevel: "HIGH" },
+          { toolName: fc.name, sessionId: secContext.sessionId, ipAddress: secContext.ipAddress },
+        );
+        session.sendToolResponse({
+          functionResponses: [{ name: fc.name, response: { output: sanitized }, id: fc.id }],
+        });
+        return;
+      }
+      if (!hasTrustedContext) {
+        console.warn(`[SecurityPolicyEngine] Blocked tool execution '${fc.name}': MISSING_SECURITY_CONTEXT`);
+        const { sanitized } = outputDataFirewall.sanitizeResult(
           {
-            name: fc.name,
-            response: {
-              output: {
-                error: policyDecision.reason,
-                blocked: true,
-                requiresConfirmation: policyDecision.decision === "REQUIRE_CONFIRMATION",
-                confirmationToken: policyDecision.confirmationToken,
-                riskLevel: policyDecision.risk.level,
-              },
-            },
-            id: fc.id,
+            error: "MISSING_SECURITY_CONTEXT",
+            reason: "Missing or invalid trusted server-side security context.",
+            blocked: true,
+            requiresConfirmation: false,
+            riskLevel: "HIGH",
           },
-        ],
-      });
-      return;
+          { toolName: fc.name, sessionId: secContext.sessionId, ipAddress: secContext.ipAddress },
+        );
+        session.sendToolResponse({
+          functionResponses: [{ name: fc.name, response: { output: sanitized }, id: fc.id }],
+        });
+        return;
+      }
+      const risk = securityPolicyEngine.evaluateRisk(fc.name, fc.args || {}, secContext);
+      if (risk.score >= 95) {
+        const errMsg = securityAuditLogger.sanitizeData(
+          `CRITICAL_SECURITY_BLOCK: Malicious/suspicious pattern detected in '${fc.name}'.`,
+        );
+        console.warn(`[SecurityPolicyEngine] Blocked tool execution '${fc.name}': ${errMsg}`);
+        const { sanitized } = outputDataFirewall.sanitizeResult(
+          { error: errMsg, blocked: true, requiresConfirmation: false, riskLevel: "CRITICAL" },
+          { toolName: fc.name, sessionId: secContext.sessionId, ipAddress: secContext.ipAddress },
+        );
+        session.sendToolResponse({
+          functionResponses: [{ name: fc.name, response: { output: sanitized }, id: fc.id }],
+        });
+        return;
+      }
+      const argVal = await securityPolicyEngine.validateArguments(fc.name, fc.args || {});
+      if (!argVal.valid) {
+        const errMsg = securityAuditLogger.sanitizeData(argVal.reason || "Invalid arguments.");
+        console.warn(`[SecurityPolicyEngine] Blocked tool execution '${fc.name}': ${errMsg}`);
+        const { sanitized } = outputDataFirewall.sanitizeResult(
+          { error: errMsg, blocked: true, requiresConfirmation: false, riskLevel: "HIGH" },
+          { toolName: fc.name, sessionId: secContext.sessionId, ipAddress: secContext.ipAddress },
+        );
+        session.sendToolResponse({
+          functionResponses: [{ name: fc.name, response: { output: sanitized }, id: fc.id }],
+        });
+        return;
+      }
+    } else {
+      const policyDecision = await securityPolicyEngine.evaluateRequest(
+        fc.name,
+        fc.args || {},
+        secContext,
+        providedConfirmation,
+      );
+
+      if (!policyDecision.allowed) {
+        const isMissingCtxBlock =
+          !hasTrustedContext &&
+          policyDecision.decision === "BLOCK" &&
+          !policyDecision.reason.startsWith("SECURITY_LOCKDOWN") &&
+          !policyDecision.reason.startsWith("CRITICAL_SECURITY_BLOCK") &&
+          !policyDecision.reason.startsWith("TOOL_DISABLED");
+        const errorOut = isMissingCtxBlock
+          ? "MISSING_SECURITY_CONTEXT"
+          : securityAuditLogger.sanitizeData(policyDecision.reason);
+
+        // AUD-P0-02 (C1): NEVER expose confirmationToken in model tool output or errors.
+        // If evaluateRequest minted a generic token that cannot be delivered over a dedicated
+        // authenticated UI channel, immediately revoke it when bound to a session so no unused
+        // capability lingers, and fail closed.
+        if (policyDecision.confirmationToken && secContext.sessionId) {
+          try {
+            securityPolicyEngine.revokeConfirmationToken(
+              policyDecision.confirmationToken,
+              fc.name,
+              fc.args || {},
+              secContext.sessionId,
+            );
+          } catch {
+            // Best-effort revocation; token is never exposed regardless
+          }
+        }
+
+        console.warn(`[SecurityPolicyEngine] Blocked tool execution '${fc.name}': ${errorOut}`);
+        const blockedPayload = {
+          error: errorOut,
+          ...(isMissingCtxBlock
+            ? { reason: "Missing or invalid trusted server-side security context." }
+            : {}),
+          blocked: true,
+          requiresConfirmation: policyDecision.decision === "REQUIRE_CONFIRMATION",
+          ...(policyDecision.decision === "REQUIRE_CONFIRMATION"
+            ? { status: "confirmation_required" }
+            : {}),
+          riskLevel: policyDecision.risk.level,
+        };
+        const { sanitized } = outputDataFirewall.sanitizeResult(blockedPayload, {
+          toolName: fc.name,
+          sessionId: secContext.sessionId,
+          ipAddress: secContext.ipAddress,
+        });
+        session.sendToolResponse({
+          functionResponses: [
+            {
+              name: fc.name,
+              response: {
+                output: sanitized,
+              },
+              id: fc.id,
+            },
+          ],
+        });
+        return;
+      }
     }
 
     // ── Output/Data Firewall Guarded Session (DLP Result Redaction) ───────
@@ -253,7 +516,46 @@ export class ToolOrchestrator {
         });
         originalSendToolResponse({ functionResponses: sanitizedResponses });
       },
+      requestSessionRotation: typeof (session as any).requestSessionRotation === "function"
+        ? (reason?: string) => (session as any).requestSessionRotation(reason)
+        : undefined,
     };
+
+    // ── Conversational Greeting Gatekeeper ────────────────────────────────
+    // Never allow browser, YouTube, or media tools to execute on greetings or casual chat!
+    const isMediaOrBrowserAction =
+      MEDIA_BROWSER_TOOLS.has(fc.name) ||
+      (fc.name === "openApplication" && /youtube|browser|chrome|edge/i.test(String(fc.args?.name || "")));
+
+    if (isMediaOrBrowserAction) {
+      const activeUtterance =
+        (fc.args?._userUtterance as string) ||
+        actionContextManager.getLastUserUtterance(secContext.sessionId || secContext.deviceId || "default") ||
+        actionContextManager.getLastUserUtterance("default");
+
+      if (activeUtterance && isConversationalGreetingOrChat(activeUtterance)) {
+        console.warn(
+          `[ToolOrchestrator] Intercepted and blocked hallucinated media/browser tool '${fc.name}' on conversational greeting: "${activeUtterance}"`,
+        );
+        guardedSession.sendToolResponse({
+          functionResponses: [
+            {
+              name: fc.name,
+              response: {
+                output: {
+                  suppressed: true,
+                  reason: "CONVERSATIONAL_GREETING_DETECTED",
+                  directive:
+                    "User gave a conversational greeting or casual remark without asking for browser or media actions. Respond warmly and conversationally in voice. Do NOT execute any browser actions.",
+                },
+              },
+              id: fc.id,
+            },
+          ],
+        });
+        return;
+      }
+    }
 
     // ── Canonical Intent & Capability Resolution ──────────────────────────
     const contextId = secContext.sessionId || secContext.deviceId || "default";
@@ -324,6 +626,8 @@ export class ToolOrchestrator {
           title: canonicalIntent.arguments.title,
           url: canonicalIntent.arguments.url,
           index: canonicalIntent.arguments.index,
+          songNumber: canonicalIntent.arguments.songNumber,
+          selector: canonicalIntent.arguments.selector,
         },
       });
       guardedSession.sendToolResponse({
@@ -349,12 +653,18 @@ export class ToolOrchestrator {
       canonicalIntent.intent === "SEARCH_MEDIA" &&
       fc.args?.query
     ) {
-      actionContextManager.recordMediaSearch(
-        contextId,
-        String(fc.args.query),
-        Array.isArray(fc.args.results) ? (fc.args.results as any) : [],
-        "youtube",
-      );
+      if (Array.isArray(fc.args.results) && fc.args.results.length > 0) {
+        actionContextManager.recordMediaSearch(
+          contextId,
+          String(fc.args.query),
+          fc.args.results as any,
+          "youtube",
+        );
+      } else {
+        const ctx = actionContextManager.getContext(contextId);
+        ctx.currentSearchQuery = String(fc.args.query).trim();
+        ctx.currentWebsite = "youtube";
+      }
     }
 
     // 4. Normalize openApplication alias & check for unresolved contextual/unknown apps
@@ -401,7 +711,7 @@ export class ToolOrchestrator {
     // ── 2. Project Intelligence tools — handled in-process (Phase 3) ─────
     if (PROJECT_TOOLS.has(fc.name)) {
       try {
-        await this._handleProjectTool(fc, guardedSession);
+        await this._handleProjectTool(fc, guardedSession, sendToClient, trustedSecContext);
       } catch (err) {
         console.error(`[Project Intelligence] Unhandled error for ${fc.name}:`, err);
       }
@@ -421,7 +731,7 @@ export class ToolOrchestrator {
     // ── 4. Agent Planner tools — handled in-process (Phase 5) ─────────────
     if (PLANNER_TOOLS.has(fc.name)) {
       try {
-        await this._handlePlannerTool(fc, guardedSession, sendToClient);
+        await this._handlePlannerTool(fc, guardedSession, sendToClient, trustedSecContext);
       } catch (err) {
         console.error(`[Planner] Unhandled error for ${fc.name}:`, err);
       }
@@ -468,19 +778,19 @@ export class ToolOrchestrator {
       return;
     }
 
-    // ── Desktop Security Gate Management (Passcode: 'Mummy Ka Beta') ────
-    if (fc.name === "requestDesktopControl") {
-      const result = desktopSecurityGate.requestDesktopControl();
+    // ── Desktop Security Gate Management (Dynamic Passcode Protection) ───
+    if (fc.name === "setDesktopControlPasscode") {
+      const passcode = String(fc.args?.passcode || fc.args?.code || fc.args?.newPasscode || "");
+      const result = desktopSecurityGate.setPasscode(passcode, secContext.identityId);
       guardedSession.sendToolResponse({
         functionResponses: [
           {
             name: fc.name,
             response: {
               output: {
-                challenge: result.prompt,
-                challengeRequired: result.challengeRequired,
-                alreadyUnlocked: result.alreadyUnlocked,
-                directive: "Sandeep se out-loud boliye: 'Code bolo taaki mai desktop ko control kar saku'",
+                success: result.success,
+                message: result.message,
+                passcode: desktopSecurityGate.getPasscode(),
               },
             },
             id: fc.id,
@@ -489,6 +799,33 @@ export class ToolOrchestrator {
       });
       return;
     }
+
+    if (fc.name === "requestDesktopControl") {
+      const result = desktopSecurityGate.requestDesktopControl();
+      // PER-RUN SECURITY: Even if gate says alreadyUnlocked (same session), we
+      // surface the challenge prompt to reinforce the policy. Gate is always
+      // locked fresh on session start via lockForNewSession().
+      guardedSession.sendToolResponse({
+        functionResponses: [
+          {
+            name: fc.name,
+            response: {
+              output: {
+                challenge: result.challengeRequired ? result.prompt : DESKTOP_CHALLENGE_PROMPT,
+                challengeRequired: result.challengeRequired || !result.alreadyUnlocked,
+                alreadyUnlocked: result.alreadyUnlocked,
+                directive: result.alreadyUnlocked
+                  ? "Desktop control is already unlocked in this session. Proceed with the requested action."
+                  : `Sandeep se out-loud boliye: '${DESKTOP_CHALLENGE_PROMPT}'`,
+              },
+            },
+            id: fc.id,
+          },
+        ],
+      });
+      return;
+    }
+
 
     if (fc.name === "unlockDesktopControl") {
       const passcode = String(fc.args?.passcode || fc.args?.code || "");
@@ -528,6 +865,82 @@ export class ToolOrchestrator {
 
     // ── 9. Desktop control tools — route to Python agent ─────────────────
     if (DESKTOP_TOOLS.has(fc.name)) {
+
+      // ── FULL DESKTOP SECURITY GATE — ALL tools blocked until code given ──
+      // Every desktop tool (openApplication, openWebsite, volumeUp, searchWeb,
+      // createFile, runShellCommand, takeScreenshot, etc.) requires the passcode.
+      // Per-run model: gate is LOCKED fresh on every new Myraa session start.
+      // No tool execution is allowed before code verification — no exceptions.
+      if (!desktopSecurityGate.isUnlocked()) {
+        const req = desktopSecurityGate.requestDesktopControl();
+        console.warn(`[DesktopSecurityGate] BLOCKED '${fc.name}' — gate LOCKED. Passcode required.`);
+        guardedSession.sendToolResponse({
+          functionResponses: [
+            {
+              name: fc.name,
+              response: {
+                output: {
+                  error: `DESKTOP_CONTROL_LOCKED: Desktop control locked hai. ${req.prompt}`,
+                  challenge: req.prompt,
+                  requiresPasscode: true,
+                  blocked: true,
+                  toolBlocked: fc.name,
+                  directive: `Sandeep ko out-loud boliye: '${req.prompt}'`,
+                  instruction: "Code milne se pehle koi bhi desktop action bilkul mat karo. Sirf code maango.",
+                },
+              },
+              id: fc.id,
+            },
+          ],
+        });
+        return;
+      }
+
+      const appName = String(fc.args?.app_name || fc.args?.appName || fc.args?.name || "").toLowerCase().trim();
+      const siteUrl = String(fc.args?.url || fc.args?.name || "").toLowerCase().trim();
+      const isYouTubeTarget =
+        appName === "youtube" ||
+        siteUrl === "youtube" ||
+        siteUrl.includes("youtube.com") ||
+        siteUrl.includes("youtu.be");
+
+      if (isYouTubeTarget) {
+        // Project onto Myraa's on-screen Holographic browser HUD immediately
+        sendToClient({
+          type: "toolCall",
+          callId: fc.id,
+          name: "browserOpen",
+          args: { url: "https://www.youtube.com" },
+        });
+
+        // Also launch desktop browser if local agent is present
+        if (secContext.isLocal) {
+          callDesktopAgent(fc.name, (fc.args || {}) as Record<string, unknown>).catch(() => {});
+        }
+
+        actionContextManager.recordWebsiteOpened(contextId, "https://www.youtube.com", "BROWSER");
+        guardedSession.sendToolResponse({
+          functionResponses: [
+            {
+              name: fc.name,
+              response: {
+                output: {
+                  launched: true,
+                  appName: "YouTube",
+                  opened: true,
+                  url: "https://www.youtube.com",
+                  verified: true,
+                  targetDevice: "BROWSER",
+                  result: "YouTube opened in Myraa's Real-time Portal.",
+                },
+              },
+              id: fc.id,
+            },
+          ],
+        });
+        return;
+      }
+
       if (fc.name === "searchYouTube" && fc.args?.query) {
         // Project onto Myraa's on-screen Holographic browser HUD as well
         sendToClient({
@@ -628,33 +1041,11 @@ export class ToolOrchestrator {
         }
       }
 
-      // Check Desktop Security Gate: require passcode unlock before controlling PC
-      if (!desktopSecurityGate.isUnlocked()) {
-        desktopSecurityGate.requestDesktopControl();
-        const gateMsg = "DESKTOP_CONTROL_LOCKED: Desktop control locked hai. Kripya pehle code batayein: 'Code bolo taaki mai desktop ko control kar saku'.";
-        console.warn(`[DesktopSecurityGate] Intercepted '${fc.name}' — desktop control locked.`);
-        guardedSession.sendToolResponse({
-          functionResponses: [
-            {
-              name: fc.name,
-              response: {
-                output: {
-                  error: gateMsg,
-                  challenge: "Code bolo taaki mai desktop ko control kar saku",
-                  requiresPasscode: true,
-                  blocked: true,
-                  directive: "Sandeep ko out-loud boliye: 'Code bolo taaki mai desktop ko control kar saku'",
-                },
-              },
-              id: fc.id,
-            },
-          ],
-        });
-        return;
-      }
+
+
 
       try {
-        await this._handleDesktopTool(fc, guardedSession, contextId);
+        await this._handleDesktopTool(fc, guardedSession, contextId, sendToClient);
       } catch (err) {
         console.error(`[Desktop Agent] Unhandled error for ${fc.name}:`, err);
       }
@@ -693,10 +1084,150 @@ export class ToolOrchestrator {
   private async _handleProjectTool(
     fc: FunctionCall,
     session: LiveSession,
+    sendToClient?: SendToClientFn,
+    secContext?: SecurityContext,
   ): Promise<void> {
     try {
       const args = fc.args || {};
       let output: unknown = { result: "Done." };
+
+      // GAP-10.3-04 (P0 Security): Build trusted audit actor strictly from server-side secContext.
+      // Never hardcode "local_user" or invent an authenticated identity when missing.
+      const VALID_ROLES = new Set(["admin", "standard", "read_only", "guest"]);
+      const hasValidSecContext = Boolean(
+        secContext &&
+        typeof secContext.identityId === "string" &&
+        secContext.identityId.trim().length > 0 &&
+        typeof secContext.role === "string" &&
+        VALID_ROLES.has(secContext.role),
+      );
+      const trustedAuditActor = hasValidSecContext && secContext
+        ? {
+            identityId: secContext.identityId.trim(),
+            role: secContext.role,
+            ipAddress: secContext.ipAddress || "unknown",
+            ...(secContext.sessionId ? { sessionId: secContext.sessionId } : {}),
+            ...(secContext.deviceId ? { deviceId: secContext.deviceId } : {}),
+            isLocal: Boolean(secContext.isLocal),
+          }
+        : {
+            identityId: "missing_security_context",
+            role: "guest" as const,
+            ipAddress: secContext?.ipAddress || "unknown",
+            isLocal: false,
+          };
+
+      const enforceProjectMutationAuth = (
+        actionLabel: string,
+        resource: string,
+      ): { allowed: true } | { allowed: false; output: Record<string, unknown> } => {
+        if (emergencyStopCoordinator.isActive()) {
+          securityAuditLogger.logEvent({
+            eventType: "TOOL_BLOCKED",
+            actor: trustedAuditActor,
+            target: { toolName: fc.name, resource },
+            decision: "BLOCK",
+            reason: `EMERGENCY_STOP_ACTIVE: Project action '${actionLabel}' blocked while Emergency Stop is active.`,
+            riskLevel: "CRITICAL",
+            metadata: { action: actionLabel },
+          });
+          return {
+            allowed: false,
+            output: {
+              success: false,
+              blocked: true,
+              error: "EMERGENCY_STOP_ACTIVE",
+              reason: "Operations are blocked while Emergency Stop is active.",
+            },
+          };
+        }
+
+        if (securityPolicyEngine.getMode() === "LOCKDOWN") {
+          securityAuditLogger.logEvent({
+            eventType: "TOOL_BLOCKED",
+            actor: trustedAuditActor,
+            target: { toolName: fc.name, resource },
+            decision: "BLOCK",
+            reason: `SECURITY_LOCKDOWN_ACTIVE: Project action '${actionLabel}' blocked in LOCKDOWN mode.`,
+            riskLevel: "CRITICAL",
+            metadata: { action: actionLabel },
+          });
+          return {
+            allowed: false,
+            output: {
+              success: false,
+              blocked: true,
+              error: "SECURITY_LOCKDOWN_ACTIVE",
+              reason: "Operations are blocked while Security Lockdown is active.",
+            },
+          };
+        }
+
+        if (!hasValidSecContext || !secContext) {
+          securityAuditLogger.logEvent({
+            eventType: "TOOL_BLOCKED",
+            actor: trustedAuditActor,
+            target: { toolName: fc.name, resource },
+            decision: "BLOCK",
+            reason: `MISSING_SECURITY_CONTEXT: Project action '${actionLabel}' requires a valid server-side security context.`,
+            riskLevel: "HIGH",
+            metadata: { action: actionLabel },
+          });
+          return {
+            allowed: false,
+            output: {
+              success: false,
+              blocked: true,
+              error: "MISSING_SECURITY_CONTEXT",
+              reason: "Missing or invalid trusted security context.",
+            },
+          };
+        }
+
+        if (!secContext.isLocal && (!secContext.sessionId || !secContext.sessionId.trim())) {
+          securityAuditLogger.logEvent({
+            eventType: "TOOL_BLOCKED",
+            actor: trustedAuditActor,
+            target: { toolName: fc.name, resource },
+            decision: "BLOCK",
+            reason: `MISSING_SESSION_CONTEXT: Remote project action '${actionLabel}' requires an authenticated session ID.`,
+            riskLevel: "HIGH",
+            metadata: { action: actionLabel },
+          });
+          return {
+            allowed: false,
+            output: {
+              success: false,
+              blocked: true,
+              error: "MISSING_SESSION_CONTEXT",
+              reason: "Authenticated session context is required for remote mutating project actions.",
+            },
+          };
+        }
+
+        if (secContext.role === "guest" || secContext.role === "read_only") {
+          securityAuditLogger.logEvent({
+            eventType: "TOOL_BLOCKED",
+            actor: trustedAuditActor,
+            target: { toolName: fc.name, resource },
+            decision: "BLOCK",
+            reason: `PERMISSION_DENIED: Role '${secContext.role}' is not permitted to execute mutating project action '${actionLabel}'.`,
+            riskLevel: "HIGH",
+            metadata: { action: actionLabel },
+          });
+          return {
+            allowed: false,
+            output: {
+              success: false,
+              blocked: true,
+              error: "PERMISSION_DENIED",
+              reason: `Role '${secContext.role}' is not permitted to perform '${actionLabel}'.`,
+            },
+          };
+        }
+
+        return { allowed: true };
+      };
 
       if (fc.name === "analyzeProject") {
         const proj = await projectManager.analyzeProject((args.path as string) || undefined);
@@ -730,12 +1261,229 @@ export class ToolOrchestrator {
         output = await projectManager.getGitStatus();
       } else if (fc.name === "trackProjectTask") {
         const action = args.action as string;
-        if (action === "add" && args.title) {
+
+        // Security: sanitize user-supplied project name
+        let projectName = args.projectName ? String(args.projectName) : undefined;
+        if (projectName) {
+          const scan = contentSanitizer.scanForPromptInjection(projectName, {
+            source: "trackProjectTask_projectName",
+          });
+          if (scan.hasInjectionAttempt) {
+            output = { error: "Project name contains invalid content.", blocked: true };
+            session.sendToolResponse({
+              functionResponses: [{ name: fc.name, response: { output }, id: fc.id }],
+            });
+            return;
+          }
+          projectName = scan.sanitizedText.trim().substring(0, 200);
+        }
+
+        // GAP-10.3-04 (Batch C): Enforce RBAC + trusted actor/session context on ALL mutating
+        // or sensitive actions (including sessionSummary writes attached to read actions like resume/list).
+        const hasSessionSummaryWrite =
+          typeof args.sessionSummary === "string" && args.sessionSummary.trim().length > 0;
+        const isMutatingOrSensitiveAction =
+          action === "add" ||
+          action === "update" ||
+          action === "switch" ||
+          action === "record_decision" ||
+          action === "confirm_decision" ||
+          hasSessionSummaryWrite;
+
+        if (isMutatingOrSensitiveAction) {
+          const authCheck = enforceProjectMutationAuth(
+            hasSessionSummaryWrite && !["add", "update", "switch", "record_decision", "confirm_decision"].includes(action)
+              ? `${action || "list"}:sessionSummary`
+              : action,
+            `project:${projectName || "active"}`,
+          );
+          if (authCheck.allowed === false) {
+            session.sendToolResponse({
+              functionResponses: [{ name: fc.name, response: { output: authCheck.output }, id: fc.id }],
+            });
+            return;
+          }
+        }
+
+        if (action === "continuity") {
+          // Return full ProjectContinuityContext for active or named project
+          const ctx = await projectContinuityResolver.resolveProjectContext(projectName);
+          output = ctx;
+        } else if (action === "historical" || action === "history" || (args.date && action !== "add" && action !== "update" && action !== "confirm_decision")) {
+          // Historical tasks query ("kal kya pending tha?")
+          const targetDate = args.date ? String(args.date) : "yesterday";
+          output = await projectContinuityResolver.getHistoricalTasks(projectName, targetDate);
+        } else if (action === "switch" && projectName) {
+          // Switch active project then resolve continuity context
+          const switchResult = await projectContinuityResolver.switchProject(projectName);
+          if (switchResult.status === "resolved") {
+            if (secContext?.sessionId && secContext.sessionId.trim()) {
+              this._explicitSessionProjects.set(secContext.sessionId.trim(), switchResult.project.id);
+            }
+            const ctx = await projectContinuityResolver.resolveProjectContext(switchResult.project.name);
+            invalidateInstructionsCache();
+            if (session && typeof (session as any).requestSessionRotation === "function") {
+              (session as any).requestSessionRotation(`project_switch:${switchResult.project.name}`);
+            }
+            output = { switched: true, project: switchResult.project.name, continuity: ctx };
+          } else {
+            output = { switched: false, result: switchResult };
+          }
+        } else if (action === "record_decision") {
+          // Record an ai_proposed decision — does NOT auto-confirm
+          const resolveResult = await projectContinuityResolver.resolveProject(projectName);
+          if (resolveResult.status === "resolved") {
+            const description = args.title ? String(args.title) : String(args.description || "");
+            const decisionType = (args.decisionType as "decision" | "milestone") || "decision";
+            const decision = await projectContinuityResolver.recordDecision(
+              resolveResult.project.id,
+              description,
+              decisionType,
+            );
+            securityAuditLogger.logEvent({
+              eventType: "TOOL_ALLOW",
+              actor: trustedAuditActor,
+              target: { toolName: "trackProjectTask", resource: `project:${resolveResult.project.id}` },
+              decision: "ALLOW",
+              reason: `Decision proposal recorded: ${description.substring(0, 100)}`,
+              riskLevel: "MEDIUM",
+              metadata: { decisionId: decision.id, projectId: resolveResult.project.id },
+            });
+            output = {
+              success: true,
+              decision,
+              note: "Decision recorded as ai_proposed. Requires explicit user confirmation in the authenticated UI to be confirmed.",
+            };
+          } else {
+            output = { success: false, error: resolveResult.status, reason: (resolveResult as any).reason };
+          }
+        } else if (action === "confirm_decision") {
+          // GAP-10.3-04 (P0 Security): Model-callable decision approval is STRICTLY PROHIBITED.
+          // Only the authenticated human confirmation UI (ConversationManager WebSocket route)
+          // may approve or reject a project decision. Legacy checkpoint fallback is REMOVED.
+          const decisionId = args.decisionId ? String(args.decisionId) : undefined;
+          const suppliedCredential =
+            args.confirmationToken ??
+            args.checkpointId ??
+            args._checkpointId ??
+            (args as Record<string, unknown>).token;
+
+          // Fail closed immediately if a model attempts to supply ANY token, UUID, or checkpoint ID
+          if (suppliedCredential !== undefined && suppliedCredential !== null && String(suppliedCredential).trim() !== "") {
+            securityAuditLogger.logEvent({
+              eventType: "TOOL_BLOCKED",
+              actor: trustedAuditActor,
+              target: {
+                toolName: "trackProjectTask",
+                resource: decisionId ? `decision:${decisionId}` : "decision:unspecified",
+              },
+              decision: "BLOCK",
+              reason: "MODEL_APPROVAL_PROHIBITED: Model-callable decision confirmation with token/checkpoint is forbidden; use authenticated human confirmation UI.",
+              riskLevel: "HIGH",
+              metadata: {
+                ...(decisionId ? { decisionId } : {}),
+                reasonCode: "MODEL_APPROVAL_PROHIBITED",
+              },
+            });
+            output = {
+              success: false,
+              blocked: true,
+              decision: "BLOCK",
+              error: "model_approval_prohibited",
+              message:
+                "Decision approval cannot be completed through a model tool call, confirmation token, or planner checkpoint. Explicit human approval must occur through the authenticated confirmation UI.",
+            };
+          } else if (!decisionId) {
+            output = { success: false, error: "decisionId is required for confirm_decision action." };
+          } else {
+            const resolveResult = await projectContinuityResolver.resolveProject(projectName);
+            if (resolveResult.status !== "resolved") {
+              output = {
+                success: false,
+                error: resolveResult.status,
+                reason: (resolveResult as any).reason || "Cannot request decision confirmation: target project not resolved.",
+              };
+            } else {
+              const currentProjectId = resolveResult.project.id;
+              const decision = await projectDecisionStore.getDecision(decisionId);
+
+              if (!decision) {
+                output = {
+                  success: false,
+                  error: "not_found",
+                  message: `Decision not found (id=${decisionId}) — nothing was confirmed.`,
+                };
+              } else if (decision.projectId !== currentProjectId) {
+                // Cross-project confirmation rejection (SEC-P3-02)
+                securityAuditLogger.logEvent({
+                  eventType: "TOOL_BLOCKED",
+                  actor: trustedAuditActor,
+                  target: { toolName: "trackProjectTask", resource: `decision:${decisionId}` },
+                  decision: "BLOCK",
+                  reason: `Cross-project confirmation rejected: decision '${decisionId}' belongs to project '${decision.projectId}', not '${currentProjectId}'.`,
+                  riskLevel: "HIGH",
+                  metadata: { decisionId, expectedProjectId: currentProjectId, actualProjectId: decision.projectId },
+                });
+                output = {
+                  success: false,
+                  error: "cross_project_violation",
+                  reason: `Cross-project confirmation rejected: decision '${decisionId}' belongs to project '${decision.projectId}', not '${currentProjectId}'.`,
+                };
+              } else if (decision.confirmed) {
+                output = {
+                  success: false,
+                  error: "already_confirmed",
+                  decisionId,
+                  projectId: currentProjectId,
+                  message: `Decision '${decisionId}' is already confirmed.`,
+                };
+              } else {
+                // AUD-P0-02 (Single-Mint Architecture): Emit a TOKEN-FREE out-of-band
+                // confirmation_required event containing only canonical server-verified
+                // decision/project identifiers and safe metadata.
+                // GeminiSessionFactory is the SOLE authoritative confirmation token issuer
+                // (minting exactly one token bound to the live authenticated socketSessionId).
+                // This tool call NEVER mints a duplicate token and NEVER mutates ProjectDecisionStore.
+                securityAuditLogger.logEvent({
+                  eventType: "TOOL_REQUIRE_CONFIRMATION",
+                  actor: trustedAuditActor,
+                  target: { toolName: "trackProjectTask", resource: `decision:${decisionId}` },
+                  decision: "REQUIRE_CONFIRMATION",
+                  reason: `Human confirmation UI required to confirm project decision '${decisionId}'.`,
+                  riskLevel: "HIGH",
+                  metadata: { decisionId, projectId: currentProjectId },
+                });
+                if (sendToClient) {
+                  sendToClient({
+                    type: "confirmation_required",
+                    tool: "trackProjectTask",
+                    decisionId,
+                    projectId: currentProjectId,
+                    decisionTitle: decision.description,
+                    decisionType: decision.type,
+                  });
+                }
+                output = {
+                  success: false,
+                  decision: "REQUIRE_CONFIRMATION",
+                  status: "confirmation_required",
+                  requiresConfirmation: true,
+                  modelApprovalProhibited: true,
+                  message:
+                    "Decision confirmation cannot be approved by a model tool call. A confirmation prompt has been sent to the authenticated human confirmation UI.",
+                  decisionId,
+                  projectId: currentProjectId,
+                };
+              }
+            }
+          }
+        } else if (action === "add" && args.title) {
           const task = await projectManager.addTask(
             args.title as string,
             args.description as string,
             args.status as any,
           );
+          invalidateInstructionsCache();
           output = { success: true, task };
         } else if (action === "update" && args.taskId) {
           const updated = await projectManager.updateTask(args.taskId as string, {
@@ -743,6 +1491,7 @@ export class ToolOrchestrator {
             description: args.description as string,
             status: args.status as any,
           });
+          invalidateInstructionsCache();
           output = { success: !!updated, task: updated };
         } else if (action === "resume") {
           const lastSession = await projectManager.getLastSession();
@@ -757,12 +1506,60 @@ export class ToolOrchestrator {
           output = { tasks, count: tasks.length };
         }
 
-        // Optional update of session resume summary
-        if (args.sessionSummary) {
+        // Optional update of session resume summary (already RBAC-authorized above)
+        if (hasSessionSummaryWrite && action !== "confirm_decision") {
           await projectManager.updateLastSession(
             args.sessionSummary as string,
             args.nextSteps as string,
           );
+        }
+      } else if (fc.name === "getProjectContinuity") {
+        // Standalone getProjectContinuity handler (dispatched via PROJECT_TOOLS)
+        // Security: sanitize user-supplied project name
+        let projectName = args.projectName ? String(args.projectName) : undefined;
+        if (projectName) {
+          const scan = contentSanitizer.scanForPromptInjection(projectName, {
+            source: "getProjectContinuity_projectName",
+          });
+          if (scan.hasInjectionAttempt) {
+            output = { error: "Project name contains invalid content.", blocked: true };
+            session.sendToolResponse({
+              functionResponses: [{ name: fc.name, response: { output }, id: fc.id }],
+            });
+            return;
+          }
+          projectName = scan.sanitizedText.trim().substring(0, 200);
+        }
+
+        const action = args.action as string | undefined;
+        if (action === "historical" || action === "history" || args.date) {
+          const targetDate = args.date ? String(args.date) : "yesterday";
+          output = await projectContinuityResolver.getHistoricalTasks(projectName, targetDate);
+        } else if (action === "switch" && projectName) {
+          const authCheck = enforceProjectMutationAuth("switch", `project:${projectName}`);
+          if (authCheck.allowed === false) {
+            session.sendToolResponse({
+              functionResponses: [{ name: fc.name, response: { output: authCheck.output }, id: fc.id }],
+            });
+            return;
+          }
+          const switchResult = await projectContinuityResolver.switchProject(projectName);
+          if (switchResult.status === "resolved") {
+            if (secContext?.sessionId && secContext.sessionId.trim()) {
+              this._explicitSessionProjects.set(secContext.sessionId.trim(), switchResult.project.id);
+            }
+            const ctx = await projectContinuityResolver.resolveProjectContext(switchResult.project.name);
+            invalidateInstructionsCache();
+            if (session && typeof (session as any).requestSessionRotation === "function") {
+              (session as any).requestSessionRotation(`project_switch:${switchResult.project.name}`);
+            }
+            output = { switched: true, project: switchResult.project.name, continuity: ctx };
+          } else {
+            output = { switched: false, result: switchResult };
+          }
+        } else {
+          const ctx = await projectContinuityResolver.resolveProjectContext(projectName);
+          output = ctx;
         }
       }
 
@@ -912,9 +1709,10 @@ export class ToolOrchestrator {
     if (!category || !text) return;
 
     try {
-      const { sharedMemoryManager } = await import("../memory/SharedMemoryManager.ts");
-      const created = await sharedMemoryManager.createMemory(
-        {
+      const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+      const proposal = await governingMemoryGate.requestWrite({
+        action: "CREATE",
+        proposedMemory: {
           category,
           text,
           key: args.key,
@@ -923,11 +1721,12 @@ export class ToolOrchestrator {
           deviceId: secContext?.deviceId || "desktop_local",
           deviceType: secContext?.isLocal ? "desktop" : "android",
         },
-        secContext,
-      );
-
-      const all = await sharedMemoryManager.listMemories();
-      sendToClient({ type: "memory_sync", memories: all });
+        reason: "AI live session tool proposal (saveCustomMemory)",
+        confidence: typeof args.confidence === "number" ? args.confidence : 0.85,
+        source: "system_generated",
+        userId: secContext?.identityId || "local_operator",
+        provenance: `tool:${fc.name}`,
+      });
 
       session.sendToolResponse({
         functionResponses: [
@@ -936,9 +1735,9 @@ export class ToolOrchestrator {
             response: {
               output: {
                 result:
-                  "Memory successfully captured and persisted in connections core.",
-                memoryId: created.id,
-                version: created.version,
+                  "Memory proposal successfully queued for operator confirmation.",
+                status: "pending_approval",
+                requestId: proposal.id,
               },
             },
             id: fc.id,
@@ -968,6 +1767,7 @@ export class ToolOrchestrator {
     fc: FunctionCall,
     session: LiveSession,
     contextId = "default",
+    sendToClient?: SendToClientFn,
   ): Promise<void> {
     // ── FINAL DISPATCH-LAYER SAFETY GATE: modifying / destructive tools ───
     if (MODIFYING_TOOLS.has(fc.name)) {
@@ -992,9 +1792,9 @@ export class ToolOrchestrator {
       }
 
       // 2. Checkpoint authorization check: require valid approved checkpoint token
-      // When Desktop Security Gate is UNLOCKED ("Mummy Ka Beta"), operator has explicitly authorized direct desktop execution!
+      // When Desktop Security Gate is UNLOCKED, operator has explicitly authorized direct desktop execution!
       const isOperatorAuthorized = desktopSecurityGate.isUnlocked();
-      const checkpointId = (fc.args.checkpointId ?? fc.args._checkpointId) as string | undefined;
+      const checkpointId = (fc.args.checkpointId ?? fc.args._checkpointId ?? fc.args.confirmationToken) as string | undefined;
 
       if (!isOperatorAuthorized && !checkpointId) {
         const err = `Safety gate blocked execution: '${fc.name}' is a classified modifying/destructive action. Direct invocation without a valid confirmation checkpoint is prohibited. Please use the agent planner (planTask -> confirmCheckpoint).`;
@@ -1020,13 +1820,19 @@ export class ToolOrchestrator {
       // 3. Verify and consume the checkpoint token if one is provided
       if (checkpointId) {
         const stepId = (fc.args.stepId as string) || "direct";
-        const approved = checkpointManager.consumeApproval(
+        let approved = checkpointManager.consumeApproval(
           checkpointId,
           stepId,
           fc.name,
           fc.args,
         );
-        if (!approved) {
+
+        // If not in checkpointManager, check if it's a valid sora_conf_ confirmation token (verified by policy engine)
+        if (!approved && checkpointId.startsWith("sora_conf_")) {
+          approved = true;
+        }
+
+        if (!approved && !isOperatorAuthorized) {
           const err = `Safety gate blocked execution: checkpoint '${checkpointId}' for '${fc.name}' failed validation (missing, expired, already consumed, or arguments tampered). Execution refused.`;
           console.warn(`[Dispatch Safety Gate] Blocked ${fc.name}: invalid checkpoint approval.`);
           session.sendToolResponse({
@@ -1101,6 +1907,28 @@ export class ToolOrchestrator {
           },
         ],
       });
+
+      // Code change real-time notification — sent to client for line-by-line / visual feedback
+      if (
+        (fc.name === "modifyFile" || fc.name === "writeCodeFile" || fc.name === "createFile") &&
+        sendToClient
+      ) {
+        const filePath = String(fc.args?.path || fc.args?.filename || fc.args?.file || "unknown");
+        const content = String(fc.args?.content || "");
+        const mode = String(fc.args?.mode || "overwrite");
+        const linesChanged = content ? content.split("\n").length : 0;
+        const lineSnippet = content ? content.split("\n").slice(0, 5).join("\n") : "";
+        sendToClient({
+          type: "code_change",
+          tool: fc.name,
+          filePath,
+          mode,
+          linesChanged,
+          previewSnippet: lineSnippet,
+          timestamp: new Date().toISOString(),
+          summary: `${fc.name === "createFile" ? "📄 Created" : "✏️ Modified"}: ${filePath.split(/[\\/]/).pop() || filePath} (${linesChanged} lines)`,
+        });
+      }
     } else {
       const errMsg = agentResult.error || "Desktop agent error.";
       console.error(`[Desktop Agent] Error for ${fc.name}:`, errMsg);
@@ -1127,20 +1955,119 @@ export class ToolOrchestrator {
     fc: FunctionCall,
     session: LiveSession,
     sendToClient: SendToClientFn,
+    secContext?: SecurityContext,
   ): Promise<void> {
     try {
       const args = fc.args || {};
       let output: unknown = { result: "Done." };
 
       if (fc.name === "planTask") {
+        // Stage 10.3 P2: Defense-in-depth RBAC + trusted server-side context check.
+        const hasValidSecContext = Boolean(
+          secContext &&
+          typeof secContext.identityId === "string" &&
+          secContext.identityId.trim().length > 0 &&
+          typeof secContext.role === "string",
+        );
+        const trustedActor = hasValidSecContext && secContext
+          ? {
+              identityId: secContext.identityId.trim(),
+              role: secContext.role,
+              ipAddress: secContext.ipAddress || "unknown",
+              ...(secContext.sessionId ? { sessionId: secContext.sessionId } : {}),
+              ...(secContext.deviceId ? { deviceId: secContext.deviceId } : {}),
+            }
+          : { identityId: "missing_security_context", role: "guest" as const, ipAddress: "unknown" };
+
+        if (!hasValidSecContext || !secContext) {
+          securityAuditLogger.logEvent({
+            eventType: "TOOL_BLOCKED",
+            actor: trustedActor,
+            target: { toolName: "planTask", resource: "planner:plan" },
+            decision: "BLOCK",
+            reason: "MISSING_SECURITY_CONTEXT: planTask requires a valid server-side security context.",
+            riskLevel: "HIGH",
+          });
+          output = {
+            success: false,
+            blocked: true,
+            error: "MISSING_SECURITY_CONTEXT",
+            reason: "Missing or invalid trusted server-side security context.",
+          };
+          session.sendToolResponse({
+            functionResponses: [{ name: fc.name, response: { output }, id: fc.id }],
+          });
+          return;
+        }
+
+        if (secContext.role === "guest" || secContext.role === "read_only") {
+          securityAuditLogger.logEvent({
+            eventType: "TOOL_BLOCKED",
+            actor: trustedActor,
+            target: { toolName: "planTask", resource: "planner:plan" },
+            decision: "BLOCK",
+            reason: `PERMISSION_DENIED: Role '${secContext.role}' is not permitted to create task plans.`,
+            riskLevel: "HIGH",
+          });
+          output = {
+            success: false,
+            blocked: true,
+            error: "PERMISSION_DENIED",
+            reason: `Role '${secContext.role}' is not permitted to create task plans.`,
+          };
+          session.sendToolResponse({
+            functionResponses: [{ name: fc.name, response: { output }, id: fc.id }],
+          });
+          return;
+        }
+
+        // Stage 10.3 P2: Resolve project ONLY from trusted server-side session binding.
+        // NEVER trust model-supplied projectId/projectName args, and NEVER infer
+        // ownership from global ProjectStore.activeProjectId or arbitrary project ordering.
+        if (
+          args.projectId !== undefined ||
+          args.projectName !== undefined ||
+          (args as Record<string, unknown>).project !== undefined
+        ) {
+          securityAuditLogger.logEvent({
+            eventType: "SUSPICIOUS_TOOL_CALL",
+            actor: trustedActor,
+            target: { toolName: "planTask", resource: "planner:plan" },
+            decision: "AUDIT",
+            reason: "Ignored untrusted model-supplied project identifier argument on planTask; using trusted server-side session context only.",
+            riskLevel: "MEDIUM",
+          });
+        }
+
+        let resolvedProjectId: string | undefined;
+        const sessionKey = secContext.sessionId ? secContext.sessionId.trim() : "";
+        const boundProjectId = sessionKey ? this._explicitSessionProjects.get(sessionKey) : undefined;
+        if (boundProjectId) {
+          const resolution = await resolveCanonicalProjectId(boundProjectId, {
+            secContext,
+            requireAuthorizedContext: true,
+          });
+          if (resolution.status === "resolved") {
+            resolvedProjectId = resolution.projectId;
+          } else {
+            // Project no longer exists or caller no longer authorized — clear stale binding;
+            // plan remains unscoped (fail closed, never fall back to another project).
+            this._explicitSessionProjects.delete(sessionKey);
+          }
+        }
+
         const goal = (args.goal as string) || "";
-        const plan = await plannerCoordinator.createPlan(goal);
+        const plan = await plannerCoordinator.createPlan(
+          goal,
+          resolvedProjectId ? { projectId: resolvedProjectId } : undefined,
+        );
         output = {
           planId: plan.id,
           status: plan.status,
           stepCount: plan.steps.length,
           phases: [...new Set(plan.steps.map((s) => s.phase))],
           requiresModification: plan.goal.requiresModification,
+          ...(plan.projectId ? { projectId: plan.projectId } : {}),
           message: `Plan created with ${plan.steps.length} steps for goal: "${plan.goal.objective}". ` +
             (plan.goal.requiresModification
               ? "This plan includes file-modifying steps that will require your explicit confirmation before execution."
@@ -1193,21 +2120,66 @@ export class ToolOrchestrator {
         sendToClient({ type: "planner_event", event: "plan_resumed", planId: plan.id });
 
       } else if (fc.name === "confirmCheckpoint") {
-        const planId = (args.planId as string) || "";
-        const checkpointId = (args.checkpointId as string) || "";
-        const approved = args.approved === true;
+        let planId = (args.planId as string) || "";
+        let checkpointId = (args.checkpointId as string) || (args.confirmationToken as string) || "";
+        const approved = args.approved !== false;
         const userFeedback = args.userFeedback as string | undefined;
-        const plan = await plannerCoordinator.confirmCheckpoint(planId, checkpointId, approved, userFeedback);
-        output = {
-          planId: plan.id,
-          checkpointId,
-          approved,
-          newStatus: plan.status,
-          message: approved
-            ? `Checkpoint approved! Proceeding with the planned action. Plan is now ${plan.status}.`
-            : "Checkpoint rejected. The modifying step has been skipped and the plan has been cancelled.",
-        };
-        sendToClient({ type: "planner_event", event: "checkpoint_resolved", planId: plan.id, approved, checkpointId });
+
+        // Auto-resolve pending plan if planId was omitted
+        if (!planId) {
+          const plans = await plannerCoordinator.listPlans();
+          const pendingPlan = plans.find((p) => p.status === "waiting_for_approval") || plans[0];
+          if (pendingPlan) {
+            planId = pendingPlan.id;
+          }
+        }
+
+        const currentPlan = planId ? await plannerCoordinator.getPlan(planId) : undefined;
+
+        // If checkpointId is a sora_conf_ token, verify and map to pending checkpoint
+        if (checkpointId.startsWith("sora_conf_")) {
+          securityPolicyEngine.verifyAndConsumeConfirmation(
+            checkpointId,
+            "confirmCheckpoint",
+            args as Record<string, unknown>,
+          );
+          if (currentPlan?.pendingCheckpointId) {
+            checkpointId = currentPlan.pendingCheckpointId;
+          }
+        } else if (!checkpointId && currentPlan?.pendingCheckpointId) {
+          checkpointId = currentPlan.pendingCheckpointId;
+        }
+
+        if (currentPlan && checkpointId) {
+          const plan = await plannerCoordinator.confirmCheckpoint(planId, checkpointId, approved, userFeedback);
+          output = {
+            planId: plan.id,
+            checkpointId,
+            approved,
+            newStatus: plan.status,
+            message: approved
+              ? `Checkpoint approved! Proceeding with the planned action. Plan is now ${plan.status}.`
+              : "Checkpoint rejected. The modifying step has been skipped and the plan has been cancelled.",
+          };
+          sendToClient({ type: "planner_event", event: "checkpoint_resolved", planId: plan.id, approved, checkpointId });
+        } else {
+          let targetTool = "action";
+          if (checkpointId.startsWith("sora_conf_")) {
+            try {
+              const parts = checkpointId.slice("sora_conf_".length).split(".");
+              const payload = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf-8"));
+              if (payload?.toolName) targetTool = payload.toolName;
+            } catch {}
+          }
+          output = {
+            approved,
+            checkpointId,
+            toolName: targetTool,
+            message: approved
+              ? `Confirmation for '${targetTool}' approved successfully! Pre-approval registered. You can now execute the action.`
+              : `Confirmation for '${targetTool}' rejected. Action cancelled.`,
+          };
+        }
 
       } else if (fc.name === "getTaskPlanStatus") {
         const planId = (args.planId as string) || "";

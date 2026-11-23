@@ -14,6 +14,7 @@
 
 import fs from "fs";
 import path from "path";
+import { isPathWithinWorkspace } from "../security/PermissionManager.ts";
 import type {
   Goal,
   TaskPlan,
@@ -21,11 +22,13 @@ import type {
   OutcomeCriteria,
 } from "./PlannerTypes.ts";
 
-const WORKSPACE = process.env.SORA_WORKSPACE_DIR || process.cwd();
-
 function fileExistsAndNonEmpty(relPath: string): boolean {
   try {
-    const absPath = path.resolve(WORKSPACE, relPath);
+    const ws = process.env.SORA_WORKSPACE_DIR || process.cwd();
+    if (!isPathWithinWorkspace(relPath, ws)) {
+      return false;
+    }
+    const absPath = path.resolve(ws, relPath);
     const stat = fs.statSync(absPath);
     return stat.isFile() && stat.size > 0;
   } catch {
@@ -171,15 +174,36 @@ export class CompletionVerifier {
         : "One or more steps remain in pending/failed state or encountered errors.",
     });
 
+    // ── 7. Reconciled & Unverified Side-Effect Postconditions ──────────────
+    const unverifiedSteps = plan.steps.filter(
+      (s) =>
+        s.status === "acknowledged_unverified" ||
+        s.verificationStatus === "acknowledged_unverified" ||
+        s.status === "outcome_unknown" ||
+        s.verificationStatus === "outcome_unknown",
+    );
+    for (const uStep of unverifiedSteps) {
+      criteria.push({
+        description: `Step '${uStep.description || uStep.id}' postcondition verification`,
+        verificationHint: `Inspect environmental side-effects for ${uStep.toolName}`,
+        satisfied: false,
+        evidence: `UNVERIFIED_ACKNOWLEDGEMENT: Step was acknowledged or interrupted (${uStep.reconciliation?.reconciledBy || "operator"}), but real-world postconditions remain unverified.`,
+      });
+    }
+
     // ── Score and summary ─────────────────────────────────────────────────
     const satisfiedCount = criteria.filter((c) => c.satisfied).length;
     const score = criteria.length > 0 ? satisfiedCount / criteria.length : 1;
     const verified = score >= 0.75;
 
     const summaryPrefix = goal.category === "workflow" ? "[Workflow Outcome Verification]" : "[Workspace Outcome Verification]";
-    const summary = verified
+    let summary = verified
       ? `${summaryPrefix} All key outcomes verified (${satisfiedCount}/${criteria.length} criteria satisfied, score: ${(score * 100).toFixed(0)}%).`
       : `${summaryPrefix} Partial outcomes: ${satisfiedCount}/${criteria.length} criteria satisfied (score: ${(score * 100).toFixed(0)}%). Some criteria require manual review.`;
+
+    if (unverifiedSteps.length > 0) {
+      summary += ` NOTICE: ${unverifiedSteps.length} step(s) have unverified outcomes (${unverifiedSteps.map((s) => s.id).join(", ")}).`;
+    }
 
     return {
       planId: plan.id,

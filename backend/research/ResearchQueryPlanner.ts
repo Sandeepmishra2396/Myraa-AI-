@@ -9,7 +9,11 @@
  * Security: All query generation is local — no external calls here.
  */
 
-import type { ResearchQueryPlan } from "./AdvancedResearchTypes.ts";
+import type {
+  ResearchQueryPlan,
+  QueryRefinementStep,
+  RefinedQueryPlan,
+} from "./AdvancedResearchTypes.ts";
 import { multiAgentContextManager } from "../multiagent/MultiAgentContextManager.ts";
 
 // ---------------------------------------------------------------------------
@@ -122,6 +126,82 @@ export class ResearchQueryPlanner {
     };
   }
 
+  /**
+   * Decompose a compound query into distinct atomic sub-queries.
+   */
+  public decompose(question: string): string[] {
+    const sanitized = multiAgentContextManager.sanitizeUntrustedInput(question);
+
+    // Check for comparison or conjunction splits
+    const splitRegex = /\s+(?:and also|and then|as well as|\bvs\.?\b|\bversus\b|compared to|and)\s+/i;
+    const parts = sanitized.split(splitRegex).map((p) => p.trim()).filter((p) => p.length > 5);
+
+    if (parts.length > 1) {
+      return parts;
+    }
+
+    // Check for question mark / sentence splits
+    const sentenceParts = sanitized.split(/[?.!]\s+/).map((p) => p.trim()).filter((p) => p.length > 8);
+    if (sentenceParts.length > 1) {
+      return sentenceParts;
+    }
+
+    return [sanitized];
+  }
+
+  /**
+   * Perform bounded query refinement when evidence is missing, conflicting, or unverified.
+   * Hard bounded to at most 3 refinement iterations to avoid infinite search loops.
+   */
+  public refinePlan(
+    plan: ResearchQueryPlan,
+    unverifiedTopics: string[],
+    currentIteration = 1,
+    maxIterations = 3
+  ): RefinedQueryPlan {
+    const refinements: QueryRefinementStep[] = [];
+    const boundedIteration = Math.min(currentIteration, maxIterations);
+
+    // Strictly halt refinement if currentIteration exceeds maxIterations
+    if (currentIteration <= maxIterations && unverifiedTopics.length > 0) {
+      for (const topic of unverifiedTopics.slice(0, 3)) {
+        // 1. Official Documentation Target
+        refinements.push({
+          iteration: boundedIteration,
+          originalQuery: plan.primaryQuery,
+          refinedQuery: `${topic} official documentation API reference`,
+          targetAngle: "OFFICIAL_DOC",
+          reason: `Targeting authoritative source for unverified topic "${topic.slice(0, 40)}"`,
+        });
+
+        // 2. Version Specific / Breaking Changes Target
+        refinements.push({
+          iteration: boundedIteration,
+          originalQuery: plan.primaryQuery,
+          refinedQuery: `${topic} version compatibility changelog breaking changes`,
+          targetAngle: "VERSION_SPECIFIC",
+          reason: `Resolving version dependency or compatibility gap for "${topic.slice(0, 40)}"`,
+        });
+
+        // 3. Known Issues / Error Messages Target
+        refinements.push({
+          iteration: boundedIteration,
+          originalQuery: plan.primaryQuery,
+          refinedQuery: `${topic} known issue bug error workaround`,
+          targetAngle: "KNOWN_ISSUE",
+          reason: `Investigating conflicting evidence or potential bug/limitation for "${topic.slice(0, 40)}"`,
+        });
+      }
+    }
+
+    return {
+      ...plan,
+      refinements,
+      currentIteration: boundedIteration,
+      maxIterations,
+    };
+  }
+
   private _matchTemplate(lower: string): QueryTemplate | null {
     for (const t of QUERY_TEMPLATES) {
       if (t.keywords.test(lower)) return t;
@@ -131,3 +211,4 @@ export class ResearchQueryPlanner {
 }
 
 export const researchQueryPlanner = new ResearchQueryPlanner();
+

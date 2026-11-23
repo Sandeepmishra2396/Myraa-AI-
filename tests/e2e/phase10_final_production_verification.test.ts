@@ -33,6 +33,7 @@ import {
 import { capabilityRegistry } from "../../backend/orchestrator/index.ts";
 import { LIVE_TOOLS } from "../../backend/ai/GeminiSessionFactory.ts";
 import { identityAuthManager } from "../../backend/security/IdentityAuthManager.ts";
+import { governingMemoryGate } from "../../backend/companion/GoverningMemoryGate.ts";
 import { securityPolicyEngine } from "../../backend/security/SecurityPolicyEngine.ts";
 import { securityAuditLogger } from "../../backend/security/SecurityAuditLogger.ts";
 import { outputDataFirewall } from "../../backend/security/OutputDataFirewall.ts";
@@ -590,10 +591,22 @@ describe("PHASE 10 — Final Production Verification, Hardening & Release", () =
       const addr = server.address() as { port: number };
       const baseUrl = `http://127.0.0.1:${addr.port}`;
 
+      const authSession = identityAuthManager.createSession({
+        deviceId: "desktop_operator_phase10",
+        identityId: "op_phase10",
+        role: "admin",
+        ipAddress: "127.0.0.1",
+      });
+      const token = authSession.tokens.accessToken;
+      const sessionId = authSession.session.sessionId;
+
       const postJson = async (path: string, body: Record<string, any>) => {
         const res = await fetch(`${baseUrl}${path}`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
           body: JSON.stringify(body),
         });
         return { status: res.status, body: await res.json() };
@@ -629,8 +642,20 @@ describe("PHASE 10 — Final Production Verification, Hardening & Release", () =
           key: "preferred_editor",
           value: "VS Code with MYRAA",
         });
-        expect(memRes.status).toBe(200);
-        expect(memRes.body.memoryResult.ok).toBe(true);
+        expect(memRes.status).toBe(202);
+        expect(memRes.body.status).toBe("pending_approval");
+        expect(memRes.body.requestId).toBeDefined();
+
+        const pendingReq = governingMemoryGate.getRequest(memRes.body.requestId);
+        if (pendingReq) {
+          await governingMemoryGate.approveWrite(pendingReq.id, pendingReq.oneTimeToken, {
+            actorId: "op_phase10",
+            role: "admin",
+            ipAddress: "127.0.0.1",
+            sessionId,
+            isStepUpAuthenticated: true,
+          });
+        }
 
         // 5. Pair & Connect Remote Bridge via 6-digit PIN endpoints
         const pairReq = await postJson("/api/ux/remote/pair-request", {});

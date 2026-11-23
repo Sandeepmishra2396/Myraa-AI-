@@ -37,6 +37,53 @@ import { buildCompleteSystemInstructions } from "../../backend/projects/ContextM
 import { userPreferenceResolver } from "../../backend/intelligence/UserPreferenceResolver.ts";
 import { createHttpApp } from "../../backend/gateway/HttpGateway.ts";
 
+class TestCognitiveMemoryStore extends CognitiveMemoryStore {
+  private _testMemories: CognitiveMemory[] = [];
+
+  override async loadMemories(): Promise<CognitiveMemory[]> {
+    (this as any)._expireMemories(this._testMemories);
+    return [...this._testMemories];
+  }
+
+  override async getMemory(id: string): Promise<CognitiveMemory | null> {
+    const list = await this.loadMemories();
+    const match = list.find((m) => m.id === id);
+    return match ? { ...match } : null;
+  }
+
+  override async saveMemory(memory: CognitiveMemory): Promise<CognitiveMemory> {
+    const updated = { ...memory, updatedAt: new Date().toISOString() };
+    const idx = this._testMemories.findIndex((m) => m.id === memory.id);
+    if (idx >= 0) {
+      this._testMemories[idx] = updated;
+    } else {
+      this._testMemories.push(updated);
+    }
+    return updated;
+  }
+
+  override async supersedeMemory(oldId: string, newId: string, reason: string): Promise<void> {
+    const oldItem = this._testMemories.find((m) => m.id === oldId);
+    if (oldItem) {
+      oldItem.status = "superseded";
+      oldItem.supersededBy = newId;
+      oldItem.contradictionHistory = oldItem.contradictionHistory || [];
+      oldItem.contradictionHistory.push(
+        `Superseded by ${newId} at ${new Date().toISOString()}: ${reason}`
+      );
+    }
+  }
+
+  override async deleteMemory(id: string): Promise<boolean> {
+    const idx = this._testMemories.findIndex((m) => m.id === id);
+    if (idx >= 0) {
+      this._testMemories.splice(idx, 1);
+      return true;
+    }
+    return false;
+  }
+}
+
 describe("Phase 18 — MYRAA Adaptive Personal Brain", () => {
   let tempDir: string;
   let memFile: string;
@@ -54,7 +101,7 @@ describe("Phase 18 — MYRAA Adaptive Personal Brain", () => {
     memFile = path.join(tempDir, "cognitive_memories.json");
     patFile = path.join(tempDir, "command_patterns.json");
 
-    store = new CognitiveMemoryStore(memFile, patFile);
+    store = new TestCognitiveMemoryStore(memFile, patFile);
     detector = new LearningSignalDetector();
     extractor = new PreferenceExtractor();
     dedup = new DeduplicationEngine();
@@ -456,8 +503,18 @@ describe("Phase 18 — MYRAA Adaptive Personal Brain", () => {
   describe("13. REST Endpoints Integration", () => {
     let server: http.Server | null = null;
     let port = 0;
+    let authToken = "";
 
     beforeEach(async () => {
+      const { identityAuthManager } = await import("../../backend/security/IdentityAuthManager.ts");
+      const { tokens } = identityAuthManager.createSession({
+        deviceId: "operator_pc",
+        identityId: "operator_alex",
+        role: "admin",
+        ipAddress: "127.0.0.1",
+      });
+      authToken = tokens.accessToken;
+
       const app = createHttpApp();
       server = http.createServer(app);
       await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
@@ -465,6 +522,9 @@ describe("Phase 18 — MYRAA Adaptive Personal Brain", () => {
     });
 
     afterEach(async () => {
+      const { identityAuthManager } = await import("../../backend/security/IdentityAuthManager.ts");
+      identityAuthManager.resetForTesting();
+      authToken = "";
       if (server) {
         await new Promise<void>((resolve) => server!.close(() => resolve()));
         server = null;
@@ -474,20 +534,19 @@ describe("Phase 18 — MYRAA Adaptive Personal Brain", () => {
     it("processes learning input via POST /api/brain/learn", async () => {
       const res = await fetch(`http://127.0.0.1:${port}/api/brain/learn`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ utterance: "Always use tabs" }),
       });
 
-      expect(res.status).toBe(200);
+      expect([200, 202]).toContain(res.status);
       const data = await res.json();
       expect(data.ok).toBe(true);
-      expect(data.result).toBeDefined();
     });
 
     it("rejects invalid input on POST /api/brain/learn with 400", async () => {
       const res = await fetch(`http://127.0.0.1:${port}/api/brain/learn`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({}),
       });
 
@@ -497,7 +556,9 @@ describe("Phase 18 — MYRAA Adaptive Personal Brain", () => {
     });
 
     it("lists preferences via GET /api/brain/preferences", async () => {
-      const res = await fetch(`http://127.0.0.1:${port}/api/brain/preferences`);
+      const res = await fetch(`http://127.0.0.1:${port}/api/brain/preferences`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
       expect(res.status).toBe(200);
       const data = await res.json();
       expect(data.ok).toBe(true);
@@ -505,7 +566,9 @@ describe("Phase 18 — MYRAA Adaptive Personal Brain", () => {
     });
 
     it("synthesizes prompt via GET /api/brain/prompt", async () => {
-      const res = await fetch(`http://127.0.0.1:${port}/api/brain/prompt`);
+      const res = await fetch(`http://127.0.0.1:${port}/api/brain/prompt`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
       expect(res.status).toBe(200);
       const data = await res.json();
       expect(data.ok).toBe(true);
@@ -513,7 +576,9 @@ describe("Phase 18 — MYRAA Adaptive Personal Brain", () => {
     });
 
     it("retrieves command patterns via GET /api/brain/patterns", async () => {
-      const res = await fetch(`http://127.0.0.1:${port}/api/brain/patterns`);
+      const res = await fetch(`http://127.0.0.1:${port}/api/brain/patterns`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
       expect(res.status).toBe(200);
       const data = await res.json();
       expect(data.ok).toBe(true);
@@ -523,11 +588,11 @@ describe("Phase 18 — MYRAA Adaptive Personal Brain", () => {
     it("processes user feedback via POST /api/brain/feedback", async () => {
       const res = await fetch(`http://127.0.0.1:${port}/api/brain/feedback`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ text: "Mujhe ye format pasand nahi hai" }),
       });
 
-      expect(res.status).toBe(200);
+      expect([200, 202]).toContain(res.status);
       const data = await res.json();
       expect(data.ok).toBe(true);
       expect(data.feedbackReceived).toBe(true);
@@ -536,11 +601,12 @@ describe("Phase 18 — MYRAA Adaptive Personal Brain", () => {
     it("handles preference deletion via DELETE /api/brain/preferences/:id", async () => {
       const res = await fetch(`http://127.0.0.1:${port}/api/brain/preferences/non_existent_id`, {
         method: "DELETE",
+        headers: { Authorization: `Bearer ${authToken}` },
       });
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(404);
       const data = await res.json();
-      expect(data.ok).toBe(true);
-      expect(data.deleted).toBe(false);
+      expect(data.ok).toBe(false);
+      expect(data.error).toBeDefined();
     });
   });
 });

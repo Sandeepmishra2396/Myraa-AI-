@@ -33,6 +33,12 @@ interface ScoringInput {
   projectVersion?: string;
   sourceVersion?: string;
   corroborationCount?: number;
+  independence?: number;
+  relevance?: number;
+  isDuplicateOrSyndicated?: boolean;
+  canonicalUrl?: string;
+  queryKeywords?: string[];
+  content?: string;
 }
 
 export class SourceReliabilityEngine {
@@ -57,14 +63,26 @@ export class SourceReliabilityEngine {
 
     const versionMatch = this._checkVersionMatch(input.projectVersion, input.sourceVersion);
 
-    // Composite: weighted average
-    const composite =
+    // Independence: 1.0 for independent sources, 0.20 for syndicated/duplicates
+    const isDuplicateOrSyndicated = Boolean(input.isDuplicateOrSyndicated);
+    const independence = input.independence ?? (isDuplicateOrSyndicated ? 0.20 : 1.0);
+
+    // Topical relevance
+    const relevance = input.relevance ?? this._scoreRelevance(input.content || "", input.queryKeywords || []);
+
+    // Composite: weighted average with independence factor
+    let composite =
       sourceAuthority * 0.35 +
       recency * 0.20 +
       specificity * 0.15 +
       (directEvidence ? 0.15 : 0) +
       corroboration * 0.10 +
       (versionMatch ? 0.05 : 0);
+
+    // Apply syndication / duplicate penalty if applicable
+    if (isDuplicateOrSyndicated || independence < 0.6) {
+      composite *= (0.5 + 0.5 * Math.max(0.1, independence));
+    }
 
     return {
       sourceType: input.sourceType,
@@ -75,6 +93,11 @@ export class SourceReliabilityEngine {
       corroboration,
       versionMatch,
       composite: Math.min(1.0, composite),
+      independence,
+      relevance,
+      isDuplicateOrSyndicated,
+      canonicalUrl: input.canonicalUrl,
+      publishedAt: input.publishedAt,
     };
   }
 
@@ -86,7 +109,7 @@ export class SourceReliabilityEngine {
     corroborationCount: number
   ): SourceReliabilityScore {
     const corroboration = Math.min(1.0, corroborationCount * 0.15);
-    const composite =
+    let composite =
       existing.sourceAuthority * 0.35 +
       existing.recency * 0.20 +
       existing.specificity * 0.15 +
@@ -94,7 +117,26 @@ export class SourceReliabilityEngine {
       corroboration * 0.10 +
       (existing.versionMatch ? 0.05 : 0);
 
+    const indep = existing.independence ?? 1.0;
+    if (existing.isDuplicateOrSyndicated || indep < 0.6) {
+      composite *= (0.5 + 0.5 * Math.max(0.1, indep));
+    }
+
     return { ...existing, corroboration, composite: Math.min(1.0, composite) };
+  }
+
+  /**
+   * Convenience getter for source authority by type.
+   */
+  public getAuthority(sourceType: SourceType): number {
+    return SOURCE_AUTHORITY_MAP[sourceType] ?? 0.20;
+  }
+
+  /**
+   * Convenience getter for freshness (recency) scoring.
+   */
+  public getFreshness(publishedAt?: string): number {
+    return this._scoreRecency(publishedAt);
   }
 
   // ---------------------------------------------------------------------------
@@ -144,6 +186,16 @@ export class SourceReliabilityEngine {
   private _extractMajorMinor(version: string): string | null {
     const match = version.match(/(\d+\.\d+)/);
     return match ? match[1] : null;
+  }
+
+  private _scoreRelevance(content: string, queryKeywords: string[]): number {
+    if (!queryKeywords || queryKeywords.length === 0) return 0.85; // Default neutral-high
+    if (!content) return 0.20;
+
+    const lower = content.toLowerCase();
+    const matchedCount = queryKeywords.filter((kw) => lower.includes(kw.toLowerCase())).length;
+    const ratio = matchedCount / Math.max(1, queryKeywords.length);
+    return Math.max(0.20, Math.min(1.0, 0.40 + ratio * 0.60));
   }
 }
 

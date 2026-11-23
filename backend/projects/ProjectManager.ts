@@ -17,6 +17,28 @@ import { ProjectDetector } from "./ProjectDetector.ts";
 import { ProjectGit } from "./ProjectGit.ts";
 import { ProjectSearch, type SearchOptions } from "./ProjectSearch.ts";
 import { ProjectStore, projectStore } from "./ProjectStore.ts";
+import {
+  contentSanitizer,
+  UNTRUSTED_DOC_START,
+  UNTRUSTED_DOC_END,
+  UNTRUSTED_CONTENT_DIRECTIVE,
+} from "../security/ContentSanitizer.ts";
+
+const EMBEDDED_DELIMITER_REGEX = /<<<\s*\/?\s*UNTRUSTED[^>]*>>>|<<<\/[^>]*>>>/gi;
+
+function sanitizeCardField(raw: string | undefined | null, source: string, maxLen?: number): string {
+  if (!raw || typeof raw !== "string") return "";
+  const cleaned = raw
+    .replace(EMBEDDED_DELIMITER_REGEX, "[DELIMITER_REDACTED]")
+    .replace(/[\r\n]+/g, " ")
+    .trim();
+  const scan = contentSanitizer.scanForPromptInjection(cleaned, { source });
+  let safe = scan.sanitizedText.replace(EMBEDDED_DELIMITER_REGEX, "[DELIMITER_REDACTED]").trim();
+  if (maxLen !== undefined && safe.length > maxLen) {
+    safe = safe.substring(0, maxLen);
+  }
+  return safe;
+}
 import type {
   ProjectContext,
   ArchitectureMap,
@@ -337,48 +359,80 @@ export class ProjectManager {
       }
     }
 
-    const gitBranch = project.git?.branch ? ` | Branch: ${project.git.branch}` : "";
+    const safeId = sanitizeCardField(project.id, "projectCard_id", 100);
+    const safeName = sanitizeCardField(project.name, "projectCard_name", 120);
+    const safeBranch = project.git?.branch
+      ? sanitizeCardField(project.git.branch, "projectCard_gitBranch", 80)
+      : "";
+    const gitBranch = safeBranch ? ` | Branch: ${safeBranch}` : "";
     const uncommitted = project.git?.uncommittedChanges
       ? ` (${project.git.uncommittedChanges} uncommitted changes)`
       : "";
+    const safeLang = sanitizeCardField(project.primaryLanguage, "projectCard_language", 60);
+    const safeFrameworks =
+      project.frameworks.length > 0
+        ? project.frameworks.map((f) => sanitizeCardField(f, "projectCard_framework", 40)).join(", ")
+        : "none";
 
-    let card =
+    const fullHeader =
       `\n\n=== MYRAA ACTIVE PROJECT INTELLIGENCE ===\n` +
-      `Project: ${project.name} (${project.type})${gitBranch}${uncommitted}\n` +
-      `Primary Tech: ${project.primaryLanguage} | Frameworks: ${project.frameworks.join(", ") || "none"}\n`;
+      `${UNTRUSTED_DOC_START}\n` +
+      `[PROJECT_CONTEXT: ${safeId}]\n` +
+      `${UNTRUSTED_CONTENT_DIRECTIVE}\n`;
+    const fullFooter = `\n${UNTRUSTED_DOC_END}\n========================================\n`;
+
+    let content =
+      `Project: ${safeName} (${project.type})${gitBranch}${uncommitted}\n` +
+      `Primary Tech: ${safeLang} | Frameworks: ${safeFrameworks}\n`;
 
     // Add Architecture highlights
     if (project.architectureMap && project.architectureMap.layers.length > 0) {
-      card += `Architecture Layers:\n`;
+      content += `Architecture Layers:\n`;
       for (const layer of project.architectureMap.layers) {
-        card += `  * ${layer.name}: ${layer.description}\n`;
+        const lName = sanitizeCardField(layer.name, "projectCard_layerName", 80);
+        const lDesc = sanitizeCardField(layer.description, "projectCard_layerDesc", 140);
+        content += `  * ${lName}: ${lDesc}\n`;
       }
     }
 
     // Add Active Tasks
     const inProgressTasks = project.tasks.filter((t) => t.status === "in_progress" || t.status === "todo");
     if (inProgressTasks.length > 0) {
-      card += `Current Focus Tasks:\n`;
+      content += `Current Focus Tasks:\n`;
       for (const t of inProgressTasks.slice(0, 3)) {
-        card += `  - [${t.status.toUpperCase()}] ${t.title}\n`;
+        const safeTitle = sanitizeCardField(t.title, "projectCard_taskTitle", 120);
+        content += `  - [${t.status.toUpperCase()}] ${safeTitle}\n`;
       }
     }
 
     // Add Last Session notes
     if (project.lastSession) {
-      card += `Last Session Context: ${project.lastSession.summary}\n`;
+      const safeSummary = sanitizeCardField(project.lastSession.summary, "projectCard_lastSession", 160);
+      content += `Last Session Context: ${safeSummary}\n`;
       if (project.lastSession.nextSteps) {
-        card += `Next Steps: ${project.lastSession.nextSteps}\n`;
+        const safeNext = sanitizeCardField(project.lastSession.nextSteps, "projectCard_nextSteps", 160);
+        content += `Next Steps: ${safeNext}\n`;
       }
     }
 
-    card += `========================================\n`;
-
-    if (card.length > charBudget) {
-      card = card.substring(0, charBudget - 45) + "\n[...]\n========================================\n";
+    const fullCard = `${fullHeader}${content}${fullFooter}`;
+    if (fullCard.length <= charBudget) {
+      return fullCard;
     }
 
-    return card;
+    if (charBudget < fullHeader.length + fullFooter.length + 10) {
+      const compactHeader = `\n\n=== MYRAA ACTIVE PROJECT INTELLIGENCE ===\n${UNTRUSTED_DOC_START}\n`;
+      const compactFooter = `\n${UNTRUSTED_DOC_END}\n`;
+      const avail = charBudget - compactHeader.length - compactFooter.length;
+      const suffix = "\n[...]";
+      const cutLen = Math.max(0, avail - suffix.length);
+      return `${compactHeader}${content.substring(0, cutLen)}${suffix}${compactFooter}`;
+    }
+
+    const avail = charBudget - fullHeader.length - fullFooter.length;
+    const suffix = "\n[...]";
+    const cutLen = Math.max(0, avail - suffix.length);
+    return `${fullHeader}${content.substring(0, cutLen)}${suffix}${fullFooter}`;
   }
 }
 

@@ -1268,7 +1268,7 @@ describe("Phase 4 — Intent & Capability Orchestrator", () => {
       expect(res.errorCode).toBe("CONFIRMATION_REQUIRED");
     });
 
-    it("S5. 126 Gemini Live tools count unchanged", () => {
+    it("S5. 129 Gemini Live tools count unchanged", () => {
       const toolCount = LIVE_TOOLS[0].functionDeclarations.length;
       expect(toolCount).toBe(129);
     });

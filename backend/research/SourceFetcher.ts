@@ -27,7 +27,12 @@ export class SourceFetcher {
    * Validates, fetches, and sandboxes content from a URL.
    * Returns a fully sanitized ResearchSource or null on failure.
    */
-  public async fetch(url: string): Promise<ResearchSource | null> {
+  public async fetch(url: string, opts?: { signal?: AbortSignal }): Promise<ResearchSource | null> {
+    // 0. Check cancellation upfront
+    if (opts?.signal?.aborted) {
+      return null;
+    }
+
     // 1. Security gate — validate URL
     const urlCheck = await researchSecurityGate.validateUrl(url);
     if (!urlCheck.safe) {
@@ -40,6 +45,9 @@ export class SourceFetcher {
     let title = url;
     try {
       const controller = new AbortController();
+      if (opts?.signal) {
+        opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
+      }
       const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
       const response = await safeSsrfFetch(url, { signal: controller.signal } as RequestInit);
@@ -68,6 +76,12 @@ export class SourceFetcher {
       // Extract title from HTML
       const titleMatch = rawText.match(/<title[^>]*>([^<]{1,200})<\/title>/i);
       if (titleMatch) title = titleMatch[1].trim();
+
+      // Extract publication timestamp from HTML metadata
+      var publishedAt = this._extractPublishedDate(rawText);
+
+      // Extract canonical URL if present
+      var canonicalUrl = this._extractCanonicalUrl(rawText, url);
     } catch (err: any) {
       if (err?.name === "AbortError") {
         console.warn(`[SourceFetcher] Timeout fetching: ${url}`);
@@ -94,7 +108,8 @@ export class SourceFetcher {
       url,
       sourceType,
       contentLength: secCheck.sanitizedContent.length,
-      publishedAt: undefined,
+      publishedAt,
+      canonicalUrl,
     });
 
     return {
@@ -112,6 +127,67 @@ export class SourceFetcher {
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
+
+  private _extractPublishedDate(html: string): string | undefined {
+    try {
+      // 1. Meta tags for publication date
+      const metaPatterns = [
+        /<meta[^>]+property=["'](?:article:published_time|og:published_time)["'][^>]+content=["']([^"']+)["']/i,
+        /<meta[^>]+content=["']([^"']+)["'][^>]+property=["'](?:article:published_time|og:published_time)["']/i,
+        /<meta[^>]+name=["'](?:pubdate|publishdate|date|dc\.date|citation_publication_date)["'][^>]+content=["']([^"']+)["']/i,
+        /<meta[^>]+content=["']([^"']+)["'][^>]+name=["'](?:pubdate|publishdate|date|dc\.date|citation_publication_date)["']/i,
+      ];
+      for (const pattern of metaPatterns) {
+        const match = html.match(pattern);
+        if (match && match[1]) {
+          const parsed = new Date(match[1]);
+          if (!isNaN(parsed.getTime())) {
+            return parsed.toISOString();
+          }
+        }
+      }
+
+      // 2. <time datetime="..."> tag
+      const timeMatch = html.match(/<time[^>]+datetime=["']([^"']+)["']/i);
+      if (timeMatch && timeMatch[1]) {
+        const parsed = new Date(timeMatch[1]);
+        if (!isNaN(parsed.getTime())) {
+          return parsed.toISOString();
+        }
+      }
+
+      // 3. JSON-LD datePublished or dateModified
+      const jsonLdMatch = html.match(/"datePublished"\s*:\s*["']([^"']+)["']/i) ||
+                          html.match(/"dateModified"\s*:\s*["']([^"']+)["']/i);
+      if (jsonLdMatch && jsonLdMatch[1]) {
+        const parsed = new Date(jsonLdMatch[1]);
+        if (!isNaN(parsed.getTime())) {
+          return parsed.toISOString();
+        }
+      }
+    } catch {
+      // Ignore parse failure, return undefined
+    }
+    return undefined;
+  }
+
+  private _extractCanonicalUrl(html: string, originalUrl: string): string | undefined {
+    try {
+      const match = html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i) ||
+                    html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["']canonical["']/i);
+      if (match && match[1]) {
+        const href = match[1].trim();
+        if (href.startsWith("http://") || href.startsWith("https://")) {
+          return href;
+        }
+        // Relative canonical URL
+        return new URL(href, originalUrl).toString();
+      }
+    } catch {
+      // Ignore canonical URL resolution failure
+    }
+    return undefined;
+  }
 
   private _stripHtml(html: string): string {
     return html

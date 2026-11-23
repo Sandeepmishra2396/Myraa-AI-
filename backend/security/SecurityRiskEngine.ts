@@ -35,7 +35,7 @@ import type {
 import { contentSanitizer } from "./ContentSanitizer.ts";
 
 // ---------------------------------------------------------------------------
-// Tool Risk Sensitivity Classification (All 126 Tools)
+// Tool Risk Sensitivity Classification (All 129 Tools)
 // ---------------------------------------------------------------------------
 
 export const CRITICAL_TOOLS = new Set<string>([
@@ -59,8 +59,6 @@ export const HIGH_RISK_TOOLS = new Set<string>([
   "runPythonScript",
   "scheduleTask",
   "cancelBackgroundTask",
-  "executeTaskPlan",
-  "confirmCheckpoint",
   "requestPowerAction",
   "setVolume",
   "muteToggle",
@@ -68,6 +66,7 @@ export const HIGH_RISK_TOOLS = new Set<string>([
 ]);
 
 export const MEDIUM_RISK_TOOLS = new Set<string>([
+  "executeTaskPlan",
   "openWebsite",
   "desktopBrowserOpen",
   "desktopBrowserNavigate",
@@ -81,6 +80,7 @@ export const MEDIUM_RISK_TOOLS = new Set<string>([
   "researchWeb",
   "discoverStudyVideos",
   "trackProjectTask",
+  "getProjectContinuity",
   "saveCustomMemory",
   "toggleContinuousScreenContext",
   "configureCourseProfile",
@@ -169,7 +169,20 @@ export class SecurityRiskEngine {
     let toolCat: "benign" | "network_browser" | "state_altering" | "critical_system" = "benign";
     let baseScore = 15;
 
-    if (CRITICAL_TOOLS.has(toolName)) {
+    // Check if runShellCommand is a standard developer package manager / build command
+    const rawCmd = String(sanitizedArgs.command || sanitizedArgs.cmd || sanitizedArgs.script || "").trim();
+    const isSafePackageCommand =
+      toolName === "runShellCommand" &&
+      (/^\s*(npm|pip|pip3|npx|yarn|pnpm)\s+(install|add|i|update|upgrade|list|run|build|test|start|audit|init)\b/i.test(rawCmd) ||
+       /^\s*(git)\s+(status|log|diff|branch|fetch|pull|stash)\b/i.test(rawCmd) ||
+       /^\s*(node|python|python3|py)\s+--version\b/i.test(rawCmd) ||
+       /^\s*Set-ExecutionPolicy\s+RemoteSigned\s+-Scope\s+CurrentUser\s+-Force\b/i.test(rawCmd));
+
+    if (isSafePackageCommand) {
+      toolCat = "state_altering";
+      baseScore = 65;
+      reasons.push(`Tool 'runShellCommand' with package manager / dev command '${rawCmd.slice(0, 40)}' classified as standard build operation.`);
+    } else if (CRITICAL_TOOLS.has(toolName)) {
       toolCat = "critical_system";
       baseScore = 90;
       reasons.push(`Tool '${toolName}' performs irreversible, system-level or administrative actions.`);

@@ -18,7 +18,7 @@
  *      `completionVerifier` strictly checks actual capability payloads and error flags.
  *   5. Data Loss Prevention (DLP):
  *      Sensitive credentials, API keys, passwords, and bearer tokens are screened.
- *   6. Strict 126 Gemini Live Tools Invariant:
+ *   6. Strict 129 Gemini Live Tools Invariant:
  *      Does NOT add, remove, or modify tools in `LIVE_TOOLS`.
  */
 
@@ -26,7 +26,7 @@ import { emergencyStopCoordinator } from "../remote/EmergencyStopCoordinator.ts"
 import { securityPolicyEngine } from "../security/SecurityPolicyEngine.ts";
 import { remoteStore } from "../remote/RemoteStore.ts";
 import { remoteSessionManager } from "../remote/RemoteSessionManager.ts";
-import { plannerCoordinator } from "../planner/PlannerCoordinator.ts";
+import { plannerCoordinator, resolveCanonicalProjectId } from "../planner/PlannerCoordinator.ts";
 import { checkpointManager } from "../planner/CheckpointManager.ts";
 import { securityAuditLogger } from "../security/SecurityAuditLogger.ts";
 import { sanitizeError } from "../security/PermissionManager.ts";
@@ -75,6 +75,7 @@ export class MobileWorkflowManager {
   async executeVoiceWorkflow(
     request: MobileWorkflowRequest,
     secContext: SecurityContext,
+    options?: { projectId?: unknown },
   ): Promise<MobileWorkflowResponse> {
     const rawQuery = (request.query || "").trim();
 
@@ -155,11 +156,69 @@ export class MobileWorkflowManager {
 
     const preferredLang: WorkflowLanguage = request.preferredLanguage || "hinglish";
 
+    // ── 4.5. Stage 10.3 P2: Explicit Canonical Project Identity Validation ──
+    // Never trust a caller-supplied projectId without server-side canonical validation
+    // and caller authorization. Never default to whichever project is globally active
+    // when no explicit project selection is provided.
+    let resolvedProjectId: string | undefined;
+    if (options?.projectId !== undefined && options?.projectId !== null) {
+      const resolution = await resolveCanonicalProjectId(options.projectId, {
+        secContext,
+        requireAuthorizedContext: true,
+      });
+      if (resolution.status === "unauthorized") {
+        securityAuditLogger.logEvent({
+          eventType: "TOOL_BLOCKED",
+          actor: {
+            identityId: secContext?.identityId || "unknown",
+            role: secContext?.role || "guest",
+            ipAddress: secContext?.ipAddress || "unknown",
+            deviceId: targetDeviceId,
+          },
+          target: { toolName: "workflow", resource: "project:select" },
+          decision: "BLOCK",
+          reason: `PERMISSION_DENIED: ${resolution.reason}`,
+          riskLevel: "HIGH",
+        });
+        return this._errorResponse(
+          "",
+          "SECURITY_VIOLATION",
+          `PERMISSION_DENIED: ${resolution.reason}`,
+          "Is project ke liye workflow banane ki permission nahi hai.",
+        );
+      }
+      if (resolution.status === "invalid") {
+        securityAuditLogger.logEvent({
+          eventType: "TOOL_BLOCKED",
+          actor: {
+            identityId: secContext?.identityId || "unknown",
+            role: secContext?.role || "guest",
+            ipAddress: secContext?.ipAddress || "unknown",
+            deviceId: targetDeviceId,
+          },
+          target: { toolName: "workflow", resource: "project:select" },
+          decision: "BLOCK",
+          reason: `INVALID_PROJECT: ${resolution.reason}`,
+          riskLevel: "MEDIUM",
+        });
+        return this._errorResponse(
+          "",
+          "INVALID_QUERY",
+          `INVALID_PROJECT: ${resolution.reason}`,
+          "Selected project valid nahi mila.",
+        );
+      }
+      if (resolution.status === "resolved") {
+        resolvedProjectId = resolution.projectId;
+      }
+    }
+
     try {
       // ── 5. Create Plan via Phase 5 PlannerCoordinator ───────────────────
       const plan = await plannerCoordinator.createPlan(rawQuery, {
         deviceId: targetDeviceId,
         preferredLanguage: preferredLang,
+        ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
       });
 
       // If autoExecute = false, return plan in "created" status for user inspection

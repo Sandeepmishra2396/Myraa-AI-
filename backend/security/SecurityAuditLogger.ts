@@ -68,14 +68,16 @@ export class SecurityAuditLogger {
   sanitizeData<T>(input: T): T {
     if (typeof input === "string") {
       let str: string = input;
-      // Mask Gemini API keys
-      str = str.replace(/AIza[0-9A-Za-z\-_]{35}/g, "AIzaSy...[REDACTED]");
-      // Mask generic bearer/access/refresh tokens
-      str = str.replace(/sora_[a-z0-9_]+/gi, "sora_...[REDACTED]");
+      // Mask Gemini / Google API keys (standard 39-char and shorter synthetic keys)
+      str = str.replace(/AIza[0-9A-Za-z\-_]{16,}/g, "AIza...[REDACTED]");
+      // Mask complete sora_* tokens including base64url hyphens, underscores, and .signature
+      str = str.replace(/sora_[A-Za-z0-9_\-.]+/gi, "sora_...[REDACTED]");
+      // Mask complete myraa_* tokens including base64url hyphens, underscores, and .signature
+      str = str.replace(/myraa_[A-Za-z0-9_\-.]+/gi, "myraa_...[REDACTED]");
       // Mask sk- keys (OpenAI / Anthropic)
       str = str.replace(/sk-[A-Za-z0-9_-]{20,}/g, "sk-...[REDACTED]");
-      // Mask JWTs
-      str = str.replace(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "eyJ...[REDACTED]");
+      // Mask 2-part and 3-part JWT / base64url signed payloads
+      str = str.replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?/g, "eyJ...[REDACTED]");
       // Mask Bearer tokens
       str = str.replace(/Bearer\s+[A-Za-z0-9_\-\.]+/gi, "Bearer [REDACTED]");
       // Mask GitHub tokens
@@ -87,8 +89,11 @@ export class SecurityAuditLogger {
       // Mask SSN & Credit cards
       str = str.replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[SSN_REDACTED]");
       str = str.replace(/\b(?:\d{4}-){3}\d{4}\b/g, "[CC_REDACTED]");
-      // Mask password values in JSON or key=val
-      str = str.replace(/(password|passwd|secret|token|apiKey|api_key)["']?\s*[:=]\s*["']?([^"',\s]+)/gi, "$1: [REDACTED]");
+      // Mask credential values in JSON or key=val strings
+      str = str.replace(
+        /(password|passwd|passcode|secret|token|checkpointId|_checkpointId|apiKey|api_key|proof|authorization|credential)["']?\s*[:=]\s*["']?([^"',\s}]+)/gi,
+        "$1: [REDACTED]",
+      );
       // Defang prompt injection instruction phrases to prevent attacker payloads becoming audit instructions
       str = str.replace(/\b(ignore\s+(all\s+)?previous\s+instructions|system\s+prompt\s*:|disregard\s+all\s+rules)\b/gi, "[DEFANGED_INSTRUCTION]");
       return str as unknown as T;
@@ -101,7 +106,12 @@ export class SecurityAuditLogger {
     if (input !== null && typeof input === "object") {
       const sanitized: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(input)) {
-        if (/password|secret|token|key|credential|private|auth|bearer|passphrase/i.test(k) && typeof v === "string") {
+        // Preserve non-secret audit correlation IDs (e.g., tokenId UUID) while redacting all credential-bearing keys
+        const isSafeCorrelationId = k === "tokenId";
+        if (
+          !isSafeCorrelationId &&
+          /password|passwd|passcode|secret|token|checkpoint|proof|key|credential|private|auth|bearer|passphrase|signature/i.test(k)
+        ) {
           sanitized[k] = "[REDACTED]";
         } else {
           sanitized[k] = this.sanitizeData(v);

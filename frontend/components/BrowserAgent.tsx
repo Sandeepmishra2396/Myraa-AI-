@@ -22,7 +22,10 @@ import {
   Maximize,
   Sparkles,
   Shield,
-  BookOpen
+  BookOpen,
+  SkipForward,
+  ListMusic,
+  AlertTriangle
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -32,7 +35,7 @@ interface LogItem {
   type: "info" | "success" | "error" | "action";
 }
 
-interface Tab {
+export interface Tab {
   id: string;
   url: string;
   title: string;
@@ -40,6 +43,130 @@ interface Tab {
   currentIndex: number;
   isLoading: boolean;
   openedExternally?: boolean;
+}
+
+export interface ResolveTabResult {
+  tab?: Tab;
+  index?: number; // 1-based index (1, 2, ...)
+  error?: string;
+}
+
+/**
+ * Resolves a target tab from an identifier against an active tab collection.
+ * 
+ * Precedence:
+ * 1. Exact match on internal tab `id`.
+ * 2. Explicit label match, e.g. "Tab 1", "tab-1", "tab #1", "tab1".
+ * 3. 1-based numeric index (e.g. "1" -> Tab 1, "2" -> Tab 2).
+ *    Compatibility alias: "0" maps to Tab 1.
+ * 4. Unique URL / title substring match (case-insensitive).
+ *    Rejects ambiguous matches rather than guessing.
+ */
+export function resolveTargetTab(
+  identifier: unknown,
+  tabsList: Tab[]
+): ResolveTabResult {
+  if (identifier === undefined || identifier === null || String(identifier).trim() === "") {
+    return { error: "Missing tab identifier." };
+  }
+  if (!tabsList || tabsList.length === 0) {
+    return { error: "No open tabs available." };
+  }
+
+  const raw = String(identifier).trim();
+  const lower = raw.toLowerCase();
+
+  // 1. Exact internal ID match (case-sensitive first, then case-insensitive)
+  const exactIdIdx = tabsList.findIndex((t) => t.id === raw);
+  if (exactIdIdx !== -1) {
+    return { tab: tabsList[exactIdIdx], index: exactIdIdx + 1 };
+  }
+  const caseIdIdx = tabsList.findIndex((t) => t.id.toLowerCase() === lower);
+  if (caseIdIdx !== -1) {
+    return { tab: tabsList[caseIdIdx], index: caseIdIdx + 1 };
+  }
+
+  // 2. Explicit label match: "Tab 1", "tab-1", "tab #1", "tab: 1", etc.
+  const labelMatch = lower.match(/^tab\s*[-#:]?\s*(\d+)$/i);
+  if (labelMatch) {
+    const num = parseInt(labelMatch[1], 10);
+    // Label numbers are 1-based ("Tab 1" -> index 0)
+    if (num >= 1 && num <= tabsList.length) {
+      return { tab: tabsList[num - 1], index: num };
+    }
+    return { error: `Tab index ${num} out of bounds (1 to ${tabsList.length}).` };
+  }
+
+  // 3. Documented numeric index semantics
+  // Treat "1" as Tab 1 (1-based index); treat "0" as Tab 1 compatibility alias.
+  if (/^\d+$/.test(lower)) {
+    const num = parseInt(lower, 10);
+    if (num === 0) {
+      // Explicit 0-based compatibility alias: "0" -> Tab 1
+      return { tab: tabsList[0], index: 1 };
+    }
+    if (num >= 1 && num <= tabsList.length) {
+      return { tab: tabsList[num - 1], index: num };
+    }
+    return { error: `Tab index ${num} out of bounds (1 to ${tabsList.length}).` };
+  }
+
+  // Positional words
+  if (lower === "first" || lower === "first tab") {
+    return { tab: tabsList[0], index: 1 };
+  }
+  if (lower === "second" || lower === "second tab") {
+    if (tabsList.length >= 2) return { tab: tabsList[1], index: 2 };
+    return { error: "Second tab does not exist." };
+  }
+  if (lower === "last" || lower === "last tab") {
+    return { tab: tabsList[tabsList.length - 1], index: tabsList.length };
+  }
+
+  // 4. Unique URL / Title match (rejects ambiguous matches across tabs)
+  const matches = tabsList
+    .map((t, i) => ({ tab: t, index: i + 1 }))
+    .filter(
+      ({ tab }) =>
+        tab.url.toLowerCase().includes(lower) ||
+        tab.title.toLowerCase().includes(lower)
+    );
+
+  if (matches.length === 1) {
+    return matches[0];
+  }
+  if (matches.length > 1) {
+    return {
+      error: `Ambiguous tab identifier '${raw}' matches ${matches.length} tabs.`,
+    };
+  }
+
+  return { error: `No matching tab code found for '${raw}'.` };
+}
+
+/**
+ * Strips sentence-ending punctuation from navigation targets without corrupting legitimate URLs.
+ */
+export function cleanNavigationUrl(raw: string): string {
+  if (!raw || typeof raw !== "string") return "";
+  let url = raw.trim();
+  while (url.length > 0) {
+    const last = url[url.length - 1];
+    if (/[.,;:!?'"`\]}]/.test(last)) {
+      url = url.slice(0, -1);
+    } else if (last === ")") {
+      const openCount = (url.match(/\(/g) || []).length;
+      const closeCount = (url.match(/\)/g) || []).length;
+      if (closeCount > openCount) {
+        url = url.slice(0, -1);
+      } else {
+        break;
+      }
+    } else {
+      break;
+    }
+  }
+  return url.replace(/^[<([\'"]+/, "");
 }
 
 interface BrowserAgentProps {
@@ -54,15 +181,212 @@ interface BrowserAgentProps {
   } | null;
 }
 
+/**
+ * Normalizes browser starting and navigation URLs.
+ * Automatically resolves bare YouTube root URLs to the native Real-time Portal with Trending Songs
+ * and converts short youtu.be links to watch URLs.
+ */
+function normalizeBrowserUrl(rawUrl: string): string {
+  if (!rawUrl || rawUrl === "about:blank") return rawUrl || "about:blank";
+  const u = rawUrl.trim();
+  if (
+    /^https?:\/\/(www\.)?youtube\.com\/?$/i.test(u) ||
+    /^https?:\/\/youtu\.be\/?$/i.test(u) ||
+    /^youtube\.com\/?$/i.test(u) ||
+    /^www\.youtube\.com\/?$/i.test(u)
+  ) {
+    return "https://youtube.com/results?search_query=Trending+Songs";
+  }
+  const ytShortMatch = u.match(/^https?:\/\/youtu\.be\/([a-zA-Z0-9_-]+)/i);
+  if (ytShortMatch) {
+    return `https://youtube.com/watch?v=${ytShortMatch[1]}`;
+  }
+  return u;
+}
+
+/**
+ * Resolves natural ordinals ("first", "4th", "chautha", "dusra", "3 wala play karo", "9th no pe jo sonngs hai usko play karo")
+ * or numeric index to 0-based number.
+ */
+function parseBrowserOrdinalOrIndex(raw: string | number | null | undefined): number | null {
+  if (raw === undefined || raw === null || raw === "") return null;
+  if (typeof raw === "number") return isNaN(raw) ? null : Math.floor(raw);
+  const s = String(raw).trim().toLowerCase();
+  if (!s) return null;
+
+  if (/^(?:video|result|search-result)-(\d+)$/i.test(s)) {
+    const num = parseInt(s.replace(/\D+/g, ""), 10);
+    return isNaN(num) ? null : num;
+  }
+
+  // Handle explicit "do number" / "do wala" before stripping helper verb "do"
+  if (/\b(?:do\s+(?:no\.?|number|num|wala|wali|wale)|(?:no\.?|number|num)\s+do)\b/i.test(s)) {
+    return 1;
+  }
+
+  const cleaned = s
+    .replace(/^#/, "")
+    .replace(/\b(?:video|result|search-result)-\b/gi, "")
+    .replace(/\b(?:kar|chala|baja|laga|suna|khol)\s+do\b/gi, "")
+    .replace(/\b(?:no\.|no|number|num)\b/gi, "")
+    .replace(/\b(?:play|karo|kar|do|chalao|chala|bajao|baja|sunao|suna|lagao|laga|open|kholo|tum|aap|please|plz|zara|bhai|yaar|myraa|myra|ko|me|main|pe|par|jo|hai|hain|usko|isko|use|usse|wo|woh|ye|yeh)\b/gi, "")
+    .replace(/\b(?:wala|wali|wale|waala|waali|waale|gaana|gana|gaane|gane|songs|sonngs|sonng|song|videos|video|tracks|track|items|item|results|result|option|one|the|on|at|in|of)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const ordMap: Record<string, number> = {
+    "1st": 0, "first": 0, "one": 0, "ek": 0, "pehla": 0, "pehle": 0, "pahla": 0, "pahle": 0, "top": 0,
+    "2nd": 1, "second": 1, "two": 1, "doosra": 1, "dusra": 1, "doosre": 1, "dusre": 1, "duja": 1,
+    "3rd": 2, "third": 2, "three": 2, "teen": 2, "teesra": 2, "tisra": 2, "teesre": 2, "tisre": 2,
+    "4th": 3, "fourth": 3, "four": 3, "chaar": 3, "char": 3, "chautha": 3, "chauthe": 3, "chotha": 3,
+    "5th": 4, "fifth": 4, "five": 4, "paanch": 4, "panch": 4, "paanchwa": 4, "panchwa": 4, "paanchwe": 4, "panchwe": 4,
+    "6th": 5, "sixth": 5, "six": 5, "chhattha": 5, "chhatha": 5, "chhatthe": 5, "chhe": 5, "chhah": 5, "che": 5,
+    "7th": 6, "seventh": 6, "seven": 6, "saatwa": 6, "satwa": 6, "saatwe": 6, "saat": 6, "sat": 6,
+    "8th": 7, "eighth": 7, "eight": 7, "aathwa": 7, "aathva": 7, "aathwe": 7, "aath": 7, "athwa": 7, "ath": 7,
+    "9th": 8, "ninth": 8, "nine": 8, "nauwa": 8, "navma": 8, "nauwe": 8, "nau": 8, "nava": 8, "noauwa": 8,
+    "10th": 9, "tenth": 9, "ten": 9, "daswa": 9, "dasva": 9, "daswe": 9, "das": 9,
+    "11th": 10, "eleventh": 10, "eleven": 10, "gyarahwa": 10, "gyarah": 10,
+    "12th": 11, "twelfth": 11, "twelve": 11, "barahwa": 11, "barah": 11,
+    "13th": 12, "thirteenth": 12, "thirteen": 12,
+    "14th": 13, "fourteenth": 13, "fourteen": 13,
+    "15th": 14, "fifteenth": 14, "fifteen": 14,
+  };
+
+  if (ordMap[cleaned] !== undefined) return ordMap[cleaned];
+  if (ordMap[s] !== undefined) return ordMap[s];
+
+  const anyOrdMatch = s.match(/\b(\d+)(?:st|nd|rd|th)\b/i);
+  if (anyOrdMatch) {
+    const val = parseInt(anyOrdMatch[1], 10);
+    return val <= 0 ? 0 : val - 1;
+  }
+
+  const thMatch = cleaned.match(/^(\d+)(?:st|nd|rd|th)?$/);
+  if (thMatch) {
+    const val = parseInt(thMatch[1], 10);
+    return val <= 0 ? 0 : val - 1;
+  }
+
+  const tokens = cleaned.split(/[\s,.;:!?]+/).filter(Boolean);
+  for (const tok of tokens) {
+    if (tok !== "one" && ordMap[tok] !== undefined) {
+      return ordMap[tok];
+    }
+  }
+
+  const numMatch = s.match(/(?:^|\b)(?:no\.?|number|#)?\s*(\d+)\b/i);
+  if (numMatch) {
+    const val = parseInt(numMatch[1], 10);
+    if (val >= 1 && val <= 50) {
+      return val - 1;
+    }
+    if (val === 0) return 0;
+  }
+
+  return null;
+}
+
+// Utility to map clean tabs titles
+export function getCleanTitleFromUrl(urlStr: string): string {
+  if (!urlStr || urlStr === "about:blank") return "Start Page";
+  try {
+    const parsed = new URL(urlStr);
+    if (parsed.hostname.includes("youtube.com")) {
+      if (parsed.searchParams.get("v")) return "YouTube Stream";
+      if (parsed.pathname.includes("/results")) return `YouTube Search: ${parsed.searchParams.get("search_query") || ""}`;
+      return "YouTube Projector";
+    }
+    if (parsed.hostname.includes("google.com")) {
+      if (parsed.pathname.includes("search")) return `Google Results: ${parsed.searchParams.get("q") || ""}`;
+      return "Google Search Board";
+    }
+    if (parsed.hostname.includes("duckduckgo.com")) {
+      return "DuckDuckGo Proxy Search";
+    }
+    return parsed.hostname.replace("www.", "");
+  } catch {
+    return "Viewing Portal";
+  }
+}
+
+// Checks if a website cannot be embedded inside iframe containers due to security policies
+// NOTE: YouTube is handled natively (Real-time Portal / Embed Player) and is never restricted!
+export function checkIsRestricted(urlStr: string): { restricted: boolean; reason: string } {
+  if (!urlStr || urlStr === "about:blank") return { restricted: false, reason: "" };
+  try {
+    const parsed = new URL(urlStr);
+    const hostname = parsed.hostname.toLowerCase();
+    
+    if (hostname.includes("youtube.com") || hostname.includes("youtu.be")) {
+      return { restricted: false, reason: "" };
+    }
+    if (hostname.includes("google.com") && !parsed.pathname.includes("/search")) {
+      return { 
+        restricted: true, 
+        reason: "Google security parameters prohibit embedding of credential ports and account consoles to mitigate clickjacking." 
+      };
+    }
+    if (hostname.includes("chatgpt.com") || hostname.includes("openai.com")) {
+      return { 
+        restricted: true, 
+        reason: "OpenAI requires secure browser authentication checks, cloudflare protections, and user-token cookie contexts." 
+      };
+    }
+    if (hostname.includes("gmail.com") || hostname.includes("mail.google.com")) {
+      return { 
+        restricted: true, 
+        reason: "Gmail demands authenticated, non-nested visual scopes to secure sensitive correspondence tokens." 
+      };
+    }
+    if (hostname.includes("github.com")) {
+      return { 
+        restricted: true, 
+        reason: "GitHub deploys 'X-Frame-Options: deny' on all repositories and workspace interfaces." 
+      };
+    }
+    if (hostname.includes("twitter.com") || hostname.includes("x.com") || hostname.includes("instagram.com") || hostname.includes("facebook.com")) {
+      return { 
+        restricted: true, 
+        reason: "Social networks require active secure sessions and forbid third-party iframe frame injection." 
+      };
+    }
+    return { restricted: false, reason: "" };
+  } catch {
+    return { restricted: false, reason: "" };
+  }
+}
+
 export const BrowserAgent: React.FC<BrowserAgentProps> = ({
   url: initialUrl,
   onClose,
   actionTrigger
 }) => {
   // Tabs management state
-  const [tabs, setTabs] = useState<Tab[]>([]);
-  const [activeTabId, setActiveTabId] = useState<string>("");
-  const [inputValue, setInputValue] = useState<string>("");
+  const [tabs, setTabs] = useState<Tab[]>(() => {
+    const startUrl = normalizeBrowserUrl(initialUrl || "about:blank");
+    const tabId = Math.random().toString(36).substring(2, 9);
+    return [
+      {
+        id: tabId,
+        url: startUrl,
+        title: getCleanTitleFromUrl(startUrl),
+        history: [startUrl],
+        currentIndex: 0,
+        isLoading: startUrl !== "about:blank",
+        openedExternally: false,
+      },
+    ];
+  });
+  const [activeTabId, setActiveTabId] = useState<string>(() => tabs[0]?.id || "");
+  const [inputValue, setInputValue] = useState<string>(() => {
+    const startUrl = normalizeBrowserUrl(initialUrl || "about:blank");
+    return startUrl === "about:blank" ? "" : startUrl;
+  });
+
+  const tabsRef = useRef<Tab[]>(tabs);
+  tabsRef.current = tabs;
+  const activeTabIdRef = useRef<string>(activeTabId);
+  activeTabIdRef.current = activeTabId;
 
   // Playwright Local Server status states (retained for backward compatibility)
   const [isLocalConnected, setIsLocalConnected] = useState<boolean>(false);
@@ -81,87 +405,40 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
 
   // YouTube Live results states
   const [ytSearchResults, setYtSearchResults] = useState<any[]>([]);
+  const ytSearchResultsRef = useRef<any[]>([]);
+  ytSearchResultsRef.current = ytSearchResults;
   const [ytSearchLoading, setYtSearchLoading] = useState<boolean>(false);
   const [ytSearchError, setYtSearchError] = useState<string | null>(null);
+  const [ytEmbedError, setYtEmbedError] = useState<{ code: number; videoId: string } | null>(null);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const loadStartRef = useRef<number>(0);
 
-  // Checks if a website cannot be embedded inside iframe containers due to security policies
-  const checkIsRestricted = (urlStr: string): { restricted: boolean; reason: string } => {
-    if (!urlStr || urlStr === "about:blank") return { restricted: false, reason: "" };
-    try {
-      const parsed = new URL(urlStr);
-      const hostname = parsed.hostname.toLowerCase();
-      
-      // Strict list of platforms that utilize frame-ancestor blocking or CSRF session triggers
-      if (
-        (hostname.includes("youtube.com") || hostname.includes("youtu.be")) &&
-        !parsed.pathname.includes("/embed") &&
-        !parsed.pathname.includes("/results") &&
-        !parsed.pathname.includes("/watch") &&
-        !parsed.searchParams.get("v")
-      ) {
-        return { 
-          restricted: true, 
-          reason: "YouTube utilizes 'X-Frame-Options: SAMEORIGIN' security headers and frame-busting service modules that prevent frame nesting." 
-        };
-      }
-      if (hostname.includes("google.com") && !parsed.pathname.includes("/search")) {
-        return { 
-          restricted: true, 
-          reason: "Google security parameters prohibit embedding of credential ports and account consoles to mitigate clickjacking." 
-        };
-      }
-      if (hostname.includes("chatgpt.com") || hostname.includes("openai.com")) {
-        return { 
-          restricted: true, 
-          reason: "OpenAI requires secure browser authentication checks, cloudflare protections, and user-token cookie contexts." 
-        };
-      }
-      if (hostname.includes("gmail.com") || hostname.includes("mail.google.com")) {
-        return { 
-          restricted: true, 
-          reason: "Gmail demands authenticated, non-nested visual scopes to secure sensitive correspondence tokens." 
-        };
-      }
-      if (hostname.includes("github.com")) {
-        return { 
-          restricted: true, 
-          reason: "GitHub deploys 'X-Frame-Options: deny' on all repositories and workspace interfaces." 
-        };
-      }
-      if (hostname.includes("twitter.com") || hostname.includes("x.com") || hostname.includes("instagram.com") || hostname.includes("facebook.com")) {
-        return { 
-          restricted: true, 
-          reason: "Social networks require active secure sessions and forbid third-party iframe frame injection." 
-        };
-      }
-      return { restricted: false, reason: "" };
-    } catch {
-      return { restricted: false, reason: "" };
-    }
-  };
-
   // Safe tab initialization
   useEffect(() => {
     if (initialUrl) {
-      const startUrl = initialUrl === "about:blank" ? "about:blank" : initialUrl;
+      const normalized = normalizeBrowserUrl(initialUrl);
+      const startUrl = normalized === "about:blank" ? "about:blank" : normalized;
       const restrictions = checkIsRestricted(startUrl);
-      
-      const newTab: Tab = {
-        id: Math.random().toString(36).substring(2, 9),
-        url: startUrl,
-        title: getCleanTitleFromUrl(startUrl),
-        history: [startUrl],
-        currentIndex: 0,
-        isLoading: startUrl !== "about:blank" && !restrictions.restricted,
-        openedExternally: restrictions.restricted
-      };
-      
-      setTabs([newTab]);
-      setActiveTabId(newTab.id);
-      setInputValue(startUrl === "about:blank" ? "" : startUrl);
+
+      const currentTabs = tabsRef.current;
+      if (currentTabs.length === 0 || !currentTabs.some((t) => t.url === startUrl)) {
+        const newTab: Tab = {
+          id: Math.random().toString(36).substring(2, 9),
+          url: startUrl,
+          title: getCleanTitleFromUrl(startUrl),
+          history: [startUrl],
+          currentIndex: 0,
+          isLoading: startUrl !== "about:blank" && !restrictions.restricted,
+          openedExternally: restrictions.restricted,
+        };
+
+        setTabs([newTab]);
+        tabsRef.current = [newTab];
+        setActiveTabId(newTab.id);
+        activeTabIdRef.current = newTab.id;
+        setInputValue(startUrl === "about:blank" ? "" : startUrl);
+      }
 
       // Handle diagnostics
       if (startUrl !== "about:blank") {
@@ -173,9 +450,11 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
           window.open(startUrl, "_blank", "noopener,noreferrer");
         } else {
           setDiagnosticStatus("analyzing");
+          setDiagnosticReason(null);
         }
       } else {
         setDiagnosticStatus("blank");
+        setDiagnosticReason(null);
       }
     }
   }, [initialUrl]);
@@ -215,11 +494,48 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
           setYtSearchError("Invalid YouTube search URL structure.");
           setYtSearchLoading(false);
         }
-      } else {
+      } else if (!activeTab.url.includes("youtube.com") && !activeTab.url.includes("youtu.be")) {
         setYtSearchResults([]);
       }
     }
   }, [activeTabId, activeTab?.url]);
+
+  // Listen for YouTube iframe error postMessages (e.g. Error 150/101: Playback disabled by owner)
+  useEffect(() => {
+    setYtEmbedError(null);
+
+    const handleWindowMessage = (event: MessageEvent) => {
+      try {
+        let payload = event.data;
+        if (typeof payload === "string") {
+          try { payload = JSON.parse(payload); } catch { return; }
+        }
+        if (payload && (payload.event === "onError" || typeof payload.info === "number")) {
+          const code = typeof payload.info === "number" ? payload.info : payload.info?.errorCode || payload.error;
+          if (code === 150 || code === 101 || code === 100 || code === 2 || code === 5) {
+            console.warn("[BrowserAgent] YouTube player reported embed error:", code);
+            const currentVid = activeTab?.url ? new URL(activeTab.url).searchParams.get("v") || "" : "";
+            setYtEmbedError({ code, videoId: currentVid });
+          }
+        }
+      } catch {}
+    };
+
+    window.addEventListener("message", handleWindowMessage);
+    return () => window.removeEventListener("message", handleWindowMessage);
+  }, [activeTab?.url]);
+
+  // Automatic auto-recovery: If an embed error occurs on a track, auto-advance to next song after 2s
+  useEffect(() => {
+    if (!ytEmbedError) return;
+    if (ytSearchResults.length > 1) {
+      console.log(`[BrowserAgent] Embed error ${ytEmbedError.code} detected. Auto-advancing in 2.2s...`);
+      const timer = setTimeout(() => {
+        handlePlayNextTrack();
+      }, 2200);
+      return () => clearTimeout(timer);
+    }
+  }, [ytEmbedError, ytSearchResults]);
 
   // Read local desktop agent status safely when local console is visible
   useEffect(() => {
@@ -337,10 +653,42 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
               (activeTab && activeTab.url.includes("youtube"));
 
             if (isYtRelated) {
-              const cleanYtQ = query.replace(/\b(youtube|search|find|play|song|gaana|chalao|bajao|music|video)\b/gi, "").trim();
+              const cleanYtQ = query
+                .replace(/\b(?:youtube\s+pe|youtube\s+par|on\s+youtube|search\s+on\s+youtube|search\s+for|search|find|chalao|bajao|karo|dikhaye|open)\b/gi, "")
+                .trim();
               const finalQ = cleanYtQ || query;
               const destUrl = `https://youtube.com/results?search_query=${encodeURIComponent(finalQ)}`;
               navigateToUrl(destUrl);
+
+              try {
+                const res = await fetch(`/api/youtube-search?q=${encodeURIComponent(finalQ)}`, {
+                  signal: AbortSignal.timeout(3500),
+                });
+                if (res.ok) {
+                  const data = await res.json();
+                  const results = Array.isArray(data.results) ? data.results : [];
+                  setYtSearchResults(results);
+                  ytSearchResultsRef.current = results;
+                  setYtSearchLoading(false);
+
+                  const topSlice = results.slice(0, 10);
+                  const resultSummary = topSlice
+                    .map((v: any, i: number) => `#${i + 1}: "${v.title}" by ${v.author || "YouTube"}`)
+                    .join("\n");
+
+                  callback({
+                    result: `YouTube search for "${finalQ}" completed. Results visible on screen:\n${resultSummary}`,
+                    results: topSlice,
+                    query: finalQ,
+                    count: topSlice.length,
+                    directive: "Speak about only these exact video titles. Do not hallucinate other song names.",
+                  });
+                  break;
+                }
+              } catch (fetchErr) {
+                console.warn("[BrowserAgent] Real-time fetch wait timed out or failed:", fetchErr);
+              }
+
               callback({ result: `Searching YouTube for "${finalQ}" right away.` });
             } else {
               const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
@@ -356,20 +704,79 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
           }
           case "browserTabAction": {
             const { action: tabAction, url: startUrl, tabId } = args;
+            const currentTabs = tabsRef.current;
+
             if (tabAction === "new") {
-              handleNewTab(startUrl || "about:blank");
-              callback({ result: "Opening a new browser tab now." });
+              const urlToOpen = startUrl || "about:blank";
+              const newTab = handleNewTab(urlToOpen);
+              const updatedTabs = tabsRef.current;
+              const newIdx = updatedTabs.findIndex(t => t.id === newTab.id) + 1;
+              callback({
+                result: `Opened new tab #${newIdx}: "${newTab.title}" at ${urlToOpen}.`,
+                tabId: newTab.id,
+                tabIndex: newIdx,
+                title: newTab.title,
+                url: newTab.url,
+                totalTabs: updatedTabs.length,
+              });
             } else if (tabAction === "close") {
-              const targetId = tabId || activeTabId;
-              handleCloseTab(targetId);
-              callback({ result: "Done. Closed the browser tab." });
-            } else if (tabAction === "switch") {
-              if (tabId && tabs.some(t => t.id === tabId)) {
-                setActiveTabId(tabId);
-                callback({ result: "Let's see. Switched to that tab." });
+              if (tabId !== undefined && tabId !== null && String(tabId).trim() !== "") {
+                const resolution = resolveTargetTab(tabId, currentTabs);
+                if (!resolution.tab) {
+                  callback({ error: resolution.error || `Could not resolve tab '${tabId}' to close.` });
+                  break;
+                }
+                const target = resolution.tab;
+                const closeResult = handleCloseTab(target.id);
+                if (!closeResult.closed) {
+                  callback({ error: "Failed to close tab." });
+                  break;
+                }
+                callback({
+                  result: `Closed tab #${resolution.index}: "${target.title}".`,
+                  closedTabId: target.id,
+                  closedTabIndex: resolution.index,
+                  activeTabId: closeResult.newActiveTab?.id,
+                  totalTabs: closeResult.remainingTabs,
+                });
               } else {
-                callback({ error: "No matching tab code found." });
+                const activeTabObj = currentTabs.find(t => t.id === activeTabIdRef.current) || currentTabs[0];
+                if (!activeTabObj) {
+                  callback({ error: "No active tab to close." });
+                  break;
+                }
+                const closeResult = handleCloseTab(activeTabObj.id);
+                callback({
+                  result: `Closed active tab: "${activeTabObj.title}".`,
+                  closedTabId: activeTabObj.id,
+                  activeTabId: closeResult.newActiveTab?.id,
+                  totalTabs: closeResult.remainingTabs,
+                });
               }
+            } else if (tabAction === "switch") {
+              if (tabId === undefined || tabId === null || String(tabId).trim() === "") {
+                callback({ error: "Missing tabId parameter for tab switch." });
+                break;
+              }
+              const resolution = resolveTargetTab(tabId, currentTabs);
+              if (!resolution.tab) {
+                callback({ error: resolution.error || `No matching tab code found for '${tabId}'.` });
+                break;
+              }
+              const target = resolution.tab;
+              setActiveTabId(target.id);
+              activeTabIdRef.current = target.id;
+              setInputValue(target.url === "about:blank" ? "" : target.url);
+              callback({
+                result: `Switched to tab #${resolution.index}: "${target.title}" (${target.url}).`,
+                tabId: target.id,
+                tabIndex: resolution.index,
+                title: target.title,
+                url: target.url,
+                totalTabs: currentTabs.length,
+              });
+            } else {
+              callback({ error: `Unknown tab action: '${tabAction}'. Supported: new, close, switch.` });
             }
             break;
           }
@@ -420,22 +827,32 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
           }
           case "browserClick": {
             const selector = (args.selector || "").trim();
+            const currentList = ytSearchResultsRef.current.length > 0 ? ytSearchResultsRef.current : ytSearchResults;
 
             // Check if on YouTube results view and clicking a search result video
-            if (activeTab?.url && activeTab.url.includes("youtube.com/results") && ytSearchResults.length > 0) {
+            if (activeTab?.url && activeTab.url.includes("youtube.com/results") && currentList.length > 0) {
               const selLower = selector.toLowerCase();
-              const match = ytSearchResults.find((v, idx) =>
-                selLower.includes(v.videoId.toLowerCase()) ||
-                selLower === `video-${idx}` ||
-                selLower === `search-result-${idx}` ||
-                selLower === `${idx}` ||
-                v.title.toLowerCase().includes(selLower) ||
-                selLower.includes(v.title.toLowerCase().slice(0, 15))
-              ) || ytSearchResults[0];
+              let ordIdx = parseBrowserOrdinalOrIndex(selLower);
+              if (ordIdx === null && args._userUtterance) {
+                ordIdx = parseBrowserOrdinalOrIndex(args._userUtterance);
+              }
+
+              const match =
+                (ordIdx !== null && currentList[ordIdx] ? currentList[ordIdx] : undefined) ||
+                currentList.find((v, idx) =>
+                  selLower.includes(v.videoId.toLowerCase()) ||
+                  selLower === `video-${idx}` ||
+                  selLower === `search-result-${idx}` ||
+                  selLower === `${idx}` ||
+                  selLower === `${idx + 1}` ||
+                  v.title.toLowerCase().includes(selLower) ||
+                  selLower.includes(v.title.toLowerCase().slice(0, 15))
+                ) ||
+                (ordIdx !== null ? currentList[Math.max(0, Math.min(ordIdx, currentList.length - 1))] : currentList[0]);
 
               if (match) {
                 navigateToUrl(`https://youtube.com/watch?v=${match.videoId}`);
-                callback({ result: `Now playing "${match.title}" on YouTube.` });
+                callback({ result: `Now playing #${(match.index ?? (ordIdx ?? 0)) + 1}: "${match.title}" on YouTube.` });
                 break;
               }
             }
@@ -471,24 +888,25 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
           case "browserMediaControl": {
             const action = String(args.action || "play").toLowerCase();
             const value = args.value;
+            const currentList = ytSearchResultsRef.current.length > 0 ? ytSearchResultsRef.current : ytSearchResults;
 
             // Resolve current video index in ytSearchResults if on a YouTube watch page
             let currentVideoIdx = 0;
-            if (activeTab?.url && ytSearchResults.length > 0) {
+            if (activeTab?.url && currentList.length > 0) {
               try {
                 const u = new URL(activeTab.url);
                 const activeVid = u.searchParams.get("v");
                 if (activeVid) {
-                  const foundIdx = ytSearchResults.findIndex((r) => r.videoId === activeVid);
+                  const foundIdx = currentList.findIndex((r) => r.videoId === activeVid);
                   if (foundIdx !== -1) currentVideoIdx = foundIdx;
                 }
               } catch {}
             }
 
             // Handle NEXT / PREVIOUS track transitions deterministically
-            if ((action === "next" || action === "skip") && ytSearchResults.length > 0) {
-              const nextIdx = (currentVideoIdx + 1) % ytSearchResults.length;
-              const nextVideo = ytSearchResults[nextIdx] || ytSearchResults[0];
+            if ((action === "next" || action === "skip") && currentList.length > 0) {
+              const nextIdx = (currentVideoIdx + 1) % currentList.length;
+              const nextVideo = currentList[nextIdx] || currentList[0];
               navigateToUrl(`https://youtube.com/watch?v=${nextVideo.videoId}`);
               callback({
                 playing: true,
@@ -500,9 +918,9 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
               break;
             }
 
-            if ((action === "previous" || action === "prev") && ytSearchResults.length > 0) {
-              const prevIdx = (currentVideoIdx - 1 + ytSearchResults.length) % ytSearchResults.length;
-              const prevVideo = ytSearchResults[prevIdx] || ytSearchResults[0];
+            if ((action === "previous" || action === "prev") && currentList.length > 0) {
+              const prevIdx = (currentVideoIdx - 1 + currentList.length) % currentList.length;
+              const prevVideo = currentList[prevIdx] || currentList[0];
               navigateToUrl(`https://youtube.com/watch?v=${prevVideo.videoId}`);
               callback({
                 playing: true,
@@ -516,20 +934,56 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
 
             // If user or agent commands play while on YouTube search results (or with a specific videoId/index), play that video!
             if (action === "play") {
-              const requestedIdx = typeof args.index === "number" ? args.index : 0;
-              const byId = args.videoId
-                ? ytSearchResults.find((v) => v.videoId === args.videoId)
-                : undefined;
-              const chosenResult =
-                byId ||
-                ytSearchResults[Math.max(0, Math.min(requestedIdx, Math.max(0, ytSearchResults.length - 1)))] ||
-                (args.videoId
-                  ? {
-                      videoId: args.videoId,
-                      title: args.title || "Selected YouTube Video",
-                      author: "YouTube",
-                    }
-                  : null);
+              let requestedIdx: number | null = null;
+
+              if (typeof args.index === "number" && !isNaN(args.index) && args.index >= 0) {
+                requestedIdx = Math.floor(args.index);
+              } else if (args.songNumber !== undefined && args.songNumber !== null) {
+                const sNum = parseInt(String(args.songNumber), 10);
+                if (!isNaN(sNum) && sNum >= 1) {
+                  requestedIdx = sNum - 1;
+                }
+              } else if (args.selector !== undefined && args.selector !== null && String(args.selector).trim()) {
+                const parsed = parseBrowserOrdinalOrIndex(args.selector);
+                if (parsed !== null) {
+                  requestedIdx = parsed;
+                }
+              }
+
+              if (requestedIdx === null && typeof args.value === "number" && args.value >= 1 && args.value <= 50) {
+                requestedIdx = args.value - 1;
+              }
+
+              if (requestedIdx === null && args._userUtterance) {
+                const parsedU = parseBrowserOrdinalOrIndex(args._userUtterance);
+                if (parsedU !== null) {
+                  requestedIdx = parsedU;
+                }
+              }
+
+              const hasExplicitOrdinalOrIndex = requestedIdx !== null;
+              const effectiveIdx = requestedIdx !== null ? requestedIdx : 0;
+
+              let chosenResult: any = null;
+              if (hasExplicitOrdinalOrIndex && currentList.length > 0) {
+                const bounded = Math.max(0, Math.min(effectiveIdx, currentList.length - 1));
+                chosenResult = currentList[bounded];
+              } else if (args.videoId) {
+                chosenResult = currentList.find((v) => v.videoId === args.videoId);
+              }
+
+              if (!chosenResult && currentList.length > 0) {
+                const bounded = Math.max(0, Math.min(effectiveIdx, currentList.length - 1));
+                chosenResult = currentList[bounded];
+              }
+
+              if (!chosenResult && args.videoId) {
+                chosenResult = {
+                  videoId: args.videoId,
+                  title: args.title || "Selected YouTube Video",
+                  author: "YouTube",
+                };
+              }
 
               const isAlreadyWatchingChosen =
                 activeTab?.url &&
@@ -543,7 +997,7 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
                   title: chosenResult.title,
                   videoIdOrUrl: chosenResult.videoId,
                   verified: true,
-                  result: `Now playing "${chosenResult.title}" by ${chosenResult.author || "YouTube"}.`,
+                  result: `Now playing #${(chosenResult?.index ?? effectiveIdx) + 1}: "${chosenResult.title}" by ${chosenResult.author || "YouTube"}.`,
                 });
                 break;
               }
@@ -613,33 +1067,10 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
     runVoiceAutomation();
   }, [actionTrigger, activeTabId]);
 
-  // Utility to map clean tabs titles
-  const getCleanTitleFromUrl = (urlStr: string): string => {
-    if (!urlStr || urlStr === "about:blank") return "Start Page";
-    try {
-      const parsed = new URL(urlStr);
-      if (parsed.hostname.includes("youtube.com")) {
-        if (parsed.searchParams.get("v")) return "YouTube Stream";
-        if (parsed.pathname.includes("/results")) return `YouTube Search: ${parsed.searchParams.get("search_query") || ""}`;
-        return "YouTube Projector";
-      }
-      if (parsed.hostname.includes("google.com")) {
-        if (parsed.pathname.includes("search")) return `Google Results: ${parsed.searchParams.get("q") || ""}`;
-        return "Google Search Board";
-      }
-      if (parsed.hostname.includes("duckduckgo.com")) {
-        return "DuckDuckGo Proxy Search";
-      }
-      return parsed.hostname.replace("www.", "");
-    } catch {
-      return "Viewing Portal";
-    }
-  };
-
   // Navigates active tab to location
-  const navigateToUrl = (targetUrl: string) => {
-    let finalUrl = targetUrl.trim();
-    if (finalUrl === "about:blank") {
+  const navigateToUrl = (targetUrl: string, isExplicitSearch = false) => {
+    let finalUrl = cleanNavigationUrl(targetUrl);
+    if (!finalUrl || finalUrl === "about:blank") {
       setTabs(prev => prev.map(t => t.id === activeTabId ? {
         ...t,
         url: "about:blank",
@@ -653,13 +1084,47 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
       return;
     }
 
-    const isDomain = /^(https?:\/\/)?([\da-z.-]+)\.([a-z.]{2,6})([\/\w .-]*)*\/?(\?.*)?(#.*)?$/i.test(finalUrl);
-    if (isDomain) {
-      if (!finalUrl.startsWith("http://") && !finalUrl.startsWith("https://")) {
-        finalUrl = "https://" + finalUrl;
+    if (isExplicitSearch) {
+      finalUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(finalUrl)}`;
+    } else if (finalUrl.startsWith("http://") || finalUrl.startsWith("https://")) {
+      // Direct explicit URL: validate syntax
+      try {
+        const parsed = new URL(finalUrl);
+        if (!parsed.hostname) {
+          throw new Error("Missing hostname");
+        }
+      } catch (err: any) {
+        setNetworkErrors(prev => [...prev, `Navigation failed: Malformed URL '${finalUrl}'.`]);
+        setDiagnosticStatus("error");
+        setDiagnosticReason(`Malformed URL: ${finalUrl}`);
+        return;
       }
     } else {
-      finalUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(finalUrl)}`;
+      // No protocol provided: test if it represents a domain or host
+      const isDomainLike = !/\s/.test(finalUrl) && (/^([a-z0-9-]+\.)+[a-z]{2,}/i.test(finalUrl) || /^localhost(:[0-9]+)?/i.test(finalUrl));
+      if (isDomainLike) {
+        const candidate = finalUrl.startsWith("localhost") ? `http://${finalUrl}` : `https://${finalUrl}`;
+        try {
+          new URL(candidate);
+          finalUrl = candidate;
+        } catch {
+          // If candidate failed URL parsing, report navigation failure instead of silent search redirection
+          setNetworkErrors(prev => [...prev, `Navigation failed: Malformed destination '${finalUrl}'.`]);
+          setDiagnosticStatus("error");
+          setDiagnosticReason(`Malformed destination: ${finalUrl}`);
+          return;
+        }
+      } else {
+        // Natural language query entered in address bar: fallback to search only when non-domain text
+        finalUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(finalUrl)}`;
+      }
+    }
+
+    // Direct YouTube root reroute:
+    // If navigating to YouTube homepage, smoothly load the Real-time Portal with Trending Songs
+    // instead of triggering X-Frame-Options SAMEORIGIN sandbox restriction!
+    if (/^https?:\/\/(www\.)?youtube\.com\/?$/i.test(finalUrl) || /^https?:\/\/youtu\.be\/?$/i.test(finalUrl)) {
+      finalUrl = "https://youtube.com/results?search_query=Trending+Songs";
     }
 
     loadStartRef.current = Date.now();
@@ -695,6 +1160,34 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
     }
   };
 
+  const handlePlayNextTrack = () => {
+    if (ytSearchResults.length > 0) {
+      let currentIdx = 0;
+      if (activeTab?.url) {
+        try {
+          const u = new URL(activeTab.url);
+          const activeVid = u.searchParams.get("v");
+          if (activeVid) {
+            const found = ytSearchResults.findIndex(r => r.videoId === activeVid);
+            if (found !== -1) currentIdx = found;
+          }
+        } catch {}
+      }
+      const nextIdx = (currentIdx + 1) % ytSearchResults.length;
+      const nextVideo = ytSearchResults[nextIdx];
+      if (nextVideo) {
+        setYtEmbedError(null);
+        navigateToUrl(`https://youtube.com/watch?v=${nextVideo.videoId}`);
+      }
+    }
+  };
+
+  const handleOpenNativeYouTube = () => {
+    if (activeTab?.url) {
+      window.open(activeTab.url, "_blank", "noopener,noreferrer");
+    }
+  };
+
   // Handles address form bar enter key submit
   const handleAddressSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -704,7 +1197,7 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
   };
 
   // Spawns a new tab
-  const handleNewTab = (initialUrlStr: string = "about:blank") => {
+  const handleNewTab = (initialUrlStr: string = "about:blank"): Tab => {
     const newTab: Tab = {
       id: Math.random().toString(36).substring(2, 9),
       url: initialUrlStr,
@@ -713,24 +1206,40 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
       currentIndex: 0,
       isLoading: false
     };
+    tabsRef.current = [...tabsRef.current, newTab];
     setTabs(prev => [...prev, newTab]);
     setActiveTabId(newTab.id);
+    activeTabIdRef.current = newTab.id;
+    setInputValue(initialUrlStr === "about:blank" ? "" : initialUrlStr);
+    return newTab;
   };
 
   // Closes a tab
-  const handleCloseTab = (idToClose: string) => {
-    if (tabs.length <= 1) {
+  const handleCloseTab = (idToClose: string): { closed: boolean; newActiveTab?: Tab; remainingTabs: number } => {
+    const current = tabsRef.current;
+    if (current.length <= 1) {
       onClose();
-      return;
+      return { closed: true, remainingTabs: 0 };
     }
-    const idx = tabs.findIndex(t => t.id === idToClose);
-    const updated = tabs.filter(t => t.id !== idToClose);
+    const idx = current.findIndex(t => t.id === idToClose);
+    if (idx === -1) {
+      return { closed: false, remainingTabs: current.length };
+    }
+    const updated = current.filter(t => t.id !== idToClose);
+    tabsRef.current = updated;
     setTabs(updated);
 
-    if (activeTabId === idToClose) {
+    let nextActiveTab: Tab | undefined;
+    if (activeTabIdRef.current === idToClose) {
       const fallbackIdx = Math.max(0, idx - 1);
-      setActiveTabId(updated[fallbackIdx].id);
+      nextActiveTab = updated[fallbackIdx];
+      setActiveTabId(nextActiveTab.id);
+      activeTabIdRef.current = nextActiveTab.id;
+      setInputValue(nextActiveTab.url === "about:blank" ? "" : nextActiveTab.url);
+    } else {
+      nextActiveTab = updated.find(t => t.id === activeTabIdRef.current) || updated[0];
     }
+    return { closed: true, newActiveTab: nextActiveTab, remainingTabs: updated.length };
   };
 
   // Back history navigation
@@ -776,7 +1285,8 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
     // YouTube watch converter
     const ytIdMatcher = urlStr.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/ ]{11})/i);
     if (ytIdMatcher && ytIdMatcher[1]) {
-      return `https://www.youtube.com/embed/${ytIdMatcher[1]}?autoplay=1&enablejsapi=1`;
+      const origin = typeof window !== "undefined" ? window.location.origin : "";
+      return `https://www.youtube-nocookie.com/embed/${ytIdMatcher[1]}?autoplay=1&enablejsapi=1&origin=${encodeURIComponent(origin)}&widget_referrer=${encodeURIComponent(origin)}&rel=0&playsinline=1`;
     }
 
     if (urlStr.includes("youtube.com/results")) {
@@ -997,7 +1507,7 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
                 {/* Shortcuts Grid */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5 w-full max-w-2xl text-left">
                   {[
-                    { name: "YouTube", desc: "Interactive media search and embed watcher", url: "https://youtube.com", icon: <Play size={13} />, color: "text-red-400 bg-red-950/10 border-red-500/20 hover:border-red-500/40" },
+                    { name: "YouTube", desc: "Interactive media search and embed watcher", url: "https://youtube.com/results?search_query=Trending+Songs", icon: <Play size={13} />, color: "text-red-400 bg-red-950/10 border-red-500/20 hover:border-red-500/40" },
                     { name: "Wikipedia", desc: "Unlock endless global articles and content", url: "https://wikipedia.org", icon: <BookOpen size={13} />, color: "text-emerald-400 bg-emerald-950/10 border-emerald-500/20 hover:border-emerald-500/40" },
                     { name: "Google Search", desc: "External redirect search result portal", url: "https://google.com", icon: <Search size={13} />, color: "text-blue-400 bg-blue-950/10 border-blue-500/20 hover:border-blue-500/40" },
                     { name: "ChatGPT Console", desc: "Direct external artificial dialogue link", url: "https://chatgpt.com", icon: <Sparkles size={13} />, color: "text-sky-400 bg-sky-950/15 border-sky-500/20 hover:border-sky-500/40" },
@@ -1167,55 +1677,75 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
                     </button>
                   </div>
                 ) : (
-                  <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 scrollbar-thin">
-                    {ytSearchResults.map((video) => (
-                      <motion.div
-                        key={video.videoId}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        onClick={() => navigateToUrl(`https://youtube.com/watch?v=${video.videoId}`)}
-                        className="bg-slate-900/50 border border-white/5 hover:border-red-500/30 rounded-2xl overflow-hidden cursor-pointer hover:shadow-xl hover:shadow-red-500/5 transition-all duration-300 group flex flex-col h-full"
-                      >
-                        {/* Thumbnail segment */}
-                        <div className="relative aspect-video bg-black overflow-hidden">
-                          <img
-                            src={video.thumbnail}
-                            alt={video.title}
-                            referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
-                          />
-                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center">
-                            <div className="w-11 h-11 rounded-full bg-red-600/90 text-white flex items-center justify-center shadow-lg shadow-red-600/40 transform group-hover:scale-110 transition-transform">
-                              <Play size={18} className="fill-current ml-0.5" />
+                  <div className="flex-1 overflow-y-auto p-6 scrollbar-thin">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 auto-rows-max items-start">
+                      {ytSearchResults.map((video, idx) => {
+                        const itemNumber = typeof video.index === "number" ? video.index + 1 : idx + 1;
+                        return (
+                          <motion.div
+                            key={video.videoId || idx}
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            onClick={() => navigateToUrl(`https://youtube.com/watch?v=${video.videoId}`)}
+                            className="bg-slate-900/70 border border-white/10 hover:border-red-500/40 rounded-2xl overflow-hidden cursor-pointer hover:shadow-xl hover:shadow-red-500/10 transition-all duration-300 group flex flex-col w-full"
+                          >
+                            {/* Thumbnail segment */}
+                            <div className="relative aspect-video w-full shrink-0 bg-slate-950 overflow-hidden">
+                              <img
+                                src={video.thumbnail || `https://img.youtube.com/vi/${video.videoId}/hqdefault.jpg`}
+                                alt={video.title}
+                                referrerPolicy="no-referrer"
+                                loading="lazy"
+                                onError={(e) => {
+                                  (e.currentTarget as HTMLImageElement).src = `https://img.youtube.com/vi/${video.videoId}/hqdefault.jpg`;
+                                }}
+                                className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                              />
+                              {/* Visible Ordinal / Index Badge (#1, #2, #3... #9) */}
+                              <span className="absolute top-2.5 left-2.5 px-2.5 py-1 rounded-lg bg-black/90 border border-amber-400/50 font-mono text-[11px] text-amber-300 font-extrabold tracking-wider shadow-xl z-10 flex items-center gap-1 backdrop-blur-sm">
+                                <span className="text-amber-500 text-[10px]">#</span>{itemNumber}
+                              </span>
+                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center">
+                                <div className="w-11 h-11 rounded-full bg-red-600/90 text-white flex items-center justify-center shadow-lg shadow-red-600/40 transform group-hover:scale-110 transition-transform">
+                                  <Play size={18} className="fill-current ml-0.5" />
+                                </div>
+                              </div>
+                              {video.duration && (
+                                <span className="absolute bottom-2.5 right-2.5 px-1.5 py-0.5 rounded bg-black/85 font-mono text-[9px] text-slate-200 font-bold tracking-wide">
+                                  {video.duration}
+                                </span>
+                              )}
                             </div>
-                          </div>
-                          <span className="absolute bottom-2.5 right-2.5 px-1.5 py-0.5 rounded bg-black/85 font-mono text-[9px] text-slate-200 font-bold tracking-wide">
-                            {video.duration}
-                          </span>
-                        </div>
 
-                        {/* Text meta segment */}
-                        <div className="p-3.5 flex-1 flex flex-col justify-between space-y-2.5">
-                          <div className="space-y-1.5">
-                            <h4 className="font-sans text-xs font-semibold text-slate-100 group-hover:text-red-400 transition line-clamp-2 leading-relaxed">
-                              {video.title}
-                            </h4>
-                            <p className="font-mono text-[10px] text-slate-400 truncate tracking-wide">
-                              {video.author}
-                            </p>
-                          </div>
+                            {/* Text meta segment */}
+                            <div className="p-4 flex-1 flex flex-col justify-between space-y-3 min-w-0">
+                              <div className="space-y-1.5 min-w-0">
+                                <div className="flex items-start gap-2">
+                                  <span className="shrink-0 px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 font-mono text-[10px] text-amber-300 font-bold">
+                                    #{itemNumber}
+                                  </span>
+                                  <h4 className="font-sans text-xs font-semibold text-slate-100 group-hover:text-red-400 transition line-clamp-2 leading-snug">
+                                    {video.title}
+                                  </h4>
+                                </div>
+                                <p className="font-mono text-[10px] text-slate-400 truncate tracking-wide pl-7">
+                                  {video.author || "YouTube Channel"}
+                                </p>
+                              </div>
 
-                          <div className="flex items-center justify-between border-t border-white/5 pt-2.5 text-[9px] font-mono text-slate-500">
-                            <span>{video.views}</span>
-                            <span className="text-slate-600">•</span>
-                            <span>{video.published || "Active Video"}</span>
-                          </div>
-                        </div>
-                      </motion.div>
-                    ))}
+                              <div className="flex items-center justify-between border-t border-white/5 pt-2.5 text-[9px] font-mono text-slate-500">
+                                <span>{video.views || "Popular"}</span>
+                                <span className="text-slate-600">•</span>
+                                <span>{video.published || "Active Stream"}</span>
+                              </div>
+                            </div>
+                          </motion.div>
+                        );
+                      })}
+                    </div>
                     
                     {ytSearchResults.length === 0 && (
-                      <div className="col-span-full py-20 text-center space-y-2 font-mono text-slate-500 text-xs">
+                      <div className="py-20 text-center space-y-2 font-mono text-slate-500 text-xs">
                         <Play size={20} className="mx-auto text-slate-600 mb-1" />
                         <div>No videos retrieved for this query.</div>
                         <div className="text-[10px] text-slate-600">Consider trying another video search keyword.</div>
@@ -1228,24 +1758,122 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
             ) : (
               
               // SAM-ORIGIN SECURITY IFRAME PORTAL (Wikipedia, DuckDuckGo proxy etc. load here 100% real)
-              <div className="flex-1 w-full h-full relative overflow-hidden">
-                <iframe
-                  ref={iframeRef}
-                  src={getRenderUrl(activeTab?.url || "about:blank")}
-                  onLoad={handleIframeLoadComplete}
-                  className="w-full h-full border-0 absolute inset-0 bg-[#07070a]"
-                  allow="autoplay; encrypted-media; fullscreen"
-                />
+              <div className="flex-1 w-full h-full relative overflow-hidden flex flex-col">
+                {/* YouTube Stream Dedicated Control Bar */}
+                {activeTab?.url && (activeTab.url.includes("watch?v=") || activeTab.url.includes("youtu.be/")) && (
+                  <div className="relative z-20 px-3.5 py-2 bg-slate-950/90 backdrop-blur-md border-b border-white/10 flex items-center justify-between gap-2.5 text-xs select-none">
+                    <div className="flex items-center gap-2 truncate min-w-0">
+                      <span className="flex items-center gap-1.5 text-red-500 font-mono font-bold tracking-wider uppercase text-[10px] shrink-0">
+                        <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                        YouTube Stream
+                      </span>
+                      <span className="text-slate-300 font-mono text-[11px] truncate">
+                        {(() => {
+                          try {
+                            const u = new URL(activeTab.url);
+                            const vid = u.searchParams.get("v") || activeTab.url.split("/").pop()?.split("?")[0] || "";
+                            const found = ytSearchResults.find((v) => v.videoId === vid);
+                            return found?.title || "Active Media Track";
+                          } catch {
+                            return "Active Media Track";
+                          }
+                        })()}
+                      </span>
+                    </div>
 
-                {/* Secure Loading indicators */}
-                {activeTab?.isLoading && (
-                  <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center space-y-4">
-                    <div className="w-10 h-10 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
-                    <span className="font-mono text-[10px] text-purple-300 animate-pulse tracking-[0.25em] font-bold uppercase">
-                      Materializing Secure Projection...
-                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0 font-mono text-[10px]">
+                      {ytSearchResults.length > 1 && (
+                        <button
+                          onClick={handlePlayNextTrack}
+                          className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-slate-200 transition flex items-center gap-1 cursor-pointer"
+                          title="Try next song in results"
+                        >
+                          <SkipForward size={11} /> Next Track
+                        </button>
+                      )}
+                      <button
+                        onClick={() => {
+                          navigateToUrl("https://youtube.com/results?search_query=Trending+Songs");
+                        }}
+                        className="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/15 text-slate-300 transition flex items-center gap-1 cursor-pointer"
+                        title="Back to song list"
+                      >
+                        <ListMusic size={11} /> Songs
+                      </button>
+                      <button
+                        onClick={handleOpenNativeYouTube}
+                        className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-semibold transition flex items-center gap-1 shadow cursor-pointer"
+                        title="Watch directly on YouTube in native browser without embed restrictions"
+                      >
+                        <ExternalLink size={11} /> Open Native
+                      </button>
+                    </div>
                   </div>
                 )}
+
+                {/* YouTube Embed Restriction Alert / Auto-Recovery Banner */}
+                {activeTab?.url && (activeTab.url.includes("watch?v=") || activeTab.url.includes("youtu.be/")) && ytEmbedError && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="absolute inset-x-3 sm:inset-x-6 top-14 z-30 p-3.5 sm:p-4 rounded-2xl bg-slate-900/95 border border-amber-500/40 backdrop-blur-xl shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-3 text-left"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0">
+                        <AlertTriangle size={18} className="text-amber-400" />
+                      </div>
+                      <div>
+                        <h4 className="font-mono text-xs font-bold text-amber-300 uppercase tracking-wide">
+                          Playback Restricted by Video Owner (Error {ytEmbedError.code})
+                        </h4>
+                        <p className="font-sans text-[11px] text-slate-300 leading-snug">
+                          The owner disabled embedding outside YouTube for this video.
+                          {ytSearchResults.length > 1
+                            ? " Auto-switching to next available track..."
+                            : " You can open it directly in your browser:"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {ytSearchResults.length > 1 && (
+                        <button
+                          onClick={handlePlayNextTrack}
+                          className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-mono text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <SkipForward size={12} /> Next Track
+                        </button>
+                      )}
+                      <button
+                        onClick={handleOpenNativeYouTube}
+                        className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-mono text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                      >
+                        <ExternalLink size={12} /> Open in Chrome/Edge
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+
+                <div className="flex-1 w-full h-full relative overflow-hidden">
+                  <iframe
+                    ref={iframeRef}
+                    src={getRenderUrl(activeTab?.url || "about:blank")}
+                    onLoad={handleIframeLoadComplete}
+                    className="w-full h-full border-0 absolute inset-0 bg-[#07070a]"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+                    referrerPolicy="strict-origin-when-cross-origin"
+                  />
+
+                  {/* Secure Loading indicators */}
+                  {activeTab?.isLoading && (
+                    <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center space-y-4">
+                      <div className="w-10 h-10 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
+                      <span className="font-mono text-[10px] text-purple-300 animate-pulse tracking-[0.25em] font-bold uppercase">
+                        Materializing Secure Projection...
+                      </span>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>

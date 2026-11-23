@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MYRAA — CompanionCoordinator (Phase 6)
  *
  * Master orchestrator for the Proactive Companion engine:
@@ -28,6 +28,7 @@ import { projectMonitor } from "./ProjectMonitor.ts";
 import { gitMonitor } from "./GitMonitor.ts";
 import { deploymentMonitor } from "./DeploymentMonitor.ts";
 import { emergencyStopCoordinator } from "../remote/EmergencyStopCoordinator.ts";
+import { governingMemoryGate } from "./GoverningMemoryGate.ts";
 
 export type ClientBroadcastFn = (payload: unknown) => void;
 
@@ -35,6 +36,7 @@ export class CompanionCoordinator {
   private _running = false;
   private _clientBroadcasts = new Set<ClientBroadcastFn>();
   private _unsubscribers: Array<() => void> = [];
+  private _staleExpiryTimer: NodeJS.Timeout | null = null;
 
   /** Register a callback to broadcast companion events to browser WebSocket clients. */
   registerClientBroadcast(fn: ClientBroadcastFn): () => void {
@@ -111,6 +113,12 @@ export class CompanionCoordinator {
       console.warn("[Companion] Failed to restore background tasks from store:", err);
     }
 
+    // ── 3. Initialize GoverningMemoryGate stale expiration cycle (Stage 10 Phase 1) ──
+    governingMemoryGate.expireStale();
+    this._staleExpiryTimer = setInterval(() => {
+      try { governingMemoryGate.expireStale(); } catch { /* ignore */ }
+    }, 60 * 60 * 1000);
+
     console.log("[Companion] Proactive Companion daemon online.");
   }
 
@@ -119,6 +127,11 @@ export class CompanionCoordinator {
     if (!this._running) return;
     this._running = false;
     console.log("[Companion] Stopping Proactive Companion daemon...");
+
+    if (this._staleExpiryTimer) {
+      clearInterval(this._staleExpiryTimer);
+      this._staleExpiryTimer = null;
+    }
 
     taskScheduler.stopAll();
     for (const unsub of this._unsubscribers) {

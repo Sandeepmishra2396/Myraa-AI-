@@ -1,10 +1,10 @@
 /**
- * MYRAA — MemoryExtractor
+ * MYRAA ï¿½ MemoryExtractor
  *
  * Wraps the existing processConversationSlice() from server_memory.ts and adds:
- *   1. Deduplication — checks each ADD transaction against existing memories
+ *   1. Deduplication ï¿½ checks each ADD transaction against existing memories
  *      before creating a new record, applying merge/update/conflict logic.
- *   2. EnhancedMemory output — all created/updated records include the new
+ *   2. EnhancedMemory output ï¿½ all created/updated records include the new
  *      Phase 2 fields (importance, confidence, source, status).
  *
  * GeminiSessionFactory should call extractAndApply() instead of
@@ -82,7 +82,7 @@ export async function extractAndApply(
       // Keep the older record (dedup.existing) and remove the candidate
       // (the candidate is the newly added duplicate)
       if (candidate.createdAt > dedup.existing.createdAt) {
-        // candidate is newer — remove it
+        // candidate is newer ï¿½ remove it
         result.splice(i, 1);
         i--;
         changed = true;
@@ -133,11 +133,11 @@ export async function extractAndApply(
   }
 
   if (changed) {
-    await store.save(result);
+    // SEC-P1-02: Raw store.save() removed; permanent persistence passes through ApprovedMemoryPersistenceAdapter
     return result;
   }
 
-  // Nothing changed by deduplication — return what processConversationSlice gave us
+  // Nothing changed by deduplication ï¿½ return what processConversationSlice gave us
   // (still non-null, indicating memories were updated by the model)
   return current;
 }

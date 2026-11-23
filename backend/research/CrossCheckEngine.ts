@@ -45,14 +45,30 @@ export class CrossCheckEngine {
 
     for (let i = 0; i < result.length; i++) {
       let corroborationCount = 0;
+      const seenDomains = new Set<string>();
+      const currentDomain = this._getDomain(result[i].sourceUrl);
+      seenDomains.add(currentDomain);
 
       for (let j = 0; j < result.length; j++) {
         if (i === j) continue;
         if (result[i].sourceId === result[j].sourceId) continue; // Same source doesn't count
 
+        // Check canonical URL or syndication link: syndicated copies do NOT count as independent corroboration
+        const canonI = result[i].reliability.canonicalUrl || result[i].sourceUrl;
+        const canonJ = result[j].reliability.canonicalUrl || result[j].sourceUrl;
+        if (canonI.toLowerCase() === canonJ.toLowerCase()) continue;
+
+        const otherDomain = this._getDomain(result[j].sourceUrl);
+        // If same domain or already counted this domain, do not double-count
+        if (seenDomains.has(otherDomain)) continue;
+
+        // If other source is flagged as duplicate or syndicated copy, do not count
+        if (result[j].reliability.isDuplicateOrSyndicated) continue;
+
         const similarity = tokenSimilarity(result[i].claim, result[j].claim);
         if (similarity >= 0.50) {
           corroborationCount++;
+          seenDomains.add(otherDomain);
           // Mark as supporting each other
           if (!result[i].supports.includes(result[j].id)) {
             result[i].supports.push(result[j].id);
@@ -67,13 +83,21 @@ export class CrossCheckEngine {
           corroborationCount
         );
 
-        // Boost confidence proportional to corroboration (max 1.0)
+        // Boost confidence proportional to independent corroboration (max 1.0)
         const boostFactor = Math.min(0.15, corroborationCount * 0.05);
         result[i].confidence = Math.min(1.0, result[i].confidence + boostFactor);
       }
     }
 
     return result;
+  }
+
+  private _getDomain(url: string): string {
+    try {
+      return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    } catch {
+      return url.toLowerCase();
+    }
   }
 
   /**

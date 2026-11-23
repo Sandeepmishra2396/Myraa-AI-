@@ -42,6 +42,103 @@ import { recoveryEngine } from "./RecoveryEngine.ts";
 import { completionVerifier } from "./CompletionVerifier.ts";
 import { emergencyStopCoordinator } from "../remote/EmergencyStopCoordinator.ts";
 import { sanitizeError } from "../security/PermissionManager.ts";
+import { contentSanitizer } from "../security/ContentSanitizer.ts";
+import { securityPolicyEngine } from "../security/SecurityPolicyEngine.ts";
+import { projectStore } from "../projects/ProjectStore.ts";
+import {
+  taskOrchestrator,
+  isStepDependencySatisfied,
+  type OrchestratedTaskPlan,
+  type RecoveryResult,
+  type RecoveryOptions,
+  type PlanValidationResult,
+} from "./TaskOrchestrator.ts";
+
+// ---------------------------------------------------------------------------
+// Stage 10.3 P2: Shared Canonical Project Identity Resolution
+// ---------------------------------------------------------------------------
+
+export type CanonicalProjectResolution =
+  | { status: "omitted" }
+  | { status: "resolved"; projectId: string }
+  | { status: "unauthorized"; reason: string }
+  | { status: "invalid"; reason: string };
+
+const AUTHORIZED_PLAN_PROJECT_ROLES = new Set(["admin", "standard"]);
+
+/**
+ * Shared canonical project-identity resolver for all plan-creation paths
+ * (HTTP API, AI/Tool orchestrator, Mobile workflows, and PlannerCoordinator).
+ *
+ * Security & Isolation Guarantees:
+ *   1. Omitted (`undefined` / `null`) returns `{ status: "omitted" }` — NEVER
+ *      infers ownership from global `ProjectStore.activeProjectId` or project ordering.
+ *   2. Rejects non-string, empty, control-char, oversized, or prompt-injection inputs.
+ *   3. When `secContext` or `requireAuthorizedContext` is supplied, requires a valid
+ *      non-empty `identityId` and write-capable role (`admin` or `standard`).
+ *   4. Validates exact canonical `project.id` match against `projectStore` (rejects
+ *      filesystem path strings such as `"."` or unknown IDs; never falls back to
+ *      another project).
+ */
+export async function resolveCanonicalProjectId(
+  requestedProjectId: unknown,
+  options?: {
+    secContext?: {
+      identityId?: string;
+      role?: string;
+      sessionId?: string;
+      isLocal?: boolean;
+    };
+    requireAuthorizedContext?: boolean;
+  },
+): Promise<CanonicalProjectResolution> {
+  if (requestedProjectId === undefined || requestedProjectId === null) {
+    return { status: "omitted" };
+  }
+
+  if (options?.requireAuthorizedContext || options?.secContext !== undefined) {
+    const ctx = options?.secContext;
+    const identityId = typeof ctx?.identityId === "string" ? ctx.identityId.trim() : "";
+    const role = typeof ctx?.role === "string" ? ctx.role.trim().toLowerCase() : "";
+    if (!identityId || !AUTHORIZED_PLAN_PROJECT_ROLES.has(role)) {
+      return {
+        status: "unauthorized",
+        reason: `Caller role '${role || "unauthenticated"}' is not authorized to associate a plan with a project.`,
+      };
+    }
+  }
+
+  if (typeof requestedProjectId !== "string") {
+    return { status: "invalid", reason: "Project ID must be a non-empty string." };
+  }
+
+  const trimmed = requestedProjectId.trim();
+  if (!trimmed) {
+    return { status: "invalid", reason: "Project ID cannot be empty." };
+  }
+  if (trimmed.length > 200 || /[\r\n\0]/.test(trimmed)) {
+    return { status: "invalid", reason: "Project ID contains invalid characters or exceeds maximum length." };
+  }
+
+  const scan = contentSanitizer.scanForPromptInjection(trimmed, {
+    source: "planner_projectId",
+  });
+  if (scan.hasInjectionAttempt) {
+    return { status: "invalid", reason: "Project ID rejected by security scanner." };
+  }
+
+  try {
+    const proj = await projectStore.getProject(trimmed);
+    // Require strict canonical ID equality so relative paths (e.g. ".") or rootPath
+    // strings cannot accidentally resolve to an unintended project.
+    if (!proj || proj.id !== trimmed) {
+      return { status: "invalid", reason: `Project '${trimmed}' was not found.` };
+    }
+    return { status: "resolved", projectId: proj.id };
+  } catch {
+    return { status: "invalid", reason: "Project store unavailable for canonical project validation." };
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Event types for real-time client updates
@@ -102,20 +199,62 @@ export class PlannerCoordinator {
   /**
    * Parse `rawGoal` into a Goal, build a TaskPlan, persist it, and return
    * the plan (NOT yet executing — caller must call `executePlan(planId)`).
+   *
+   * @param options.projectId  Optional canonical project ID (Stage 10.3 P2).
+   *   MUST be a pre-validated server-side ID; callers are responsible for
+   *   verifying project existence and caller authorization before passing it.
+   *   When present, this method performs a final existence re-check against
+   *   ProjectStore — if the project no longer exists the plan is created without
+   *   a projectId rather than attaching to an unknown or wrong project.
+   *   Never infer project identity from active-project ordering.
    */
   async createPlan(
     rawGoal: string,
-    options?: { deviceId?: string; preferredLanguage?: string },
+    options?: { deviceId?: string; preferredLanguage?: string; projectId?: string },
   ): Promise<TaskPlan> {
     if (emergencyStopCoordinator.isActive()) {
       throw new Error("EMERGENCY_STOP_ACTIVE: Cannot create new task plans while emergency stop is active. Reset emergency stop first.");
     }
+
+    // ── Stage 10.3 P2: Canonical project identity validation ───────────────
+    // Validate BEFORE building & persisting the plan so only a verified canonical
+    // project ID propagates into TaskPlanner and PlanStore.
+    // Never infer project ownership from global active-project state or ordering.
+    // Invalid/unknown project IDs are never silently converted to another project.
+    let canonicalProjectId: string | undefined;
+    if (options?.projectId !== undefined && options?.projectId !== null) {
+      const resolution = await resolveCanonicalProjectId(options.projectId);
+      if (resolution.status === "resolved") {
+        canonicalProjectId = resolution.projectId;
+      }
+      // Unknown/invalid project ID → plan remains unscoped (fail-closed isolation).
+    }
+
     const goal = goalParser.parse(rawGoal);
-    const plan = taskPlanner.buildPlan(goal, options);
+    const plan = taskPlanner.buildPlan(goal, {
+      deviceId: options?.deviceId,
+      preferredLanguage: options?.preferredLanguage,
+      ...(canonicalProjectId ? { projectId: canonicalProjectId } : {}),
+    });
     if (options?.deviceId) plan.deviceId = options.deviceId;
     if (options?.preferredLanguage) plan.preferredLanguage = options.preferredLanguage;
+    if (canonicalProjectId) {
+      plan.projectId = canonicalProjectId;
+    } else {
+      delete plan.projectId;
+    }
+
+    // Stage 10.5: Validate plan graph structure & DAG limits
+    const validation = taskOrchestrator.validatePlanGraph(plan);
+    if (!validation.valid) {
+      throw new Error(`PLAN_VALIDATION_FAILED: ${validation.errors.join("; ")}`);
+    }
+
+    // Stage 10.5: Capture durable initial checkpoint
+    taskOrchestrator.createCheckpoint(plan as OrchestratedTaskPlan, { boundaryType: "initial" });
+
     await planStore.savePlan(plan);
-    this._emit({ type: "plan_created", planId: plan.id, message: `Plan created: ${goal.objective}`, data: { stepCount: plan.steps.length } });
+    this._emit({ type: "plan_created", planId: plan.id, message: `Plan created: ${goal.objective}`, data: { stepCount: plan.steps.length, projectId: plan.projectId } });
     return plan;
   }
 
@@ -142,6 +281,7 @@ export class PlannerCoordinator {
   /** Halt all active plans immediately when an Emergency Stop is triggered. */
   async emergencyStop(): Promise<void> {
     this._executionLocks.clear();
+    taskOrchestrator.emergencyStop();
     const plans = await planStore.listPlans();
     for (const plan of plans) {
       if (plan.status === "running") {
@@ -160,9 +300,15 @@ export class PlannerCoordinator {
    * - After restart, plans that were `waiting_for_approval` remain blocked.
    * - Concurrency lock prevents simultaneous execution of the same plan.
    */
-  async executePlan(planId: string): Promise<TaskPlan> {
+  async executePlan(
+    planId: string,
+    options?: { projectId?: string },
+  ): Promise<TaskPlan> {
     if (emergencyStopCoordinator.isActive()) {
       throw new Error("EMERGENCY_STOP_ACTIVE: Cannot execute task plans while emergency stop is active. Reset emergency stop first.");
+    }
+    if (securityPolicyEngine.getMode() === "LOCKDOWN") {
+      throw new Error("SECURITY_LOCKDOWN_ACTIVE: Cannot execute task plans during security lockdown.");
     }
     if (this._executionLocks.has(planId)) {
       throw new Error(
@@ -174,6 +320,15 @@ export class PlannerCoordinator {
     try {
       let plan = await planStore.getPlan(planId);
       if (!plan) throw new Error(`Plan '${planId}' not found.`);
+
+      // Stage 10.5 Project Isolation check
+      if (options?.projectId !== undefined && options?.projectId !== null) {
+        if (plan.projectId !== options.projectId) {
+          throw new Error(
+            `CROSS_PROJECT_ACCESS_DENIED: Plan belongs to project '${plan.projectId}', caller requested '${options.projectId}'.`,
+          );
+        }
+      }
 
       // RESTART SAFETY: do not auto-resume plans awaiting approval
       if (plan.status === "waiting_for_approval") {
@@ -202,12 +357,38 @@ export class PlannerCoordinator {
         }
       const nextStep = this._nextPendingStep(plan);
       if (!nextStep) {
-        // No more steps — plan is done
-        plan.status = "completed";
-        plan.completedAt = new Date().toISOString();
-        this._log(plan, "report", "info", "All steps completed.");
+        // No more pending steps eligible to execute
+        const hasPending = plan.steps.some((s) => s.status === "pending");
+        const hasUnresolved = plan.steps.some(
+          (s) => s.status === "failed" || s.status === "outcome_unknown",
+        );
+        if (hasPending || hasUnresolved) {
+          plan.status = "failed";
+          this._log(
+            plan,
+            "report",
+            "warn",
+            hasPending
+              ? "Execution halted: pending steps blocked by unsatisfied dependencies."
+              : "Execution halted: some steps failed or have unknown outcomes.",
+          );
+        } else {
+          // Mandatory Completion Verification Gate:
+          if (plan.status === "running") {
+            taskOrchestrator.transitionPlan(plan as OrchestratedTaskPlan, "verifying");
+          }
+          if (!plan.verificationReport) {
+            plan.verificationReport = completionVerifier.verify(plan);
+          }
+          taskOrchestrator.transitionPlan(plan as OrchestratedTaskPlan, "completed");
+          plan.completedAt = new Date().toISOString();
+          this._log(plan, "report", "info", "All steps completed.");
+          taskOrchestrator.createCheckpoint(plan as OrchestratedTaskPlan, {
+            boundaryType: "completed",
+          });
+          this._emit({ type: "plan_completed", planId, message: "Plan completed successfully." });
+        }
         await planStore.savePlan(plan);
-        this._emit({ type: "plan_completed", planId, message: "Plan completed successfully." });
         break;
       }
 
@@ -239,6 +420,7 @@ export class PlannerCoordinator {
 
       if (result.evaluation.status === "critical_failure" || result.evaluation.suggestedAction === "abort") {
         nextStep.status = "failed";
+        nextStep.verificationStatus = "verified_failure";
         plan.status = "failed";
         const errMsg = sanitizeError(result.error || result.evaluation.reason);
         this._log(plan, nextStep.phase, "error", `Step failed: ${errMsg}`);
@@ -248,6 +430,7 @@ export class PlannerCoordinator {
       }
 
       nextStep.status = "completed";
+      nextStep.verificationStatus = "verified_success";
       if (result.evaluation.suggestedAction === "retry" && !nextStep.isDestructive) {
         nextStep.retryCount++;
       }
@@ -256,10 +439,18 @@ export class PlannerCoordinator {
       if (nextStep.phase === "modify" && nextStep.toolArgs.path) {
         const p = nextStep.toolArgs.path as string;
         if (!plan.artifacts.includes(p)) plan.artifacts.push(p);
+        nextStep.observedState = `Modified/created workspace path '${p}'.`;
       }
 
       this._log(plan, nextStep.phase, "info", `Step completed: ${nextStep.description}`);
       this._emit({ type: "step_completed", planId, stepId: nextStep.id, message: `Completed: ${nextStep.description}` });
+
+      // Stage 10.5: Capture durable post-verification checkpoint
+      taskOrchestrator.createCheckpoint(plan as OrchestratedTaskPlan, {
+        stepId: nextStep.id,
+        boundaryType: "post_verification",
+      });
+
       await planStore.savePlan(plan);
     }
 
@@ -300,13 +491,40 @@ export class PlannerCoordinator {
   }
 
   /**
-   * Cancel a plan. Expires all pending checkpoints for the plan.
+   * Cancel a plan. Delegates to TaskOrchestrator to ensure prompt
+   * cancellation, safe stopping boundary, and terminal state preservation.
    */
-  async cancelPlan(planId: string): Promise<TaskPlan | undefined> {
-    const plan = await planStore.getPlan(planId);
-    if (!plan) return undefined;
-    checkpointManager.expireAll(planId);
-    return planStore.updatePlan(planId, { status: "cancelled" });
+  async cancelPlan(
+    planId: string,
+    reason = "Plan cancelled by user",
+    options?: { projectId?: string },
+  ): Promise<TaskPlan | undefined> {
+    const existing = await planStore.getPlan(planId);
+    if (!existing) return undefined;
+    try {
+      const plan = await taskOrchestrator.cancelTask(planId, reason, options);
+      this._emit({ type: "plan_cancelled", planId, message: `Plan cancelled: ${reason}` });
+      return plan;
+    } catch (err: any) {
+      if (err?.message?.includes("not found")) return undefined;
+      throw err;
+    }
+  }
+
+  /**
+   * Recover a plan from its latest verified checkpoint.
+   * Reconciles step states, protects against replaying uncertain side effects,
+   * enforces strict project isolation, and restores safe continuation boundaries.
+   */
+  async recoverPlan(planId: string, options?: RecoveryOptions): Promise<RecoveryResult> {
+    return taskOrchestrator.recoverPlan(planId, options);
+  }
+
+  /**
+   * Validate a plan structure and dependency DAG using TaskOrchestrator.
+   */
+  validatePlan(plan: TaskPlan): PlanValidationResult {
+    return taskOrchestrator.validatePlanGraph(plan);
   }
 
   /**
@@ -376,11 +594,12 @@ export class PlannerCoordinator {
    * Returns undefined when no more eligible steps exist.
    */
   private _nextPendingStep(plan: TaskPlan): PlanStep | undefined {
+    const workspaceDir = process.env.SORA_WORKSPACE_DIR || process.cwd();
     for (const step of plan.steps) {
       if (step.status !== "pending") continue;
       const allDepsDone = step.dependsOn.every((depId) => {
         const dep = plan.steps.find((s) => s.id === depId);
-        return dep && (dep.status === "completed" || dep.status === "skipped");
+        return dep && isStepDependencySatisfied(step, dep, workspaceDir, plan as any);
       });
       if (allDepsDone) return step;
     }

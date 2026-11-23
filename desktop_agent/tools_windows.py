@@ -84,20 +84,75 @@ def _find_window_by_title(query: str):
         return None
 
 
-def _focus(hwnd) -> None:
+def force_bring_to_foreground(target: Any) -> bool:
+    """Forces a window to the top foreground on Windows desktop, bypassing Windows focus lock."""
+    if platform.system() != "Windows":
+        return False
     try:
+        import ctypes
         import win32gui
+        import win32con
 
-        win32gui.SetForegroundWindow(hwnd)
+        hwnd = target if isinstance(target, int) else None
+        if not hwnd and isinstance(target, str):
+            hwnd = _find_window_by_title(target)
+            if not hwnd:
+                def cb(h, matches):
+                    if win32gui.IsWindowVisible(h):
+                        t = win32gui.GetWindowText(h)
+                        if t and (target.lower() in t.lower() or t.lower() in target.lower()):
+                            matches.append(h)
+                    return True
+                found: list[int] = []
+                win32gui.EnumWindows(cb, found)
+                if found:
+                    hwnd = found[0]
+
+        if not hwnd:
+            return False
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        # 1. Un-minimize if minimized
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+
+        # 2. Attach thread input to bypass foreground lockout
+        fore_hwnd = user32.GetForegroundWindow()
+        cur_thread = kernel32.GetCurrentThreadId()
+        fore_thread = user32.GetWindowThreadProcessId(fore_hwnd, None) if fore_hwnd else 0
+
+        if fore_thread and fore_thread != cur_thread:
+            user32.AttachThreadInput(cur_thread, fore_thread, True)
+
+        try:
+            win32gui.SetForegroundWindow(hwnd)
+            user32.BringWindowToTop(hwnd)
+            user32.SwitchToThisWindow(hwnd, True)
+        finally:
+            if fore_thread and fore_thread != cur_thread:
+                user32.AttachThreadInput(cur_thread, fore_thread, False)
+
+        return True
     except Exception:
-        # Restore first, then try again
+        try:
+            if isinstance(target, str):
+                cmd = f"(New-Object -ComObject WScript.Shell).AppActivate('{target}')"
+                subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, timeout=3)
+                return True
+        except Exception:
+            pass
+        return False
+
+
+def _focus(hwnd) -> None:
+    if not force_bring_to_foreground(hwnd):
         _show_window(hwnd, SW_RESTORE)
         time.sleep(0.1)
         try:
             import win32gui
-
             win32gui.SetForegroundWindow(hwnd)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ToolError(f"Could not focus window: {e}")
 
 

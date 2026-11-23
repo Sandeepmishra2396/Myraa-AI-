@@ -21,15 +21,18 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { SharedMemoryManager, isDlpClean } from "../../backend/memory/SharedMemoryManager.ts";
-import { MemoryStore } from "../../backend/memory/MemoryStore.ts";
+import { SharedMemoryManager, isDlpClean, filterMemoriesForWsBroadcast } from "../../backend/memory/SharedMemoryManager.ts";
+import { MemoryStore, memoryStore } from "../../backend/memory/MemoryStore.ts";
 import { emergencyStopCoordinator } from "../../backend/remote/EmergencyStopCoordinator.ts";
 import { securityPolicyEngine } from "../../backend/security/SecurityPolicyEngine.ts";
+import { governingMemoryGate } from "../../backend/companion/GoverningMemoryGate.ts";
+import { approvedMemoryPersistenceAdapter } from "../../backend/memory/ApprovedMemoryPersistenceAdapter.ts";
+import { assertActivePersistenceSession } from "../../backend/memory/MemoryPersistenceContext.ts";
 import { LIVE_TOOLS } from "../../backend/ai/GeminiSessionFactory.ts";
 import type { EnhancedMemory, SharedMemorySyncEvent } from "../../backend/memory/MemoryTypes.ts";
 import type { SecurityContext } from "../../backend/security/SecurityTypes.ts";
 
-/** In-memory MemoryStore for test isolation */
+/** In-memory MemoryStore for test isolation (enforces real ALS persistence boundary) */
 class MockMemoryStore extends MemoryStore {
   private _data: EnhancedMemory[] = [];
 
@@ -46,6 +49,7 @@ class MockMemoryStore extends MemoryStore {
   }
 
   override async save(memories: EnhancedMemory[]): Promise<void> {
+    assertActivePersistenceSession();
     this._data = [...memories];
   }
 
@@ -57,6 +61,22 @@ class MockMemoryStore extends MemoryStore {
 describe("Phase 24 — Shared MYRAA Memory", () => {
   let mockStore: MockMemoryStore;
   let sharedMemory: SharedMemoryManager;
+
+  async function approveAllPending(): Promise<EnhancedMemory[]> {
+    const pending = governingMemoryGate.listPendingRequests();
+    const committed: EnhancedMemory[] = [];
+    for (const pub of pending) {
+      const full = governingMemoryGate.getRequest(pub.id)!;
+      const saved = await governingMemoryGate.approveWrite(full.id, full.oneTimeToken, {
+        actorId: full.userId || "desktop_primary",
+        role: "admin",
+        ipAddress: "127.0.0.1",
+        isStepUpAuthenticated: true,
+      });
+      committed.push(saved);
+    }
+    return committed;
+  }
 
   const desktopContext: SecurityContext = {
     identityId: "local_desktop",
@@ -78,6 +98,8 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
     mockStore = new MockMemoryStore();
     sharedMemory = new SharedMemoryManager(mockStore);
     sharedMemory.clearCaches();
+    governingMemoryGate.clearAllRequests();
+    (approvedMemoryPersistenceAdapter as any).store = mockStore;
 
     // Ensure Emergency Stop & Lockdown are reset
     await emergencyStopCoordinator.reset("test_setup");
@@ -85,6 +107,8 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
   });
 
   afterEach(async () => {
+    (approvedMemoryPersistenceAdapter as any).store = memoryStore;
+    governingMemoryGate.clearAllRequests();
     await emergencyStopCoordinator.reset("test_teardown");
     securityPolicyEngine.setMode("BALANCED");
   });
@@ -94,8 +118,8 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
   // ---------------------------------------------------------------------------
 
   describe("Cross-Device Memory Sharing", () => {
-    it("Desktop creates memory → stored in shared store → retrievable by Android", async () => {
-      const created = await sharedMemory.createMemory(
+    it("Desktop creates memory proposal → approved → stored in shared store → retrievable by Android", async () => {
+      const proposed = await sharedMemory.createMemory(
         {
           category: "project",
           text: "Project Phoenix deadline is next Friday.",
@@ -106,12 +130,16 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
         desktopContext,
       );
 
+      expect(proposed.status).toBe("pending_approval" as any);
+      expect((await sharedMemory.listMemories({}, androidContext)).length).toBe(0);
+
+      const [created] = await approveAllPending();
       expect(created.id).toBeDefined();
       expect(created.deviceId).toBe("desktop_primary");
       expect(created.deviceType).toBe("desktop");
       expect(created.version).toBe(1);
 
-      // Android companion reads from the same shared store
+      // Android companion reads from the same shared store after operator approval
       const androidList = await sharedMemory.listMemories({}, androidContext);
       expect(androidList.length).toBe(1);
       expect(androidList[0].id).toBe(created.id);
@@ -119,8 +147,8 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
       expect(androidList[0].key).toBe("project_phoenix_deadline");
     });
 
-    it("Android creates memory → stored in shared store → retrievable by Desktop", async () => {
-      const created = await sharedMemory.createMemory(
+    it("Android creates memory proposal → approved → stored in shared store → retrievable by Desktop", async () => {
+      const proposed = await sharedMemory.createMemory(
         {
           category: "preference",
           text: "User prefers dark mode on mobile and desktop.",
@@ -130,7 +158,9 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
         },
         androidContext,
       );
+      expect(proposed.status).toBe("pending_approval" as any);
 
+      const [created] = await approveAllPending();
       expect(created.id).toBeDefined();
       expect(created.deviceId).toBe("android_companion_pixel");
       expect(created.deviceType).toBe("android");
@@ -142,9 +172,8 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
       expect(desktopList[0].deviceId).toBe("android_companion_pixel");
     });
 
-    it("Scenario: 'MYRAA, is project ko yaad rakhna' on Desktop -> retrieved later on Android", async () => {
-      // Step 1: Desktop user asks MYRAA to remember a project
-      const mem = await sharedMemory.createMemory(
+    it("Scenario: 'MYRAA, is project ko yaad rakhna' on Desktop -> approved -> retrieved later on Android", async () => {
+      await sharedMemory.createMemory(
         {
           category: "project",
           text: "Alpha Project is working on real-time neural sync between devices.",
@@ -154,9 +183,8 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
         },
         desktopContext,
       );
+      const [mem] = await approveAllPending();
 
-      // Step 2: Later, Android user asks: 'Kal wale project ka status?'
-      // MYRAA retrieves memory matching 'project' or 'alpha'
       const searchResults = await sharedMemory.searchMemories(
         {
           query: "project alpha status",
@@ -176,9 +204,9 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
   // ---------------------------------------------------------------------------
 
   describe("CRUD Operations & Lifecycle", () => {
-    it("creates, reads, updates, and deletes memory records with version tracking", async () => {
-      // Create
-      const created = await sharedMemory.createMemory(
+    it("creates, reads, updates, and deletes memory records with version tracking under governance", async () => {
+      // Create proposal + approve
+      await sharedMemory.createMemory(
         {
           category: "task",
           text: "Review security audit logs before deployment.",
@@ -186,13 +214,14 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
         },
         desktopContext,
       );
+      const [created] = await approveAllPending();
       expect(created.version).toBe(1);
 
       // Read
       const retrieved = await sharedMemory.getMemory(created.id, desktopContext);
       expect(retrieved?.text).toBe(created.text);
 
-      // Update
+      // Update proposal + approve
       const updateResult = await sharedMemory.updateMemory(
         created.id,
         {
@@ -201,14 +230,16 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
         },
         desktopContext,
       );
-
       expect(updateResult.success).toBe(true);
-      expect(updateResult.memory?.version).toBe(2);
-      expect(updateResult.memory?.text).toContain("rotate signing certificates");
+      const [updated] = await approveAllPending();
+      expect(updated.version).toBe(2);
+      expect(updated.text).toContain("rotate signing certificates");
 
-      // Delete
+      // Delete proposal + approve
       const deleted = await sharedMemory.deleteMemory(created.id, desktopContext);
       expect(deleted).toBe(true);
+      expect(await sharedMemory.getMemory(created.id, desktopContext)).toBeDefined(); // Still present until approved
+      await approveAllPending();
 
       const afterDelete = await sharedMemory.getMemory(created.id, desktopContext);
       expect(afterDelete).toBeUndefined();
@@ -229,6 +260,8 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
         text: "Active gate code is 5432.",
         expiresAt: futureDate,
       });
+
+      await approveAllPending();
 
       const list = await sharedMemory.listMemories();
       expect(list.length).toBe(1);
@@ -254,6 +287,8 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
         importance: "high",
       });
 
+      await approveAllPending();
+
       // Search 'tea' restricted to 'project'
       const projectResults = await sharedMemory.searchMemories({
         query: "tea",
@@ -273,20 +308,22 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
   // ---------------------------------------------------------------------------
 
   describe("Deduplication", () => {
-    it("exact match updates existing memory rather than duplicating", async () => {
-      const first = await sharedMemory.createMemory({
+    it("exact match updates existing memory rather than duplicating upon approval", async () => {
+      await sharedMemory.createMemory({
         category: "identity",
         text: "My name is Sandeep.",
         key: "user_name",
         importance: "medium",
       });
+      const [first] = await approveAllPending();
 
-      const second = await sharedMemory.createMemory({
+      await sharedMemory.createMemory({
         category: "identity",
         text: "My name is Sandeep.",
         key: "user_name",
         importance: "high",
       });
+      const [second] = await approveAllPending();
 
       expect(second.id).toBe(first.id);
       expect(second.importance).toBe("high");
@@ -296,18 +333,20 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
       expect(all.length).toBe(1);
     });
 
-    it("similar match merges content into existing record", async () => {
-      const first = await sharedMemory.createMemory({
+    it("similar match merges content into existing record upon approval", async () => {
+      await sharedMemory.createMemory({
         category: "preference",
         text: "User prefers VS Code with vim keybindings.",
         key: "editor_preferences",
       });
+      const [first] = await approveAllPending();
 
-      const second = await sharedMemory.createMemory({
+      await sharedMemory.createMemory({
         category: "preference",
         text: "User prefers VS Code with vim keybindings and Monokai theme.",
         key: "editor_preferences",
       });
+      const [second] = await approveAllPending();
 
       expect(second.id).toBe(first.id);
       expect(second.version).toBe(2);
@@ -319,21 +358,21 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // 5. Deterministic Conflict Resolution (Server-Authoritative LWW)
+  // 5. Deterministic Conflict Resolution (Optimistic Version Concurrency)
   // ---------------------------------------------------------------------------
 
   describe("Deterministic Conflict Resolution", () => {
-    it("accepts client mutation when client timestamp is newer (LWW)", async () => {
-      const mem = await sharedMemory.createMemory(
+    it("accepts client mutation when clientVersion matches server version upon approval", async () => {
+      await sharedMemory.createMemory(
         {
           category: "task",
           text: "Initial task description.",
         },
         desktopContext,
       );
+      const [mem] = await approveAllPending();
       expect(mem.version).toBe(1);
 
-      // Simulate Android updating with a future/newer timestamp but stale base version
       const newerTimestamp = new Date(Date.now() + 5000).toISOString();
       const res = await sharedMemory.updateMemory(
         mem.id,
@@ -342,43 +381,52 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
           clientVersion: 1,
           timestamp: newerTimestamp,
         },
-        androidContext,
+        desktopContext,
       );
-
       expect(res.success).toBe(true);
-      expect(res.memory?.text).toBe("Updated task description from mobile.");
-      expect(res.memory?.version).toBe(2);
+
+      const [committed] = await approveAllPending();
+      expect(committed.text).toBe("Updated task description from mobile.");
+      expect(committed.version).toBe(2);
     });
 
-    it("retains server record when server timestamp is newer than stale client mutation", async () => {
-      // Step 1: Memory created at T0
-      const mem = await sharedMemory.createMemory({
+    it("retains server record and blocks stale clientVersion with STALE_RECORD_CONFLICT", async () => {
+      // Step 1: Create v1
+      await sharedMemory.createMemory({
         category: "task",
         text: "Initial version",
       });
+      const [mem] = await approveAllPending();
 
-      // Step 2: Desktop updates at T1 (server version becomes v2)
+      // Step 2: Server updates to v2
       await sharedMemory.updateMemory(mem.id, {
         text: "Server authoritative updated version",
       });
+      await approveAllPending();
 
-      // Step 3: Stale Android client (with timestamp T0 older than server T1) attempts update
+      // Step 3: Stale client proposes update against clientVersion: 1 while server is v2
       const staleTimestamp = new Date(Date.now() - 10000).toISOString();
-      const res = await sharedMemory.updateMemory(
-        mem.id,
-        {
-          text: "Stale mobile overwrite attempt",
-          clientVersion: 1, // Stale version! Current server is v2
-          timestamp: staleTimestamp,
-        },
-        androidContext,
-      );
+      await sharedMemory.updateMemory(mem.id, {
+        text: "Stale mobile overwrite attempt",
+        clientVersion: 1,
+        timestamp: staleTimestamp,
+      });
 
-      // Server tie-breaker wins: Server record is retained
-      expect(res.success).toBe(true);
-      expect(res.conflictResolved).toBe(true);
-      expect(res.memory?.text).toBe("Server authoritative updated version");
-      expect(res.resolutionNote).toContain("Server record");
+      const pending = governingMemoryGate.listPendingRequests();
+      const staleReq = governingMemoryGate.getRequest(pending[0].id)!;
+      await expect(
+        governingMemoryGate.approveWrite(staleReq.id, staleReq.oneTimeToken, {
+          actorId: staleReq.userId,
+          role: "admin",
+          ipAddress: "127.0.0.1",
+          isStepUpAuthenticated: true,
+        }),
+      ).rejects.toThrow("STALE_RECORD_CONFLICT");
+
+      // Server record at v2 is preserved intact
+      const preserved = await sharedMemory.getMemory(mem.id);
+      expect(preserved?.text).toBe("Server authoritative updated version");
+      expect(preserved?.version).toBe(2);
     });
   });
 
@@ -387,7 +435,7 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
   // ---------------------------------------------------------------------------
 
   describe("Offline Synchronization & Idempotency", () => {
-    it("processes batch mutations from offline Android client in chronological order", async () => {
+    it("processes batch mutations from offline Android client via governance in chronological order", async () => {
       const t1 = new Date(Date.now() - 2000).toISOString();
       const t2 = new Date(Date.now() - 1000).toISOString();
 
@@ -421,9 +469,15 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
       const syncRes = await sharedMemory.syncBatch(batch, androidContext);
       expect(syncRes.success).toBe(true);
       expect(syncRes.appliedCount).toBe(2);
-      expect(syncRes.memories.length).toBe(2);
-      expect(syncRes.memories.some((m) => m.key === "offline_pr_note")).toBe(true);
-      expect(syncRes.memories.some((m) => m.key === "offline_autosave")).toBe(true);
+      // Zero disk writes before approval
+      expect(syncRes.memories.length).toBe(0);
+
+      // Approve queued offline proposals
+      await approveAllPending();
+      const stored = await sharedMemory.listMemories({}, androidContext);
+      expect(stored.length).toBe(2);
+      expect(stored.some((m) => m.key === "offline_pr_note")).toBe(true);
+      expect(stored.some((m) => m.key === "offline_autosave")).toBe(true);
     });
 
     it("idempotency: retrying the same batch does not create duplicates or re-apply mutations", async () => {
@@ -443,15 +497,17 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
         ],
       };
 
-      // First sync
+      // First sync queues 1 proposal -> approve
       const res1 = await sharedMemory.syncBatch(batch, androidContext);
       expect(res1.appliedCount).toBe(1);
-      expect(res1.memories.length).toBe(1);
+      await approveAllPending();
+      expect((await sharedMemory.listMemories({}, androidContext)).length).toBe(1);
 
-      // Replay / retry of identical batch
+      // Replay / retry of identical batch queues 0 new proposals (idempotent)
       const res2 = await sharedMemory.syncBatch(batch, androidContext);
-      expect(res2.appliedCount).toBe(1); // idempotent
-      expect(res2.memories.length).toBe(1); // no duplicate record created!
+      expect(res2.appliedCount).toBe(1);
+      expect(governingMemoryGate.listPendingRequests().length).toBe(0);
+      expect(res2.memories.length).toBe(1);
     });
   });
 
@@ -572,29 +628,47 @@ describe("Phase 24 — Shared MYRAA Memory", () => {
   // ---------------------------------------------------------------------------
 
   describe("Real-Time Synchronization Broadcasting", () => {
-    it("dispatches sync events to registered listeners on create, update, delete", async () => {
+    it("does not prematurely broadcast unapproved proposals and filters sensitive/DLP records on broadcast", async () => {
       const events: SharedMemorySyncEvent[] = [];
       const unregister = sharedMemory.registerSyncListener((evt) => {
         events.push(evt);
       });
 
-      const mem = await sharedMemory.createMemory(
+      // Unapproved pending proposals MUST NOT trigger premature sync broadcasts
+      await sharedMemory.createMemory(
         { category: "task", text: "Broadcast test item" },
         desktopContext,
       );
+      expect(events.length).toBe(0);
 
-      await sharedMemory.updateMemory(
-        mem.id,
-        { text: "Broadcast test item updated" },
-        desktopContext,
-      );
+      // Verify filtered broadcast helper strips sensitive categories, cross-owner records, and DLP leaks
+      const sampleMemories = [
+        { id: "m1", category: "task", text: "Safe shared task", ownerId: "android_1" },
+        { id: "m2", category: "identity", text: "Sensitive identity info", ownerId: "android_1" },
+        { id: "m3", category: "fact", text: "Leaked key AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4", ownerId: "android_1" },
+        { id: "m4", category: "task", text: "Other user private task", ownerId: "user_other" },
+      ] as any[];
 
-      await sharedMemory.deleteMemory(mem.id, desktopContext);
+      const unstepped = filterMemoriesForWsBroadcast(sampleMemories, {
+        identityId: "android_1",
+        role: "standard",
+        isLocal: false,
+        isStepUpAuthenticated: false,
+      });
+      expect(unstepped.map((m) => m.id)).toEqual(["m1"]);
 
-      expect(events.length).toBe(3);
-      expect(events[0].action).toBe("create");
-      expect(events[1].action).toBe("update");
-      expect(events[2].action).toBe("delete");
+      const stepped = filterMemoriesForWsBroadcast(sampleMemories, {
+        identityId: "android_1",
+        role: "standard",
+        isLocal: false,
+        isStepUpAuthenticated: true,
+      });
+      expect(stepped.map((m) => m.id)).toEqual(["m1", "m2"]);
+
+      // Direct broadcast dispatch delivers filtered event to listeners
+      await (sharedMemory as any)._broadcastSync("create", "android_1", "android", sampleMemories, "m1", 1);
+      expect(events.length).toBe(1);
+      expect(events[0].memories.map((m) => m.id)).toEqual(["m1"]);
 
       unregister();
     });

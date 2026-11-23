@@ -424,6 +424,13 @@ def open_folder(args: Dict[str, Any]) -> Dict[str, Any]:
                 subprocess.Popen([explorer_exe], close_fds=True)
             else:
                 subprocess.Popen("explorer", shell=True, close_fds=True)
+            import time
+            time.sleep(0.3)
+            try:
+                from .tools_windows import force_bring_to_foreground
+                force_bring_to_foreground("File Explorer")
+            except Exception:
+                pass
             return {"result": "Opened File Explorer.", "path": "explorer", "verified": True}
 
     folder = _resolve_folder(raw_target)
@@ -434,9 +441,26 @@ def open_folder(args: Dict[str, Any]) -> Dict[str, Any]:
     if platform.system() == "Windows":
         if folder.is_file():
             os.startfile(str(folder))
+            import time
+            time.sleep(0.3)
+            try:
+                from .tools_windows import force_bring_to_foreground
+                force_bring_to_foreground(folder.stem)
+            except Exception:
+                pass
             return {"result": f"Opened file: {folder}", "path": str(folder)}
         else:
             subprocess.Popen(f'explorer "{folder}"', shell=True, close_fds=True)
+            import time
+            time.sleep(0.35)
+            try:
+                from .tools_windows import force_bring_to_foreground
+                # Target window title will match folder.name, folder path, or File Explorer
+                if not force_bring_to_foreground(folder.name):
+                    if not force_bring_to_foreground(str(folder)):
+                        force_bring_to_foreground("File Explorer")
+            except Exception:
+                pass
             return {"result": f"Opened folder: {folder}", "path": str(folder)}
     elif platform.system() == "Darwin":
         subprocess.Popen(["open", str(folder)], close_fds=True)

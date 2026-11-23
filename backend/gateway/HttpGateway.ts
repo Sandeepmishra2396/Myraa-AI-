@@ -48,22 +48,23 @@ import {
   DESKTOP_AGENT_URL,
   callDesktopAgent,
 } from "../tasks/TaskManager.ts";
+import {
+  boundedLogStore,
+  deepSanitizeDiagnostic,
+  sanitizeDiagnosticString,
+  runtimeHealthMonitor,
+  runtimeMetrics,
+  correlationTracer,
+} from "../diagnostics/RuntimeObservability.ts";
 
 // ---------------------------------------------------------------------------
-// Logging subsystem
+// Logging subsystem (Backed by RuntimeObservability with deep redaction & rotation)
 // ---------------------------------------------------------------------------
-const LOGS_DIR = path.join(DATA_DIR, "logs");
-try {
-  fs.mkdirSync(LOGS_DIR, { recursive: true });
-} catch {
-  /* already exists */
-}
+const LOGS_DIR = boundedLogStore.getLogsDir();
 
 export function appendLog(fileName: string, message: string): void {
   try {
-    const sanitized = sanitizeError(message);
-    const line = `[${new Date().toISOString()}] ${sanitized}\n`;
-    fs.appendFile(path.join(LOGS_DIR, fileName), line, () => {});
+    boundedLogStore.appendPlainText(fileName, message);
   } catch {
     /* logging is best-effort */
   }
@@ -74,7 +75,7 @@ export const logStartup = (m: string) => appendLog("startup.log", m);
 export const logError = (m: string) => appendLog("errors.log", m);
 
 /**
- * Structured JSON log entry (NDJSON). Written to logs/app.log.json.
+ * Structured JSON log entry (NDJSON). Written to logs/app.log.json with deep recursive redaction and log rotation.
  */
 export function logJson(
   level: "info" | "warn" | "error",
@@ -82,25 +83,30 @@ export function logJson(
   data: Record<string, unknown> = {},
 ): void {
   try {
-    const sanitizedData: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(data)) {
-      if (typeof v === "string") {
-        sanitizedData[k] = sanitizeError(v);
-      } else {
-        sanitizedData[k] = v;
-      }
+    if (event === "gemini_live_connected") {
+      runtimeMetrics.incrementCounter("gemini_live_connections_total");
+    } else if (event === "gemini_live_error") {
+      runtimeMetrics.incrementCounter("gemini_live_errors_total");
+    } else if (event === "gemini_live_goaway") {
+      runtimeMetrics.incrementCounter("gemini_live_reconnects_total");
+    } else if (event === "tool_execute") {
+      runtimeMetrics.incrementCounter("task_executed_total");
+    } else if (event === "tool_error" || event === "tool_unreachable") {
+      runtimeMetrics.incrementCounter("desktop_agent_rpc_errors_total");
     }
-    const entry = JSON.stringify({
+
+    boundedLogStore.recordEvent({
       timestamp: new Date().toISOString(),
-      level,
-      event: sanitizeError(event),
-      ...sanitizedData,
+      severity: level,
+      module: (data.module as string) || (event.startsWith("gemini_") ? "gemini_live" : event.startsWith("tool_") ? "tasks" : "gateway"),
+      event,
+      correlationId: (data.correlationId as string) || (data.auditCorrelationId as string),
+      sessionId: data.sessionId as string,
+      durationMs: typeof data.durationMs === "number" ? data.durationMs : undefined,
+      outcome: (data.outcome as string) || (data.ok === true ? "success" : data.ok === false ? "failure" : undefined),
+      errorCategory: (data.errorCategory as string) || (data.error ? "runtime_error" : undefined),
+      metadata: data,
     });
-    fs.appendFile(
-      path.join(LOGS_DIR, "app.log.json"),
-      entry + "\n",
-      () => {},
-    );
   } catch {
     /* logging is best-effort */
   }
@@ -124,6 +130,220 @@ function loadSettingsFile(): Record<string, unknown> {
 
 function saveSettingsFile(data: Record<string, unknown>): void {
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 2), "utf-8");
+}
+
+// ---------------------------------------------------------------------------
+// Step-up challenge ownership registry (FINDING-AUD-03)
+// Maps challengeId -> owning operator sessionId to block cross-session verification.
+// ---------------------------------------------------------------------------
+const _stepUpChallengeOwners = new Map<string, { sessionId: string; expiresAt: number }>();
+
+export function registerStepUpChallengeOwner(
+  challengeId: string,
+  sessionId: string,
+  expiresAtMs: number = Date.now() + 10 * 60 * 1000,
+): void {
+  if (_stepUpChallengeOwners.size > 1000) {
+    const now = Date.now();
+    for (const [k, v] of _stepUpChallengeOwners.entries()) {
+      if (v.expiresAt < now) _stepUpChallengeOwners.delete(k);
+    }
+  }
+  _stepUpChallengeOwners.set(challengeId, { sessionId, expiresAt: expiresAtMs });
+}
+
+const SENSITIVE_MEMORY_CATEGORIES = new Set(["identity", "credentials", "behavior"]);
+const READ_ONLY_ROLES = new Set(["guest", "read_only"]);
+
+interface AuthenticatedHttpContext {
+  identityId: string;
+  role: string;
+  sessionId?: string;
+  deviceId?: string;
+  ipAddress: string;
+  isLocal: boolean;
+  isStepUpAuthenticated: boolean;
+  authType: "operator" | "remote_device";
+}
+
+function getClientIp(req: any): { ip: string; isLocal: boolean } {
+  const forwardedIp = req.headers?.["x-forwarded-for"];
+  const ip = forwardedIp
+    ? String(forwardedIp).split(",")[0].trim()
+    : req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || "127.0.0.1";
+  const isLocal =
+    !forwardedIp &&
+    (ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1" || ip === "localhost");
+  return { ip, isLocal };
+}
+
+/**
+ * Operator-only Bearer myraa_at_... session authentication middleware.
+ */
+async function requireOperatorSessionMiddleware(req: any, res: any, next: () => void): Promise<void> {
+  const authHeader = String(req.headers?.["authorization"] || "");
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  if (!token) {
+    res.status(401).json({ error: "MISSING_OPERATOR_TOKEN: Authorization Bearer token required." });
+    return;
+  }
+  const { ip, isLocal } = getClientIp(req);
+  const { identityAuthManager } = await import("../security/IdentityAuthManager.ts");
+  const result = identityAuthManager.validateAccessToken(token, ip);
+  if (!result.valid || !result.session) {
+    res.status(401).json({ error: result.error || "INVALID_OPERATOR_TOKEN: Invalid or expired session token." });
+    return;
+  }
+  const session = result.session;
+  const isStepUp = Boolean(
+    session.isStepUpAuthenticated &&
+      session.stepUpExpiresAt &&
+      Date.now() < session.stepUpExpiresAt,
+  );
+  req.operatorSession = session;
+  req.authContext = {
+    identityId: session.identityId,
+    role: session.role,
+    sessionId: session.sessionId,
+    deviceId: session.deviceId,
+    ipAddress: ip,
+    isLocal,
+    isStepUpAuthenticated: isStepUp,
+    authType: "operator",
+  } satisfies AuthenticatedHttpContext;
+  next();
+}
+
+/**
+ * Unified fail-closed authentication middleware (FINDING-AUD-03):
+ * Accepts a valid Bearer operator session token (myraa_at_...) OR a valid
+ * Bearer paired remote device token. Never permits unauthenticated access.
+ */
+async function requireAuthenticatedClient(req: any, res: any, next: () => void): Promise<void> {
+  const authHeader = String(req.headers?.["authorization"] || "");
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  if (!token) {
+    res.status(401).json({ error: "UNAUTHORIZED: Valid Bearer operator or paired device token required." });
+    return;
+  }
+
+  const { ip, isLocal } = getClientIp(req);
+
+  // 1. Try desktop operator access token (myraa_at_...)
+  if (token.startsWith("myraa_at_")) {
+    const { identityAuthManager } = await import("../security/IdentityAuthManager.ts");
+    const opAuth = identityAuthManager.validateAccessToken(token, ip);
+    if (!opAuth.valid || !opAuth.session) {
+      res.status(401).json({ error: opAuth.error || "UNAUTHORIZED: Invalid or expired operator token." });
+      return;
+    }
+    const session = opAuth.session;
+    const isStepUp = Boolean(
+      session.isStepUpAuthenticated &&
+        session.stepUpExpiresAt &&
+        Date.now() < session.stepUpExpiresAt,
+    );
+    req.operatorSession = session;
+    req.authContext = {
+      identityId: session.identityId,
+      role: session.role,
+      sessionId: session.sessionId,
+      deviceId: session.deviceId,
+      ipAddress: ip,
+      isLocal,
+      isStepUpAuthenticated: isStepUp,
+      authType: "operator",
+    } satisfies AuthenticatedHttpContext;
+    next();
+    return;
+  }
+
+  // 2. Try paired remote device credential
+  try {
+    const { remoteSecurityCoordinator } = await import("../security/RemoteSecurityCoordinator.ts");
+    const remoteAuth = await remoteSecurityCoordinator.authenticateRemoteCredential(
+      token,
+      ip,
+      req.headers["user-agent"],
+    );
+    if (!remoteAuth.authenticated || !remoteAuth.device) {
+      res.status(401).json({ error: remoteAuth.error || "UNAUTHORIZED: Invalid or revoked device token." });
+      return;
+    }
+    req.remoteDevice = remoteAuth.device;
+    req.securitySession = remoteAuth.session;
+    const isStepUp = Boolean(
+      remoteAuth.session?.isStepUpAuthenticated &&
+        remoteAuth.session?.stepUpExpiresAt &&
+        Date.now() < remoteAuth.session.stepUpExpiresAt,
+    );
+    req.authContext = {
+      identityId: remoteAuth.device.id,
+      role: remoteAuth.device.role,
+      sessionId: remoteAuth.session?.sessionId,
+      deviceId: remoteAuth.device.id,
+      ipAddress: ip,
+      isLocal,
+      isStepUpAuthenticated: isStepUp,
+      authType: "remote_device",
+    } satisfies AuthenticatedHttpContext;
+    next();
+  } catch (e: any) {
+    res.status(500).json({ error: sanitizeError(e?.message || e) });
+  }
+}
+
+function assertWriteRoleAllowed(req: any, res: any): boolean {
+  const role = String(req.authContext?.role || req.operatorSession?.role || "").toLowerCase();
+  if (!role || READ_ONLY_ROLES.has(role)) {
+    res.status(403).json({
+      error: `FORBIDDEN_ROLE: Role '${role || "unknown"}' is not permitted to perform write mutations.`,
+    });
+    return false;
+  }
+  return true;
+}
+
+async function assertSystemNotHalted(res: any, actorId: string, resource: string): Promise<boolean> {
+  const { emergencyStopCoordinator } = await import("../remote/EmergencyStopCoordinator.ts");
+  const { securityPolicyEngine } = await import("../security/SecurityPolicyEngine.ts");
+  const { securityAuditLogger } = await import("../security/SecurityAuditLogger.ts");
+
+  if (emergencyStopCoordinator.isActive()) {
+    securityAuditLogger.logEvent({
+      eventType: "TOOL_BLOCKED",
+      actor: { identityId: actorId, role: "standard", ipAddress: "127.0.0.1" },
+      target: { resource },
+      decision: "BLOCK",
+      reason: "EMERGENCY_STOP_ACTIVE: Operation blocked while Emergency Stop is active.",
+      riskLevel: "HIGH",
+    });
+    res.status(503).json({ error: "EMERGENCY_STOP_ACTIVE: Operation blocked while Emergency Stop is active.", blocked: true });
+    return false;
+  }
+
+  if (securityPolicyEngine.getMode() === "LOCKDOWN") {
+    securityAuditLogger.logEvent({
+      eventType: "TOOL_BLOCKED",
+      actor: { identityId: actorId, role: "standard", ipAddress: "127.0.0.1" },
+      target: { resource },
+      decision: "BLOCK",
+      reason: "SECURITY_LOCKDOWN_ACTIVE: Operation blocked while Security Lockdown is active.",
+      riskLevel: "HIGH",
+    });
+    res.status(423).json({ error: "SECURITY_LOCKDOWN_ACTIVE: Operation blocked while Security Lockdown is active.", blocked: true });
+    return false;
+  }
+
+  return true;
+}
+
+function filterSensitiveMemoriesForCaller<T extends { category?: string }>(
+  memories: T[],
+  authCtx?: AuthenticatedHttpContext,
+): T[] {
+  if (authCtx?.isStepUpAuthenticated) return memories;
+  return memories.filter((m) => !SENSITIVE_MEMORY_CATEGORIES.has(String(m.category || "").toLowerCase()));
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +377,17 @@ export function createHttpApp(): express.Application {
     next();
   });
 
-  // ── Environment-Aware CORS Middleware ────────────────────────────────────
+  // ── Observability & Response Duration Metrics ─────────────────────────────
+  app.use((_req, res, next) => {
+    const startMs = Date.now();
+    res.on("finish", () => {
+      const durationMs = Date.now() - startMs;
+      runtimeMetrics.recordTiming("api_request_duration_ms", durationMs);
+    });
+    next();
+  });
+
+  // ── Environment-Aware CORS Middleware (FINDING-AUD-04) ───────────────────
   app.use((req, res, next) => {
     const origin = req.headers.origin;
     const isProd = process.env.NODE_ENV === "production" && process.env.SORA_LAUNCHED_BY !== "electron";
@@ -181,10 +411,12 @@ export function createHttpApp(): express.Application {
 
       if (allowed) {
         res.setHeader("Access-Control-Allow-Origin", origin);
-        res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+        res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
         res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
         res.setHeader("Access-Control-Allow-Credentials", "true");
-      } else if (req.method === "OPTIONS") {
+        res.setHeader("Vary", "Origin");
+      } else {
+        // Enforce origin policy consistently on ALL requests, not only OPTIONS preflight
         return res.status(403).json({ error: "CORS_ORIGIN_DENIED: Origin not permitted." });
       }
     }
@@ -213,57 +445,132 @@ export function createHttpApp(): express.Application {
     next();
   });
 
-  // ── Memory REST API ────────────────────────────────────────────────────
-  app.get("/api/memories", async (_req, res) => {
+  // ── Memory REST API (FINDING-AUD-03, FINDING-AUD-07) ────────────────────
+  app.get("/api/memories", requireAuthenticatedClient, async (req: any, res) => {
     try {
       const { memoryManager } = await import("../memory/MemoryManager.ts");
       const memories = await memoryManager.listMemories({ includeNeedsRevalidation: true });
-      res.json(memories);
+      res.json(filterSensitiveMemoriesForCaller(memories, req.authContext));
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ error: sanitizeError(e?.message || e) });
     }
   });
 
-  app.post("/api/memories", async (req, res) => {
+  app.post("/api/memories", requireAuthenticatedClient, async (req: any, res) => {
     try {
-      const { category, text, key, importance, confidence, source, expiresAt } = req.body;
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/memories"))) return;
+
+      const { category, text, key, importance, confidence, source, expiresAt } = req.body || {};
       if (!category || !text) {
         return res
           .status(400)
           .json({ error: "Category and text parameters are required." });
       }
-      const { memoryManager } = await import("../memory/MemoryManager.ts");
-      const created = await memoryManager.createMemory({
-        category,
-        text,
-        key,
-        importance,
-        confidence,
-        source: source ?? "system_generated",
-        expiresAt,
+
+      const { isDlpClean } = await import("../memory/SharedMemoryManager.ts");
+      if (!isDlpClean(String(text)) || (key && !isDlpClean(String(key)))) {
+        return res.status(422).json({
+          error: "DLP_SECRET_REJECTED: Secrets or credentials cannot be stored in memory.",
+          blocked: true,
+        });
+      }
+
+      const { contentSanitizer } = await import("../security/ContentSanitizer.ts");
+      if (contentSanitizer.scanForPromptInjection(String(text)).hasInjectionAttempt) {
+        return res.status(422).json({
+          error: "PROMPT_INJECTION_BLOCKED: Memory content contains unsafe prompt-injection patterns.",
+          blocked: true,
+        });
+      }
+
+      const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+      const proposal = await governingMemoryGate.requestWrite({
+        action: "CREATE",
+        proposedMemory: {
+          category,
+          text,
+          key,
+          importance,
+          confidence,
+          source: (source as any) ?? "user_explicit",
+          expiresAt,
+        },
+        reason: "REST API memory proposal",
+        confidence: typeof confidence === "number" ? confidence : 0.85,
+        source: (source as any) ?? "user_explicit",
+        userId: req.authContext.identityId,
+        provenance: "HttpGateway.POST /api/memories",
+        sessionId: req.authContext.sessionId,
+      } as any);
+      res.status(202).json({
+        status: "pending_approval",
+        requestId: proposal.id,
+        message: "Memory proposal created. Awaiting operator confirmation.",
+        proposedMemory: proposal.proposedMemory,
       });
-      res.status(201).json(created);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      const msg = e?.message || String(e);
+      if (msg.includes("DLP_SECRET_REJECTED") || msg.includes("PROMPT_INJECTION_BLOCKED")) {
+        return res.status(422).json({ error: msg, blocked: true });
+      }
+      if (msg.includes("EMERGENCY_STOP_ACTIVE")) {
+        return res.status(503).json({ error: msg, blocked: true });
+      }
+      if (msg.includes("SECURITY_LOCKDOWN_ACTIVE")) {
+        return res.status(423).json({ error: msg, blocked: true });
+      }
+      res.status(500).json({ error: sanitizeError(msg) });
     }
   });
 
-  app.delete("/api/memories/:id", async (req, res) => {
+  app.delete("/api/memories/:id", requireAuthenticatedClient, async (req: any, res) => {
     try {
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/memories/:id"))) return;
+
       const { id } = req.params;
       const { memoryManager } = await import("../memory/MemoryManager.ts");
-      const success = await memoryManager.deleteMemory(id);
-      res.json({ success });
+      const existing = await memoryManager.getMemory(id);
+      if (!existing) {
+        return res.status(404).json({ error: "Memory not found." });
+      }
+      const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+      const proposal = await governingMemoryGate.requestWrite({
+        action: "DELETE",
+        proposedMemory: {
+          id,
+          category: existing.category,
+          text: existing.text,
+          key: existing.key,
+        },
+        reason: `REST API memory deletion proposal for ${id}`,
+        confidence: 0.85,
+        source: existing.source || "user_explicit",
+        userId: req.authContext.identityId,
+        provenance: "HttpGateway.DELETE /api/memories/:id",
+        sessionId: req.authContext.sessionId,
+        expectedVersion: req.body?.expectedVersion ?? existing.version,
+      } as any);
+      res.status(202).json({
+        status: "pending_approval",
+        action: "DELETE",
+        requestId: proposal.id,
+        message: "Memory deletion proposal created. Awaiting operator confirmation.",
+      });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      const msg = e?.message || String(e);
+      if (msg.includes("EMERGENCY_STOP_ACTIVE")) return res.status(503).json({ error: msg, blocked: true });
+      if (msg.includes("SECURITY_LOCKDOWN_ACTIVE")) return res.status(423).json({ error: msg, blocked: true });
+      res.status(500).json({ error: sanitizeError(msg) });
     }
   });
 
 
-  // ── Phase 2 Memory Routes (additive — existing routes above unchanged) ──
+  // ── Phase 2 Memory Routes (additive — secured) ──
 
   // GET /api/memories/search?q=&category=&importance=&confidence=&limit=
-  app.get("/api/memories/search", async (req, res) => {
+  app.get("/api/memories/search", requireAuthenticatedClient, async (req: any, res) => {
     try {
       const { memoryManager } = await import("../memory/MemoryManager.ts");
       const {
@@ -287,52 +594,127 @@ export function createHttpApp(): express.Application {
         includeArchived: includeArchived === "true",
         includeNeedsRevalidation: includeNeedsRevalidation !== "false",
       });
-      res.json(results);
+      res.json(filterSensitiveMemoriesForCaller(results, req.authContext));
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ error: sanitizeError(e?.message || e) });
     }
   });
 
-  // PATCH /api/memories/:id — partial update
-  app.patch("/api/memories/:id", async (req, res) => {
+  // PATCH /api/memories/:id — partial update via governance
+  app.patch("/api/memories/:id", requireAuthenticatedClient, async (req: any, res) => {
     try {
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/memories/:id"))) return;
+
       const { id } = req.params;
-      const { text, key, importance, confidence, status, expiresAt } = req.body;
+      const { text, key, importance, confidence, status, expiresAt, expectedVersion } = req.body || {};
       const { memoryManager } = await import("../memory/MemoryManager.ts");
-      const updated = await memoryManager.updateMemory(id, {
-        text,
-        key,
-        importance,
-        confidence,
-        status,
-        expiresAt,
+      const existing = await memoryManager.getMemory(id);
+      if (!existing) {
+        return res.status(404).json({ error: "Memory not found." });
+      }
+
+      const { isDlpClean } = await import("../memory/SharedMemoryManager.ts");
+      if ((text && !isDlpClean(String(text))) || (key && !isDlpClean(String(key)))) {
+        return res.status(422).json({
+          error: "DLP_SECRET_REJECTED: Secrets or credentials cannot be stored in memory.",
+          blocked: true,
+        });
+      }
+
+      const { contentSanitizer } = await import("../security/ContentSanitizer.ts");
+      if (text && contentSanitizer.scanForPromptInjection(String(text)).hasInjectionAttempt) {
+        return res.status(422).json({
+          error: "PROMPT_INJECTION_BLOCKED: Memory content contains unsafe prompt-injection patterns.",
+          blocked: true,
+        });
+      }
+
+      const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+      const proposal = await governingMemoryGate.requestWrite({
+        action: "UPDATE",
+        proposedMemory: {
+          id,
+          category: existing.category,
+          text,
+          key,
+          importance,
+          confidence,
+          status,
+          expiresAt,
+        },
+        reason: `REST API memory update proposal for ${id}`,
+        confidence: 0.85,
+        source: existing.source || "user_explicit",
+        userId: req.authContext.identityId,
+        provenance: "HttpGateway.PATCH /api/memories/:id",
+        sessionId: req.authContext.sessionId,
+        expectedVersion: expectedVersion !== undefined ? Number(expectedVersion) : existing.version,
+      } as any);
+      res.status(202).json({
+        status: "pending_approval",
+        action: "UPDATE",
+        requestId: proposal.id,
+        message: "Memory update proposal created. Awaiting operator confirmation.",
+        proposedMemory: proposal.proposedMemory,
       });
-      if (!updated) {
-        return res.status(404).json({ error: "Memory not found." });
-      }
-      res.json(updated);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      const msg = e?.message || String(e);
+      if (msg.includes("DLP_SECRET_REJECTED") || msg.includes("PROMPT_INJECTION_BLOCKED")) {
+        return res.status(422).json({ error: msg, blocked: true });
+      }
+      if (msg.includes("EMERGENCY_STOP_ACTIVE")) return res.status(503).json({ error: msg, blocked: true });
+      if (msg.includes("SECURITY_LOCKDOWN_ACTIVE")) return res.status(423).json({ error: msg, blocked: true });
+      res.status(500).json({ error: sanitizeError(msg) });
     }
   });
 
-  // POST /api/memories/:id/archive — soft-delete
-  app.post("/api/memories/:id/archive", async (req, res) => {
+  // POST /api/memories/:id/archive — governed soft-delete proposal
+  app.post("/api/memories/:id/archive", requireAuthenticatedClient, async (req: any, res) => {
     try {
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/memories/:id/archive"))) return;
+
       const { id } = req.params;
       const { memoryManager } = await import("../memory/MemoryManager.ts");
-      const archived = await memoryManager.archiveMemory(id);
-      if (!archived) {
+      const existing = await memoryManager.getMemory(id);
+      if (!existing) {
         return res.status(404).json({ error: "Memory not found." });
       }
-      res.json(archived);
+      const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+      const proposal = await governingMemoryGate.requestWrite({
+        action: "ARCHIVE",
+        proposedMemory: {
+          id,
+          category: existing.category,
+          text: existing.text,
+          key: existing.key,
+          status: "archived",
+        },
+        reason: `REST API memory archive proposal for ${id}`,
+        confidence: 0.85,
+        source: existing.source || "user_explicit",
+        userId: req.authContext.identityId,
+        provenance: "HttpGateway.POST /api/memories/:id/archive",
+        sessionId: req.authContext.sessionId,
+        expectedVersion: req.body?.expectedVersion ?? existing.version,
+      } as any);
+      res.status(202).json({
+        status: "pending_approval",
+        action: "ARCHIVE",
+        requestId: proposal.id,
+        message: "Memory archive proposal created. Awaiting operator confirmation.",
+      });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      const msg = e?.message || String(e);
+      if (msg.includes("EMERGENCY_STOP_ACTIVE")) return res.status(503).json({ error: msg, blocked: true });
+      if (msg.includes("SECURITY_LOCKDOWN_ACTIVE")) return res.status(423).json({ error: msg, blocked: true });
+      res.status(500).json({ error: sanitizeError(msg) });
     }
   });
 
   // GET /api/memories/context?maxChars=2000&q= — get ranked context string
-  app.get("/api/memories/context", async (req, res) => {
+  app.get("/api/memories/context", requireAuthenticatedClient, async (req: any, res) => {
     try {
       const { memoryManager } = await import("../memory/MemoryManager.ts");
       const maxChars = req.query.maxChars ? parseInt(req.query.maxChars as string, 10) : 2000;
@@ -344,7 +726,7 @@ export function createHttpApp(): express.Application {
       });
       res.json({ context, charCount: context.length });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ error: sanitizeError(e?.message || e) });
     }
   });
 
@@ -546,13 +928,43 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  // ── Agent Planner REST API (Phase 5) ────────────────────────────────────
-  app.post("/api/planner/plan", async (req, res) => {
+  // ── Agent Planner REST API (Phase 5 + Stage 10.3 P2) ────────────────────
+  app.post("/api/planner/plan", requireAuthenticatedClient, async (req: any, res) => {
     try {
-      const { plannerCoordinator } = await import("../planner/PlannerCoordinator.ts");
+      if (!assertWriteRoleAllowed(req, res)) return;
+      const actorId = req.authContext?.identityId || "unknown";
+      if (!(await assertSystemNotHalted(res, actorId, "planner:plan"))) return;
+
+      const { plannerCoordinator, resolveCanonicalProjectId } = await import("../planner/PlannerCoordinator.ts");
       const goal = (req.body?.goal as string) || "";
       if (!goal.trim()) return res.status(400).json({ error: "Goal text is required." });
-      const plan = await plannerCoordinator.createPlan(goal);
+
+      // Stage 10.3 P2: Explicit canonical project resolution with authenticated caller check.
+      // A client-supplied projectId is only a requested identifier — validate existence &
+      // caller write authorization before stamping. Reject invalid/unknown/unauthorized
+      // project selection rather than falling back to an unrelated or globally active project.
+      // When omitted, the plan remains unscoped (never infers global active project).
+      let resolvedProjectId: string | undefined;
+      if (req.body?.projectId !== undefined && req.body?.projectId !== null) {
+        const resolution = await resolveCanonicalProjectId(req.body.projectId, {
+          secContext: req.authContext,
+          requireAuthorizedContext: true,
+        });
+        if (resolution.status === "unauthorized") {
+          return res.status(403).json({ error: `FORBIDDEN_PROJECT_ACCESS: ${resolution.reason}` });
+        }
+        if (resolution.status === "invalid") {
+          return res.status(404).json({ error: `INVALID_PROJECT_ID: ${resolution.reason}` });
+        }
+        if (resolution.status === "resolved") {
+          resolvedProjectId = resolution.projectId;
+        }
+      }
+
+      const plan = await plannerCoordinator.createPlan(
+        goal,
+        resolvedProjectId ? { projectId: resolvedProjectId } : undefined,
+      );
       res.status(201).json({
         planId: plan.id,
         status: plan.status,
@@ -560,6 +972,7 @@ export function createHttpApp(): express.Application {
         goal: plan.goal.objective,
         category: plan.goal.category,
         requiresModification: plan.goal.requiresModification,
+        projectId: plan.projectId,
       });
     } catch (e: any) {
       res.status(500).json({ error: sanitizeError(e?.message || e) });
@@ -665,8 +1078,8 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  // ── Proactive Companion REST API (Phase 6) ──────────────────────────────
-  app.get("/api/companion/tasks", async (_req, res) => {
+  // ── Proactive Companion REST API (Phase 6 — secured FINDING-AUD-03) ─────
+  app.get("/api/companion/tasks", requireAuthenticatedClient, async (_req, res) => {
     try {
       const { companionCoordinator } = await import("../companion/CompanionCoordinator.ts");
       const tasks = await companionCoordinator.listTasks();
@@ -676,8 +1089,11 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  app.post("/api/companion/tasks", async (req, res) => {
+  app.post("/api/companion/tasks", requireAuthenticatedClient, async (req: any, res) => {
     try {
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/companion/tasks"))) return;
+
       const { companionCoordinator } = await import("../companion/CompanionCoordinator.ts");
       const { name, type, intervalMs, delayMs, maxIterations, params } = req.body || {};
       if (!name || !type) {
@@ -697,8 +1113,11 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  app.delete("/api/companion/tasks/:id", requireLocalhost, async (req, res) => {
+  app.delete("/api/companion/tasks/:id", requireLocalhost, requireAuthenticatedClient, async (req: any, res) => {
     try {
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/companion/tasks/:id"))) return;
+
       const { companionCoordinator } = await import("../companion/CompanionCoordinator.ts");
       const task = await companionCoordinator.cancelTask(req.params.id);
       if (!task) return res.status(404).json({ error: `Task '${req.params.id}' not found.` });
@@ -708,8 +1127,11 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  app.post("/api/companion/tasks/:id/pause", async (req, res) => {
+  app.post("/api/companion/tasks/:id/pause", requireAuthenticatedClient, async (req: any, res) => {
     try {
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/companion/tasks/:id/pause"))) return;
+
       const { companionCoordinator } = await import("../companion/CompanionCoordinator.ts");
       const task = await companionCoordinator.pauseTask(req.params.id);
       if (!task) return res.status(404).json({ error: `Task '${req.params.id}' not found.` });
@@ -719,8 +1141,11 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  app.post("/api/companion/tasks/:id/resume", async (req, res) => {
+  app.post("/api/companion/tasks/:id/resume", requireAuthenticatedClient, async (req: any, res) => {
     try {
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/companion/tasks/:id/resume"))) return;
+
       const { companionCoordinator } = await import("../companion/CompanionCoordinator.ts");
       const task = await companionCoordinator.resumeTask(req.params.id);
       if (!task) return res.status(404).json({ error: `Task '${req.params.id}' not found.` });
@@ -730,7 +1155,7 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  app.get("/api/companion/notifications", async (req, res) => {
+  app.get("/api/companion/notifications", requireAuthenticatedClient, async (req, res) => {
     try {
       const { companionCoordinator } = await import("../companion/CompanionCoordinator.ts");
       const limit = req.query.limit ? Number(req.query.limit) : 50;
@@ -741,8 +1166,11 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  app.post("/api/companion/notifications/:id/dismiss", async (req, res) => {
+  app.post("/api/companion/notifications/:id/dismiss", requireAuthenticatedClient, async (req: any, res) => {
     try {
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/companion/notifications/:id/dismiss"))) return;
+
       const { companionCoordinator } = await import("../companion/CompanionCoordinator.ts");
       const item = await companionCoordinator.dismissNotification(req.params.id);
       if (!item) return res.status(404).json({ error: `Notification '${req.params.id}' not found.` });
@@ -752,8 +1180,11 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  app.delete("/api/companion/notifications", requireLocalhost, async (_req, res) => {
+  app.delete("/api/companion/notifications", requireLocalhost, requireAuthenticatedClient, async (req: any, res) => {
     try {
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/companion/notifications"))) return;
+
       const { companionCoordinator } = await import("../companion/CompanionCoordinator.ts");
       await companionCoordinator.clearNotifications();
       res.json({ success: true });
@@ -762,7 +1193,7 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  app.get("/api/companion/preferences", async (_req, res) => {
+  app.get("/api/companion/preferences", requireAuthenticatedClient, async (_req, res) => {
     try {
       const { companionCoordinator } = await import("../companion/CompanionCoordinator.ts");
       const prefs = await companionCoordinator.getPreferences();
@@ -772,8 +1203,11 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  app.put("/api/companion/preferences", async (req, res) => {
+  app.put("/api/companion/preferences", requireAuthenticatedClient, async (req: any, res) => {
     try {
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/companion/preferences"))) return;
+
       const { companionCoordinator } = await import("../companion/CompanionCoordinator.ts");
       const updated = await companionCoordinator.updatePreferences(req.body || {});
       res.json(updated);
@@ -782,8 +1216,11 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  app.post("/api/companion/check", async (req, res) => {
+  app.post("/api/companion/check", requireAuthenticatedClient, async (req: any, res) => {
     try {
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/companion/check"))) return;
+
       const { companionCoordinator } = await import("../companion/CompanionCoordinator.ts");
       const type = req.body?.type || "build";
       const targetUrl = req.body?.targetUrl;
@@ -1264,16 +1701,21 @@ export function createHttpApp(): express.Application {
 
   // ── Phase 24 Shared MYRAA Memory REST API ──────────────────────────────
 
-  // GET /api/remote/memory — List canonical shared memories
-  app.get("/api/remote/memory", requireLocalhostOrPairedDevice, async (req: any, res) => {
+  // GET /api/remote/memory — List canonical shared memories (FINDING-AUD-03)
+  app.get("/api/remote/memory", requireAuthenticatedClient, async (req: any, res) => {
     try {
-      const deviceId = req.remoteDevice?.id || "local_operator";
-      const role = req.remoteDevice?.role || "admin";
-      const isLocal = !req.remoteDevice;
+      const authCtx = req.authContext as AuthenticatedHttpContext | undefined;
+      if (!authCtx || !authCtx.identityId) {
+        return res.status(401).json({ error: "UNAUTHORIZED: Authenticated client context required." });
+      }
+
+      const deviceId = authCtx.deviceId || authCtx.identityId;
+      const role = authCtx.role;
+      const isLocal = authCtx.authType === "operator" && authCtx.isLocal;
       const secContext = {
-        identityId: deviceId,
-        role,
-        ipAddress: req.ip || req.socket?.remoteAddress || "127.0.0.1",
+        identityId: authCtx.identityId,
+        role: role as any,
+        ipAddress: authCtx.ipAddress,
         deviceId,
         isLocal,
       };
@@ -1288,7 +1730,32 @@ export function createHttpApp(): express.Application {
         },
         secContext,
       );
-      res.json(memories);
+
+      // Apply sensitive-category filtering (identity/credentials/behavior require step-up and non-read-only role)
+      // and enforce ownership boundary for non-local-admin callers.
+      const isReadOnlyRole = READ_ONLY_ROLES.has(String(authCtx.role || "").toLowerCase());
+      const isLocalAdmin = Boolean(
+        authCtx.authType === "operator" && authCtx.isLocal && authCtx.role === "admin",
+      );
+      const effectiveAuthCtx: AuthenticatedHttpContext = isReadOnlyRole
+        ? { ...authCtx, isStepUpAuthenticated: false }
+        : authCtx;
+      const categoryFiltered = filterSensitiveMemoriesForCaller(memories, effectiveAuthCtx);
+      const permitted = categoryFiltered.filter((m) => {
+        const ownerId = (m as any).ownerId as string | undefined;
+        if (
+          ownerId &&
+          ownerId !== "default" &&
+          ownerId !== "system" &&
+          ownerId !== authCtx.identityId &&
+          !isLocalAdmin
+        ) {
+          return false;
+        }
+        return true;
+      });
+
+      res.json(permitted);
     } catch (e: any) {
       const msg = e.message || String(e);
       if (msg.includes("EMERGENCY_STOP_ACTIVE")) {
@@ -1301,28 +1768,34 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  // POST /api/remote/memory — Create a shared memory record
-  app.post("/api/remote/memory", requireLocalhostOrPairedDevice, async (req: any, res) => {
+  // POST /api/remote/memory — Create a shared memory record (FINDING-AUD-03, FINDING-AUD-07)
+  app.post("/api/remote/memory", requireAuthenticatedClient, async (req: any, res) => {
     try {
-      const deviceId = req.remoteDevice?.id || "local_operator";
-      const role = req.remoteDevice?.role || "admin";
-      const isLocal = !req.remoteDevice;
-      const secContext = {
-        identityId: deviceId,
-        role,
-        ipAddress: req.ip || req.socket?.remoteAddress || "127.0.0.1",
-        deviceId,
-        isLocal,
-      };
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/remote/memory"))) return;
+
+      const deviceId = req.authContext.identityId;
+      const isLocal = req.authContext.authType === "operator";
 
       const { category, text, key, importance, confidence, source, expiresAt, clientMutationId } = req.body || {};
       if (!category || !text) {
         return res.status(400).json({ error: "Category and text parameters are required." });
       }
 
-      const { sharedMemoryManager } = await import("../memory/SharedMemoryManager.ts");
-      const created = await sharedMemoryManager.createMemory(
-        {
+      const { isDlpClean } = await import("../memory/SharedMemoryManager.ts");
+      if (!isDlpClean(String(text)) || (key && !isDlpClean(String(key)))) {
+        return res.status(422).json({ error: "DLP_SECRET_REJECTED: Secrets or credentials cannot be stored in shared memory.", blocked: true });
+      }
+
+      const { contentSanitizer } = await import("../security/ContentSanitizer.ts");
+      if (contentSanitizer.scanForPromptInjection(String(text)).hasInjectionAttempt) {
+        return res.status(422).json({ error: "PROMPT_INJECTION_BLOCKED: Memory content contains unsafe prompt-injection patterns.", blocked: true });
+      }
+
+      const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+      const proposal = await governingMemoryGate.requestWrite({
+        action: "CREATE",
+        proposedMemory: {
           category,
           text,
           key,
@@ -1334,13 +1807,22 @@ export function createHttpApp(): express.Application {
           deviceType: isLocal ? "desktop" : "android",
           clientMutationId,
         },
-        secContext,
-      );
+        reason: "Remote companion memory creation",
+        confidence: typeof confidence === "number" ? confidence : 0.85,
+        source: isLocal ? "system_generated" : "user_explicit",
+        userId: deviceId,
+        provenance: `device:${deviceId}`,
+        sessionId: req.authContext.sessionId,
+      } as any);
 
-      res.status(201).json(created);
+      res.status(202).json({
+        status: "pending_approval",
+        requestId: proposal.id,
+        message: "Proposal queued. Awaiting desktop operator confirmation.",
+      });
     } catch (e: any) {
       const msg = e.message || String(e);
-      if (msg.includes("DLP_SECRET_REJECTED")) {
+      if (msg.includes("DLP_SECRET_REJECTED") || msg.includes("PROMPT_INJECTION_BLOCKED")) {
         return res.status(422).json({ error: msg, blocked: true });
       }
       if (msg.includes("EMERGENCY_STOP_ACTIVE")) {
@@ -1354,15 +1836,15 @@ export function createHttpApp(): express.Application {
   });
 
   // GET /api/remote/memory/search — Search shared memories
-  app.get("/api/remote/memory/search", requireLocalhostOrPairedDevice, async (req: any, res) => {
+  app.get("/api/remote/memory/search", requireAuthenticatedClient, async (req: any, res) => {
     try {
-      const deviceId = req.remoteDevice?.id || "local_operator";
-      const role = req.remoteDevice?.role || "admin";
-      const isLocal = !req.remoteDevice;
+      const deviceId = req.authContext.identityId;
+      const role = req.authContext.role;
+      const isLocal = req.authContext.authType === "operator";
       const secContext = {
         identityId: deviceId,
-        role,
-        ipAddress: req.ip || req.socket?.remoteAddress || "127.0.0.1",
+        role: role as any,
+        ipAddress: req.authContext.ipAddress,
         deviceId,
         isLocal,
       };
@@ -1393,7 +1875,7 @@ export function createHttpApp(): express.Application {
         secContext,
       );
 
-      res.json(results);
+      res.json(filterSensitiveMemoriesForCaller(results, req.authContext));
     } catch (e: any) {
       const msg = e.message || String(e);
       if (msg.includes("EMERGENCY_STOP_ACTIVE")) {
@@ -1406,20 +1888,15 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  // PATCH /api/remote/memory/:id — Partial update with deterministic conflict resolution
-  app.patch("/api/remote/memory/:id", requireLocalhostOrPairedDevice, async (req: any, res) => {
+  // PATCH /api/remote/memory/:id — Partial update via governed proposal
+  app.patch("/api/remote/memory/:id", requireAuthenticatedClient, async (req: any, res) => {
     try {
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/remote/memory/:id"))) return;
+
       const { id } = req.params;
-      const deviceId = req.remoteDevice?.id || "local_operator";
-      const role = req.remoteDevice?.role || "admin";
-      const isLocal = !req.remoteDevice;
-      const secContext = {
-        identityId: deviceId,
-        role,
-        ipAddress: req.ip || req.socket?.remoteAddress || "127.0.0.1",
-        deviceId,
-        isLocal,
-      };
+      const deviceId = req.authContext.identityId;
+      const isLocal = req.authContext.authType === "operator";
 
       const {
         text,
@@ -1430,13 +1907,31 @@ export function createHttpApp(): express.Application {
         expiresAt,
         clientMutationId,
         clientVersion,
-        timestamp,
+        expectedVersion,
       } = req.body || {};
 
-      const { sharedMemoryManager } = await import("../memory/SharedMemoryManager.ts");
-      const result = await sharedMemoryManager.updateMemory(
-        id,
-        {
+      const { memoryManager } = await import("../memory/MemoryManager.ts");
+      const existing = await memoryManager.getMemory(id);
+      if (!existing) {
+        return res.status(404).json({ error: "Memory not found." });
+      }
+
+      const { isDlpClean } = await import("../memory/SharedMemoryManager.ts");
+      if ((text && !isDlpClean(String(text))) || (key && !isDlpClean(String(key)))) {
+        return res.status(422).json({ error: "DLP_SECRET_REJECTED: Secrets or credentials cannot be stored in shared memory.", blocked: true });
+      }
+
+      const { contentSanitizer } = await import("../security/ContentSanitizer.ts");
+      if (text && contentSanitizer.scanForPromptInjection(String(text)).hasInjectionAttempt) {
+        return res.status(422).json({ error: "PROMPT_INJECTION_BLOCKED: Memory content contains unsafe prompt-injection patterns.", blocked: true });
+      }
+
+      const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+      const proposal = await governingMemoryGate.requestWrite({
+        action: "UPDATE",
+        proposedMemory: {
+          id,
+          category: existing.category,
           text,
           key,
           importance,
@@ -1446,20 +1941,25 @@ export function createHttpApp(): express.Application {
           deviceId,
           deviceType: isLocal ? "desktop" : "android",
           clientMutationId,
-          clientVersion,
-          timestamp,
         },
-        secContext,
-      );
+        reason: "Remote companion memory update",
+        confidence: 0.85,
+        source: isLocal ? "system_generated" : "user_explicit",
+        userId: deviceId,
+        provenance: `device:${deviceId}`,
+        sessionId: req.authContext.sessionId,
+        expectedVersion: expectedVersion ?? clientVersion ?? existing.version,
+      } as any);
 
-      if (!result.success && result.error?.includes("not found")) {
-        return res.status(404).json({ error: result.error });
-      }
-
-      res.json(result);
+      res.status(202).json({
+        status: "pending_approval",
+        action: "UPDATE",
+        requestId: proposal.id,
+        message: "Update proposal queued. Awaiting desktop operator confirmation.",
+      });
     } catch (e: any) {
       const msg = e.message || String(e);
-      if (msg.includes("DLP_SECRET_REJECTED")) {
+      if (msg.includes("DLP_SECRET_REJECTED") || msg.includes("PROMPT_INJECTION_BLOCKED")) {
         return res.status(422).json({ error: msg, blocked: true });
       }
       if (msg.includes("EMERGENCY_STOP_ACTIVE")) {
@@ -1472,24 +1972,48 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  // DELETE /api/remote/memory/:id — Delete shared memory
-  app.delete("/api/remote/memory/:id", requireLocalhostOrPairedDevice, async (req: any, res) => {
+  // DELETE /api/remote/memory/:id — Governed delete proposal
+  app.delete("/api/remote/memory/:id", requireAuthenticatedClient, async (req: any, res) => {
     try {
-      const { id } = req.params;
-      const deviceId = req.remoteDevice?.id || "local_operator";
-      const role = req.remoteDevice?.role || "admin";
-      const isLocal = !req.remoteDevice;
-      const secContext = {
-        identityId: deviceId,
-        role,
-        ipAddress: req.ip || req.socket?.remoteAddress || "127.0.0.1",
-        deviceId,
-        isLocal,
-      };
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/remote/memory/:id"))) return;
 
-      const { sharedMemoryManager } = await import("../memory/SharedMemoryManager.ts");
-      const success = await sharedMemoryManager.deleteMemory(id, secContext);
-      res.json({ success });
+      const { id } = req.params;
+      const deviceId = req.authContext.identityId;
+      const isLocal = req.authContext.authType === "operator";
+
+      const { memoryManager } = await import("../memory/MemoryManager.ts");
+      const existing = await memoryManager.getMemory(id);
+      if (!existing) {
+        return res.status(404).json({ error: "Memory not found." });
+      }
+
+      const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+      const proposal = await governingMemoryGate.requestWrite({
+        action: "DELETE",
+        proposedMemory: {
+          id,
+          category: existing.category,
+          text: existing.text,
+          key: existing.key,
+          deviceId,
+          deviceType: isLocal ? "desktop" : "android",
+        },
+        reason: `Remote companion memory deletion for ${id}`,
+        confidence: 0.85,
+        source: isLocal ? "system_generated" : "user_explicit",
+        userId: deviceId,
+        provenance: `device:${deviceId}`,
+        sessionId: req.authContext.sessionId,
+        expectedVersion: req.body?.expectedVersion ?? existing.version,
+      } as any);
+
+      res.status(202).json({
+        status: "pending_approval",
+        action: "DELETE",
+        requestId: proposal.id,
+        message: "Deletion proposal queued. Awaiting desktop operator confirmation.",
+      });
     } catch (e: any) {
       const msg = e.message || String(e);
       if (msg.includes("EMERGENCY_STOP_ACTIVE")) {
@@ -1502,39 +2026,91 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  // POST /api/remote/memory/sync — Batch offline sync with deterministic conflict resolution
-  app.post("/api/remote/memory/sync", requireLocalhostOrPairedDevice, async (req: any, res) => {
+  // POST /api/remote/memory/sync — Batch offline sync with DLP, injection, ES, Lockdown & category binding
+  app.post("/api/remote/memory/sync", requireAuthenticatedClient, async (req: any, res) => {
     try {
-      const deviceId = req.remoteDevice?.id || req.body?.deviceId || "local_operator";
-      const role = req.remoteDevice?.role || "admin";
-      const isLocal = !req.remoteDevice;
-      const secContext = {
-        identityId: deviceId,
-        role,
-        ipAddress: req.ip || req.socket?.remoteAddress || "127.0.0.1",
-        deviceId,
-        isLocal,
-      };
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/remote/memory/sync"))) return;
 
-      const { mutations, lastSyncTimestamp } = req.body || {};
+      // Never trust client-supplied deviceId for actor attribution
+      const deviceId = req.authContext.identityId;
+      const isLocal = req.authContext.authType === "operator";
+
+      const { mutations } = req.body || {};
       if (!Array.isArray(mutations)) {
         return res.status(400).json({ error: "Required 'mutations' array parameter missing." });
       }
 
-      const { sharedMemoryManager } = await import("../memory/SharedMemoryManager.ts");
-      const syncResult = await sharedMemoryManager.syncBatch(
-        {
-          deviceId,
-          deviceType: isLocal ? "desktop" : "android",
-          mutations,
-          lastSyncTimestamp,
-        },
-        secContext,
-      );
+      const { isDlpClean } = await import("../memory/SharedMemoryManager.ts");
+      const { contentSanitizer } = await import("../security/ContentSanitizer.ts");
+      const { memoryManager } = await import("../memory/MemoryManager.ts");
+      const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
 
-      res.json(syncResult);
+      // Pre-validate every mutation for DLP and prompt injection before queueing any
+      for (const mut of mutations) {
+        const mutText = mut?.mutation?.text ?? mut?.data?.text;
+        const mutKey = mut?.mutation?.key ?? mut?.data?.key;
+        if ((mutText && !isDlpClean(String(mutText))) || (mutKey && !isDlpClean(String(mutKey)))) {
+          return res.status(422).json({
+            error: "DLP_SECRET_REJECTED: Batch sync contains secret or credential material.",
+            blocked: true,
+          });
+        }
+        if (mutText && contentSanitizer.scanForPromptInjection(String(mutText)).hasInjectionAttempt) {
+          return res.status(422).json({
+            error: "PROMPT_INJECTION_BLOCKED: Batch sync contains unsafe prompt-injection patterns.",
+            blocked: true,
+          });
+        }
+      }
+
+      const proposals = [];
+      for (const mut of mutations) {
+        const mutType = String(mut.type || mut.mutationType || "create").toLowerCase();
+        const action = mutType === "delete" ? "DELETE" : mutType === "update" ? "UPDATE" : "CREATE";
+        const mutPayload = mut.mutation || mut.data || {};
+        let existingCategory = mutPayload.category;
+        let expectedVersion = mut.expectedVersion ?? mut.clientVersion;
+
+        if ((action === "UPDATE" || action === "DELETE") && mut.memoryId) {
+          const existing = await memoryManager.getMemory(mut.memoryId);
+          if (existing) {
+            existingCategory = existing.category;
+            if (expectedVersion === undefined) expectedVersion = existing.version;
+          }
+        }
+
+        const proposal = await governingMemoryGate.requestWrite({
+          action: action,
+          proposedMemory: {
+            id: mut.memoryId,
+            ...mutPayload,
+            ...(existingCategory ? { category: existingCategory } : {}),
+            deviceId,
+            deviceType: isLocal ? "desktop" : "android",
+          },
+          reason: `Batch sync offline mutation (${action})`,
+          confidence: 0.85,
+          source: isLocal ? "system_generated" : "user_explicit",
+          userId: deviceId,
+          provenance: `sync:${deviceId}`,
+          sessionId: req.authContext.sessionId,
+          expectedVersion,
+        } as any);
+        proposals.push(proposal.id);
+      }
+
+      res.status(202).json({
+        status: "pending_approval",
+        queuedCount: proposals.length,
+        requestIds: proposals,
+        message: "Batch sync proposals queued for desktop operator confirmation.",
+      });
     } catch (e: any) {
       const msg = e.message || String(e);
+      if (msg.includes("DLP_SECRET_REJECTED") || msg.includes("PROMPT_INJECTION_BLOCKED")) {
+        return res.status(422).json({ error: msg, blocked: true });
+      }
       if (msg.includes("EMERGENCY_STOP_ACTIVE")) {
         return res.status(503).json({ error: msg, blocked: true });
       }
@@ -2020,6 +2596,10 @@ export function createHttpApp(): express.Application {
       };
 
       const { mobileWorkflowManager } = await import("../workflow/MobileWorkflowManager.ts");
+      const workflowProjectOptions =
+        req.body?.projectId !== undefined && req.body?.projectId !== null
+          ? { projectId: req.body.projectId }
+          : undefined;
       const result = await mobileWorkflowManager.executeVoiceWorkflow(
         {
           query: req.body?.query || req.body?.prompt || "",
@@ -2029,9 +2609,17 @@ export function createHttpApp(): express.Application {
           clientContext: req.body?.clientContext,
         },
         secContext,
+        workflowProjectOptions,
       );
 
       if (!result.success && result.errorCode) {
+        if (
+          result.errorCode === "SECURITY_VIOLATION" &&
+          typeof result.error === "string" &&
+          result.error.startsWith("PERMISSION_DENIED:")
+        ) {
+          return res.status(403).json(result);
+        }
         if (result.errorCode === "SECURITY_VIOLATION" || result.errorCode === "INVALID_QUERY") {
           return res.status(400).json(result);
         }
@@ -2847,6 +3435,61 @@ export function createHttpApp(): express.Application {
   app.get("/health", healthHandler);
   app.get("/api/health", healthHandler);
 
+  // ── Liveness & Readiness Endpoints (Unauthenticated, Safe, Read-Only) ────
+  app.get("/health/liveness", (_req, res) => {
+    res.json(runtimeHealthMonitor.getLiveness());
+  });
+  app.get("/api/health/live", (_req, res) => {
+    res.json(runtimeHealthMonitor.getLiveness());
+  });
+
+  app.get("/health/readiness", async (_req, res) => {
+    try {
+      const readiness = await runtimeHealthMonitor.getReadiness();
+      const code = readiness.status === "not_ready" ? 503 : 200;
+      res.status(code).json(readiness);
+    } catch (e: any) {
+      res.status(500).json({ ready: false, status: "not_ready", error: sanitizeError(e?.message || e) });
+    }
+  });
+  app.get("/api/health/ready", async (_req, res) => {
+    try {
+      const readiness = await runtimeHealthMonitor.getReadiness();
+      const code = readiness.status === "not_ready" ? 503 : 200;
+      res.status(code).json(readiness);
+    } catch (e: any) {
+      res.status(500).json({ ready: false, status: "not_ready", error: sanitizeError(e?.message || e) });
+    }
+  });
+
+  // ── Operator Diagnostic Endpoints (Strictly Authenticated / Localhost) ──
+  app.get("/api/diagnostics/metrics", requireLocalhost, async (_req, res) => {
+    try {
+      res.json({ ok: true, metrics: runtimeMetrics.getMetricsSummary() });
+    } catch (e: any) {
+      res.status(500).json({ error: sanitizeError(e?.message || e) });
+    }
+  });
+
+  app.get("/api/diagnostics/health", requireLocalhost, async (_req, res) => {
+    try {
+      const detailed = await runtimeHealthMonitor.getComponentHealth();
+      res.json({ ok: true, health: detailed });
+    } catch (e: any) {
+      res.status(500).json({ error: sanitizeError(e?.message || e) });
+    }
+  });
+
+  app.get("/api/diagnostics/events", requireLocalhost, async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string, 10) || 50;
+      const events = boundedLogStore.getRecentEvents(limit);
+      res.json({ ok: true, count: events.length, events });
+    } catch (e: any) {
+      res.status(500).json({ error: sanitizeError(e?.message || e) });
+    }
+  });
+
   // ── Agent health proxy ─────────────────────────────────────────────────
   app.get("/api/agent-health", async (_req, res) => {
     try {
@@ -3321,7 +3964,51 @@ export function createHttpApp(): express.Application {
         }
       }
 
-      const topSlice = videoList.slice(0, 15);
+      // Fast embeddability verification using YouTube oEmbed
+      // Automatically identifies and filters out videos with disabled external playback (Error 150/101)
+      let verifiedList = videoList;
+      if (videoList.length > 0) {
+        try {
+          const candidateSlice = videoList.slice(0, 20);
+          const checks = await Promise.allSettled(
+            candidateSlice.map(async (v) => {
+              try {
+                const checkRes = await fetch(
+                  `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${v.videoId}&format=json`,
+                  { signal: AbortSignal.timeout(1200) }
+                );
+                return { videoId: v.videoId, embeddable: checkRes.ok };
+              } catch {
+                return { videoId: v.videoId, embeddable: true };
+              }
+            })
+          );
+
+          const statusMap = new Map<string, boolean>();
+          for (const c of checks) {
+            if (c.status === "fulfilled") {
+              statusMap.set(c.value.videoId, c.value.embeddable);
+            }
+          }
+
+          const embeddableVideos = videoList.filter(
+            (v) => statusMap.get(v.videoId) !== false
+          );
+          if (embeddableVideos.length >= 3) {
+            verifiedList = embeddableVideos;
+          } else {
+            verifiedList = [...videoList].sort((a, b) => {
+              const aOk = statusMap.get(a.videoId) !== false ? 1 : 0;
+              const bOk = statusMap.get(b.videoId) !== false ? 1 : 0;
+              return bOk - aOk;
+            });
+          }
+        } catch {
+          // Best-effort fallback if oembed network check fails
+        }
+      }
+
+      const topSlice = verifiedList.slice(0, 15);
       if (topSlice.length > 0) {
         try {
           const { actionContextManager, intentResolver } = await import("../orchestrator/index.ts");
@@ -3346,7 +4033,7 @@ export function createHttpApp(): express.Application {
         }
       }
 
-      res.setHeader("Cache-Control", "public, max-age=60");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
       res.status(200).json({ results: topSlice });
     } catch (err: any) {
       console.error("[YouTube Search Error]:", err.message);
@@ -3890,36 +4577,72 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  // POST /api/security/step-up/request — Request step-up challenge PIN for sensitive action
-  app.post("/api/security/step-up/request", async (req, res) => {
+  // POST /api/security/step-up/request — Authenticated localhost operator step-up request (FINDING-AUD-03)
+  // NEVER returns plaintext PIN in HTTP response; binds strictly to authenticated operator session.
+  app.post("/api/security/step-up/request", requireLocalhost, requireOperatorSessionMiddleware, async (req: any, res) => {
     try {
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/security/step-up/request"))) return;
+
       const { sessionId, action } = req.body || {};
-      if (!sessionId || !action) {
-        res.status(400).json({ error: "Missing required 'sessionId' or 'action'." });
+      const authenticatedSessionId = req.operatorSession.sessionId;
+      if (!action || typeof action !== "string") {
+        res.status(400).json({ error: "Missing required 'action'." });
         return;
       }
+      if (sessionId && sessionId !== authenticatedSessionId) {
+        res.status(403).json({ error: "FORBIDDEN: Cannot request step-up challenge for another session." });
+        return;
+      }
+
       const { identityAuthManager } = await import("../security/IdentityAuthManager.ts");
-      const challenge = identityAuthManager.requestStepUpChallenge(sessionId, action);
-      res.status(200).json({ success: true, ...challenge });
+      const challenge = identityAuthManager.requestStepUpChallenge(authenticatedSessionId, action);
+      registerStepUpChallengeOwner(
+        challenge.challengeId,
+        authenticatedSessionId,
+        new Date(challenge.expiresAt).getTime(),
+      );
+
+      // SECURITY: Never include plaintext PIN in the HTTP response body!
+      res.status(200).json({
+        success: true,
+        challengeId: challenge.challengeId,
+        expiresAt: challenge.expiresAt,
+        delivery: "local_operator_console",
+      });
     } catch (err: any) {
       res.status(400).json({ error: sanitizeError(err?.message || "Failed to request step-up challenge.") });
     }
   });
 
-  // POST /api/security/step-up/verify — Verify step-up challenge PIN
-  app.post("/api/security/step-up/verify", async (req, res) => {
+  // POST /api/security/step-up/verify — Authenticated localhost operator step-up verify (FINDING-AUD-03)
+  app.post("/api/security/step-up/verify", requireLocalhost, requireOperatorSessionMiddleware, async (req: any, res) => {
     try {
+      if (!assertWriteRoleAllowed(req, res)) return;
+
       const { challengeId, pin } = req.body || {};
       if (!challengeId || !pin) {
         res.status(400).json({ error: "Missing required 'challengeId' or 'pin'." });
         return;
       }
+
+      const authenticatedSessionId = req.operatorSession.sessionId;
+      const ownerRecord = _stepUpChallengeOwners.get(String(challengeId));
+      if (ownerRecord && ownerRecord.sessionId !== authenticatedSessionId) {
+        res.status(403).json({
+          success: false,
+          error: "STEP_UP_SESSION_MISMATCH: Cannot verify a step-up challenge belonging to another session.",
+        });
+        return;
+      }
+
       const { identityAuthManager } = await import("../security/IdentityAuthManager.ts");
-      const ok = identityAuthManager.verifyStepUpChallenge(challengeId, pin);
+      const ok = identityAuthManager.verifyStepUpChallenge(String(challengeId), String(pin));
       if (!ok) {
         res.status(403).json({ success: false, error: "STEP_UP_FAILED: Invalid or expired PIN." });
         return;
       }
+      _stepUpChallengeOwners.delete(String(challengeId));
       res.status(200).json({ success: true, verified: true });
     } catch (err: any) {
       res.status(400).json({ error: sanitizeError(err?.message || "Failed to verify step-up PIN.") });
@@ -4566,11 +5289,14 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  app.post("/api/ux/memory", async (req, res) => {
+  app.post("/api/ux/memory", requireAuthenticatedClient, async (req: any, res) => {
     try {
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/ux/memory"))) return;
+
       const {
         action = "save",
-        deviceId = DEFAULT_MOBILE_UX_ID,
+        deviceId: requestedDeviceId = DEFAULT_MOBILE_UX_ID,
         productType = "MYRAA_MOBILE",
         accountId,
         scope = "SHARED",
@@ -4579,90 +5305,64 @@ export function createHttpApp(): express.Application {
         value,
         category,
       } = req.body || {};
-      const {
-        productionUxController,
-        sharedAccountMemoryManager,
-      } = await import("../device/index.ts");
 
-      const currentState = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
-      const effectiveAccountId =
-        accountId !== undefined
-          ? accountId
-          : productType === "MYRAA_DESKTOP"
-            ? currentState.desktop.memoryView.accountId
-            : currentState.mobile.memoryView.accountId;
-
-      if (action === "queue_offline") {
-        if (!effectiveAccountId) {
-          res.status(400).json({ error: "Sign into a MYRAA Account before queueing shared offline mutations." });
-          return;
-        }
-        sharedAccountMemoryManager.setDeviceOnline(effectiveAccountId, deviceId, false);
-        const queued = sharedAccountMemoryManager.writeSharedMemory({
-          accountId: effectiveAccountId,
-          deviceId,
-          key: String(key || "offline_item"),
-          content: String(value ?? "Offline mutation value"),
-          category: category || "general",
+      // Enforce DLP and prompt-injection screening on UX memory payloads
+      const serializedVal = typeof value === "string" ? value : JSON.stringify(value ?? "");
+      const { isDlpClean } = await import("../memory/SharedMemoryManager.ts");
+      if ((key && !isDlpClean(String(key))) || !isDlpClean(serializedVal)) {
+        return res.status(422).json({
+          error: "DLP_SECRET_REJECTED: Secrets or credentials cannot be stored in UX memory.",
+          blocked: true,
         });
-        const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
-        res.status(200).json({ ...snap, mutationResult: queued });
-        return;
+      }
+      const { contentSanitizer } = await import("../security/ContentSanitizer.ts");
+      if (contentSanitizer.scanForPromptInjection(serializedVal).hasInjectionAttempt) {
+        return res.status(422).json({
+          error: "PROMPT_INJECTION_BLOCKED: UX memory payload contains unsafe prompt-injection patterns.",
+          blocked: true,
+        });
       }
 
-      if (action === "sync_offline") {
-        if (!effectiveAccountId) {
-          res.status(400).json({ error: "Sign into a MYRAA Account before syncing offline queue." });
-          return;
-        }
-        const synced = sharedAccountMemoryManager.reconnectAndSync({
-          accountId: effectiveAccountId,
-          deviceId,
-        });
-        const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
-        res.status(200).json({ ...snap, syncResult: synced });
-        return;
-      }
+      // Bind deviceId strictly for non-operator paired devices
+      const deviceId =
+        req.authContext.authType === "remote_device"
+          ? req.authContext.deviceId || req.authContext.identityId
+          : requestedDeviceId;
 
-      if (domain === "PREFERENCE" && scope === "SHARED" && effectiveAccountId) {
-        const prefRes = sharedAccountMemoryManager.setSharedPreference({
-          accountId: effectiveAccountId,
-          deviceId,
-          key: String(key || "preference_key"),
-          value,
-        });
-        const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
-        res.status(200).json({ ...snap, memoryResult: prefRes });
-        return;
-      }
+      // Also enqueue a governed memory write proposal for permanent storage tracking
+      const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+      const proposal = await governingMemoryGate.requestWrite({
+        action: "CREATE",
+        proposedMemory: {
+          category: (category as any) || "fact",
+          key: key ? String(key) : undefined,
+          text: `${String(key || domain)}: ${serializedVal}`,
+        },
+        reason: `UX memory ${action} proposal`,
+        confidence: 0.85,
+        source: "user_explicit",
+        userId: req.authContext.identityId,
+        provenance: `HttpGateway.POST /api/ux/memory:${deviceId}`,
+        sessionId: req.authContext.sessionId,
+      } as any);
 
-      if (domain === "TASK" && scope === "SHARED" && effectiveAccountId) {
-        const taskRes = sharedAccountMemoryManager.upsertSharedTask({
-          accountId: effectiveAccountId,
-          deviceId,
-          taskKey: String(key || "shared_task"),
-          task: { title: String(value || key || "Shared Task") },
-          status: "pending",
-        });
-        const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
-        res.status(200).json({ ...snap, memoryResult: taskRes });
-        return;
-      }
-
-      const saveRes = productionUxController.saveMemoryFromUx({
+      res.status(202).json({
+        status: "pending_approval",
+        requestId: proposal.id,
         deviceId,
-        productType,
-        accountId: effectiveAccountId,
+        accountId: accountId ?? null,
         scope,
-        key: String(key || ""),
-        value,
-        category,
+        domain,
+        message: "UX memory mutation queued for operator approval.",
       });
-
-      const snap = await buildUxSnapshot(DEFAULT_MOBILE_UX_ID, DEFAULT_DESKTOP_UX_ID);
-      res.status(200).json({ ...snap, memoryResult: saveRes });
     } catch (err: any) {
-      res.status(400).json({ error: sanitizeError(err?.message || "Memory operation failed.") });
+      const msg = err?.message || "Memory operation failed.";
+      if (msg.includes("DLP_SECRET_REJECTED") || msg.includes("PROMPT_INJECTION_BLOCKED")) {
+        return res.status(422).json({ error: msg, blocked: true });
+      }
+      if (msg.includes("EMERGENCY_STOP_ACTIVE")) return res.status(503).json({ error: msg, blocked: true });
+      if (msg.includes("SECURITY_LOCKDOWN_ACTIVE")) return res.status(423).json({ error: msg, blocked: true });
+      res.status(400).json({ error: sanitizeError(msg) });
     }
   });
 
@@ -5248,18 +5948,162 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  app.post("/api/intelligence/context", async (req, res) => {
+  app.post("/api/intelligence/context", requireAuthenticatedClient, async (req: any, res) => {
+    const authCtx = req.authContext as AuthenticatedHttpContext;
+    const { securityAuditLogger } = await import("../security/SecurityAuditLogger.ts");
+    const logReject = (reason: string, status: number, error: string) => {
+      securityAuditLogger.logEvent({
+        eventType: "TOOL_BLOCKED",
+        actor: {
+          identityId: authCtx.identityId,
+          role: authCtx.role as any,
+          ipAddress: authCtx.ipAddress,
+          sessionId: authCtx.sessionId,
+          deviceId: authCtx.deviceId,
+        },
+        target: { resource: "/api/intelligence/context" },
+        decision: "BLOCK",
+        reason,
+        riskLevel: status === 403 ? "HIGH" : "MEDIUM",
+      });
+      res.status(status).json({ error });
+    };
+
     try {
-      const { contextId, file, app: appName, website, preferences } = req.body || {};
-      const cid = contextId || "default";
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, authCtx.identityId, "/api/intelligence/context"))) return;
+
+      const body = req.body;
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return logReject("INVALID_INTELLIGENCE_CONTEXT: Request body must be a JSON object.", 400, "INVALID_INTELLIGENCE_CONTEXT: Request body must be a JSON object.");
+      }
+
+      const ALLOWED_TOP_KEYS = new Set(["contextId", "file", "app", "website", "preferences"]);
+      const dangerousKeys = ["__proto__", "constructor", "prototype"];
+      for (const dk of dangerousKeys) {
+        if (Object.prototype.hasOwnProperty.call(body, dk)) {
+          return logReject(`INVALID_INTELLIGENCE_CONTEXT: Forbidden key '${dk}'.`, 400, `INVALID_INTELLIGENCE_CONTEXT: Forbidden key '${dk}' detected.`);
+        }
+      }
+      for (const k of Object.keys(body)) {
+        if (!ALLOWED_TOP_KEYS.has(k)) {
+          return logReject(`INVALID_INTELLIGENCE_CONTEXT: Unexpected key '${k}'.`, 400, `INVALID_INTELLIGENCE_CONTEXT: Unexpected property '${k}'.`);
+        }
+      }
+
+      const { contextId, file, app: appName, website, preferences } = body;
+      if (contextId !== undefined) {
+        if (typeof contextId !== "string" || !/^[a-zA-Z0-9_.:-]{1,64}$/.test(contextId)) {
+          return logReject("INVALID_INTELLIGENCE_CONTEXT: Invalid contextId.", 400, "INVALID_INTELLIGENCE_CONTEXT: 'contextId' must be 1-64 safe characters.");
+        }
+        // Prevent remote devices from overwriting another user's context
+        if (
+          authCtx.authType === "remote_device" &&
+          contextId !== authCtx.identityId &&
+          contextId !== authCtx.deviceId
+        ) {
+          return logReject(
+            `UNAUTHORIZED_CONTEXT_TARGET: Device '${authCtx.identityId}' cannot mutate context '${contextId}'.`,
+            403,
+            "UNAUTHORIZED_CONTEXT_TARGET: Remote clients may only update their own contextId.",
+          );
+        }
+      }
+
+      const { isDlpClean } = await import("../memory/SharedMemoryManager.ts");
+      const { contentSanitizer } = await import("../security/ContentSanitizer.ts");
+      for (const [fieldName, fieldVal] of [
+        ["file", file],
+        ["app", appName],
+        ["website", website],
+      ] as const) {
+        if (fieldVal !== undefined) {
+          if (typeof fieldVal !== "string" || fieldVal.length > 512) {
+            return logReject(`INVALID_INTELLIGENCE_CONTEXT: '${fieldName}' must be a string <= 512 chars.`, 400, `INVALID_INTELLIGENCE_CONTEXT: '${fieldName}' must be a string <= 512 chars.`);
+          }
+          if (!isDlpClean(fieldVal) || contentSanitizer.scanForPromptInjection(fieldVal, { source: "intelligence_context" }).hasInjectionAttempt) {
+            return logReject(`INVALID_INTELLIGENCE_CONTEXT: Unsafe content in '${fieldName}'.`, 422, `INVALID_INTELLIGENCE_CONTEXT: '${fieldName}' contains disallowed secret or injection content.`);
+          }
+        }
+      }
+
+      const cid =
+        contextId ||
+        (authCtx.authType === "remote_device" ? authCtx.identityId : "default");
       const { contextFusionEngine, userPreferenceResolver } = await import("../intelligence/index.ts");
+
+      if (preferences !== undefined) {
+        if (!preferences || typeof preferences !== "object" || Array.isArray(preferences)) {
+          return logReject("INVALID_PREFERENCES: 'preferences' must be a JSON object.", 400, "INVALID_PREFERENCES: 'preferences' must be a JSON object.");
+        }
+        // Protected security preference `autoConfirmLowRisk` is never mutable via /api/intelligence/context
+        if (Object.prototype.hasOwnProperty.call(preferences, "autoConfirmLowRisk")) {
+          return logReject(
+            "PROTECTED_PREFERENCE: Attempted mutation of 'autoConfirmLowRisk' via /api/intelligence/context.",
+            403,
+            "PROTECTED_PREFERENCE: 'autoConfirmLowRisk' cannot be modified through /api/intelligence/context.",
+          );
+        }
+        // `preferredWorkspace` requires authorized local admin operator preference flow
+        if (Object.prototype.hasOwnProperty.call(preferences, "preferredWorkspace")) {
+          const isAuthorizedLocalAdmin =
+            authCtx.authType === "operator" && authCtx.isLocal && authCtx.role === "admin";
+          if (!isAuthorizedLocalAdmin) {
+            return logReject(
+              "PROTECTED_PREFERENCE: Unauthorized mutation of 'preferredWorkspace' via /api/intelligence/context.",
+              403,
+              "PROTECTED_PREFERENCE: 'preferredWorkspace' may only be updated by an authorized local admin operator.",
+            );
+          }
+        }
+
+        // Validate preference strings for DLP & prompt injection
+        for (const [pk, pv] of Object.entries(preferences)) {
+          if (typeof pv === "string") {
+            if (!isDlpClean(pv) || contentSanitizer.scanForPromptInjection(pv, { source: `pref_${pk}` }).hasInjectionAttempt) {
+              return logReject(`INVALID_PREFERENCES: Unsafe value for '${pk}'.`, 422, `INVALID_PREFERENCES: Preference '${pk}' contains disallowed secret or injection content.`);
+            }
+          }
+        }
+
+        try {
+          userPreferenceResolver.updatePreferencesWithProvenance(cid, preferences, {
+            source: authCtx.authType === "operator" ? "operator" : "api",
+            actorId: authCtx.identityId,
+            role: authCtx.role,
+            isLocal: authCtx.isLocal,
+            isStepUpAuthenticated: authCtx.isStepUpAuthenticated,
+          });
+        } catch (prefErr: any) {
+          const msg = prefErr?.message || "Invalid preferences";
+          const status = msg.includes("PROTECTED_PREFERENCE") ? 403 : 400;
+          return logReject(msg, status, msg);
+        }
+      }
 
       if (file !== undefined) contextFusionEngine.setCurrentFile(cid, file);
       if (appName !== undefined) contextFusionEngine.setCurrentApplication(cid, appName);
       if (website !== undefined) contextFusionEngine.setCurrentWebsite(cid, website);
-      if (preferences && typeof preferences === "object") {
-        userPreferenceResolver.updatePreferences(cid, preferences);
-      }
+
+      securityAuditLogger.logEvent({
+        eventType: "TOOL_CONFIRMED",
+        actor: {
+          identityId: authCtx.identityId,
+          role: authCtx.role as any,
+          ipAddress: authCtx.ipAddress,
+          sessionId: authCtx.sessionId,
+          deviceId: authCtx.deviceId,
+        },
+        target: { resource: "/api/intelligence/context" },
+        decision: "ALLOW",
+        reason: `INTELLIGENCE_CONTEXT_UPDATED: Context '${cid}' updated by '${authCtx.identityId}'.`,
+        riskLevel: "LOW",
+        metadata: {
+          contextId: cid,
+          updatedFields: Object.keys(body),
+          preferenceKeys: preferences ? Object.keys(preferences) : [],
+        },
+      });
 
       const fused = contextFusionEngine.fuseContext(cid);
       res.status(200).json({ ok: true, context: fused });
@@ -5312,23 +6156,67 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  // ── Phase 18 — Adaptive Personal Brain REST Endpoints ────────────────────
-  app.post("/api/brain/learn", async (req, res) => {
+  // ── Phase 18 — Adaptive Personal Brain REST Endpoints (secured FINDING-AUD-03) ──
+  app.post("/api/brain/learn", requireAuthenticatedClient, async (req: any, res) => {
     try {
-      const { utterance, contextId } = req.body || {};
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/brain/learn"))) return;
+
+      const { utterance } = req.body || {};
       if (!utterance || typeof utterance !== "string") {
         res.status(400).json({ error: "Missing required string 'utterance'" });
         return;
       }
-      const { cognitiveLearningCoordinator } = await import("../brain/index.ts");
-      const result = await cognitiveLearningCoordinator.processUserInput(utterance, contextId || "default");
-      res.status(200).json({ ok: true, result });
+
+      const { isDlpClean } = await import("../memory/SharedMemoryManager.ts");
+      if (!isDlpClean(utterance)) {
+        return res.status(422).json({
+          error: "DLP_SECRET_REJECTED: Secrets or credentials cannot be stored via brain learning.",
+          blocked: true,
+        });
+      }
+      const { contentSanitizer } = await import("../security/ContentSanitizer.ts");
+      if (contentSanitizer.scanForPromptInjection(utterance).hasInjectionAttempt) {
+        return res.status(422).json({
+          error: "PROMPT_INJECTION_BLOCKED: Utterance contains unsafe prompt-injection patterns.",
+          blocked: true,
+        });
+      }
+
+      const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+      const proposal = await governingMemoryGate.requestWrite({
+        action: "CREATE",
+        proposedMemory: {
+          category: "preference",
+          text: utterance.trim(),
+          source: "user_explicit",
+        },
+        reason: "Adaptive brain learning proposal",
+        confidence: 0.8,
+        source: "user_explicit",
+        userId: req.authContext.identityId,
+        provenance: "HttpGateway.POST /api/brain/learn",
+        sessionId: req.authContext.sessionId,
+      } as any);
+
+      res.status(202).json({
+        ok: true,
+        status: "pending_approval",
+        requestId: proposal.id,
+        message: "Brain learning proposal queued. Awaiting operator confirmation.",
+      });
     } catch (err: any) {
-      res.status(500).json({ error: sanitizeError(err?.message || "Brain learning processing failed") });
+      const msg = err?.message || "Brain learning processing failed";
+      if (msg.includes("DLP_SECRET_REJECTED") || msg.includes("PROMPT_INJECTION_BLOCKED")) {
+        return res.status(422).json({ error: msg, blocked: true });
+      }
+      if (msg.includes("EMERGENCY_STOP_ACTIVE")) return res.status(503).json({ error: msg, blocked: true });
+      if (msg.includes("SECURITY_LOCKDOWN_ACTIVE")) return res.status(423).json({ error: msg, blocked: true });
+      res.status(500).json({ error: sanitizeError(msg) });
     }
   });
 
-  app.get("/api/brain/preferences", async (req, res) => {
+  app.get("/api/brain/preferences", requireAuthenticatedClient, async (req, res) => {
     try {
       const category = req.query.category as any;
       const status = req.query.status as any;
@@ -5346,7 +6234,7 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  app.get("/api/brain/prompt", async (_req, res) => {
+  app.get("/api/brain/prompt", requireAuthenticatedClient, async (_req, res) => {
     try {
       const { cognitiveLearningCoordinator } = await import("../brain/index.ts");
       const prompt = await cognitiveLearningCoordinator.getAdaptivePrompt();
@@ -5356,7 +6244,7 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  app.get("/api/brain/patterns", async (req, res) => {
+  app.get("/api/brain/patterns", requireAuthenticatedClient, async (req, res) => {
     try {
       const minFreq = req.query.minFrequency ? parseInt(req.query.minFrequency as string, 10) : 3;
       const { cognitiveLearningCoordinator } = await import("../brain/index.ts");
@@ -5367,29 +6255,108 @@ export function createHttpApp(): express.Application {
     }
   });
 
-  app.post("/api/brain/feedback", async (req, res) => {
+  app.post("/api/brain/feedback", requireAuthenticatedClient, async (req: any, res) => {
     try {
-      const { text, contextId } = req.body || {};
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/brain/feedback"))) return;
+
+      const { text } = req.body || {};
       if (!text || typeof text !== "string") {
         res.status(400).json({ error: "Missing required string 'text'" });
         return;
       }
-      const { cognitiveLearningCoordinator } = await import("../brain/index.ts");
-      const result = await cognitiveLearningCoordinator.processUserInput(text, contextId || "default");
-      res.status(200).json({ ok: true, feedbackReceived: true, result });
+
+      const { isDlpClean } = await import("../memory/SharedMemoryManager.ts");
+      if (!isDlpClean(text)) {
+        return res.status(422).json({
+          error: "DLP_SECRET_REJECTED: Secrets or credentials cannot be stored via brain feedback.",
+          blocked: true,
+        });
+      }
+      const { contentSanitizer } = await import("../security/ContentSanitizer.ts");
+      if (contentSanitizer.scanForPromptInjection(text).hasInjectionAttempt) {
+        return res.status(422).json({
+          error: "PROMPT_INJECTION_BLOCKED: Feedback contains unsafe prompt-injection patterns.",
+          blocked: true,
+        });
+      }
+
+      const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+      const proposal = await governingMemoryGate.requestWrite({
+        action: "CREATE",
+        proposedMemory: {
+          category: "preference",
+          text: text.trim(),
+          source: "user_explicit",
+        },
+        reason: "Adaptive brain feedback proposal",
+        confidence: 0.8,
+        source: "user_explicit",
+        userId: req.authContext.identityId,
+        provenance: "HttpGateway.POST /api/brain/feedback",
+        sessionId: req.authContext.sessionId,
+      } as any);
+
+      res.status(202).json({
+        ok: true,
+        status: "pending_approval",
+        feedbackReceived: true,
+        requestId: proposal.id,
+        message: "Brain feedback proposal queued. Awaiting operator confirmation.",
+      });
     } catch (err: any) {
-      res.status(500).json({ error: sanitizeError(err?.message || "Feedback processing failed") });
+      const msg = err?.message || "Feedback processing failed";
+      if (msg.includes("DLP_SECRET_REJECTED") || msg.includes("PROMPT_INJECTION_BLOCKED")) {
+        return res.status(422).json({ error: msg, blocked: true });
+      }
+      if (msg.includes("EMERGENCY_STOP_ACTIVE")) return res.status(503).json({ error: msg, blocked: true });
+      if (msg.includes("SECURITY_LOCKDOWN_ACTIVE")) return res.status(423).json({ error: msg, blocked: true });
+      res.status(500).json({ error: sanitizeError(msg) });
     }
   });
 
-  app.delete("/api/brain/preferences/:id", async (req, res) => {
+  app.delete("/api/brain/preferences/:id", requireAuthenticatedClient, async (req: any, res) => {
     try {
+      if (!assertWriteRoleAllowed(req, res)) return;
+      if (!(await assertSystemNotHalted(res, req.authContext.identityId, "/api/brain/preferences/:id"))) return;
+
       const { id } = req.params;
-      const { cognitiveLearningCoordinator } = await import("../brain/index.ts");
-      const deleted = await cognitiveLearningCoordinator.deletePreference(id);
-      res.status(200).json({ ok: true, deleted });
+      const { cognitiveMemoryStore } = await import("../brain/CognitiveMemoryStore.ts");
+      const existing = await cognitiveMemoryStore.getMemory(id);
+      if (!existing) {
+        res.status(404).json({ ok: false, error: "Cognitive preference not found." });
+        return;
+      }
+
+      const { governingMemoryGate } = await import("../companion/GoverningMemoryGate.ts");
+      const proposal = await governingMemoryGate.requestWrite({
+        action: "DELETE",
+        proposedMemory: {
+          id,
+          category: "preference",
+          key: existing.key,
+          text: `${existing.key}: ${typeof existing.value === "string" ? existing.value : JSON.stringify(existing.value)}`,
+        },
+        reason: `Governed cognitive preference deletion for '${id}'`,
+        confidence: 0.85,
+        source: "user_explicit",
+        userId: req.authContext.identityId,
+        provenance: "HttpGateway.DELETE /api/brain/preferences/:id",
+        sessionId: req.authContext.sessionId,
+      } as any);
+
+      res.status(202).json({
+        ok: true,
+        status: "pending_approval",
+        action: "DELETE",
+        requestId: proposal.id,
+        message: "Cognitive preference deletion proposal queued. Awaiting operator confirmation.",
+      });
     } catch (err: any) {
-      res.status(500).json({ error: sanitizeError(err?.message || "Failed to delete cognitive preference") });
+      const msg = err?.message || "Failed to delete cognitive preference";
+      if (msg.includes("EMERGENCY_STOP_ACTIVE")) return res.status(503).json({ error: msg, blocked: true });
+      if (msg.includes("SECURITY_LOCKDOWN_ACTIVE")) return res.status(423).json({ error: msg, blocked: true });
+      res.status(500).json({ error: sanitizeError(msg) });
     }
   });
 
@@ -5777,6 +6744,765 @@ export function createHttpApp(): express.Application {
       res.status(200).json({ ok: true, message: "Research coordinator reset" });
     } catch (err: any) {
       res.status(500).json({ error: sanitizeError(err?.message || "Reset failed") });
+    }
+  });
+
+  // ── Stage 1: Browser Intelligence Coordinator — localhost/core only ────────
+  /**
+   * POST /api/browser-intelligence/execute
+   * Executes an end-to-end browser intelligence task.
+   */
+  app.post("/api/browser-intelligence/execute", requireLocalhost, async (req, res) => {
+    try {
+      const { browserIntelligenceCoordinator } = await import("../research/browser/index.ts");
+      const { goal, initialUrl, allowedOrigins, timeoutMs, maxRetries } = req.body || {};
+      if (!goal || typeof goal !== "string") {
+        return res.status(400).json({ error: "Missing required field: goal" });
+      }
+      const result = await browserIntelligenceCoordinator.executeTask({
+        goal,
+        initialUrl: typeof initialUrl === "string" ? initialUrl : undefined,
+        allowedOrigins: Array.isArray(allowedOrigins) ? allowedOrigins : undefined,
+        timeoutMs: typeof timeoutMs === "number" ? timeoutMs : undefined,
+        maxRetries: typeof maxRetries === "number" ? maxRetries : undefined,
+      });
+      res.status(200).json({ ok: true, result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Browser task execution failed") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/cancel
+   * Cancels a running browser task.
+   */
+  app.post("/api/browser-intelligence/cancel", requireLocalhost, async (req, res) => {
+    try {
+      const { browserIntelligenceCoordinator } = await import("../research/browser/index.ts");
+      const { taskId, reason } = req.body || {};
+      if (!taskId || typeof taskId !== "string") {
+        return res.status(400).json({ error: "Missing required field: taskId" });
+      }
+      const cancelled = browserIntelligenceCoordinator.cancelTask(taskId, reason);
+      res.status(200).json({ ok: true, cancelled });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Task cancellation failed") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/pause
+   * Pauses an active browser task.
+   */
+  app.post("/api/browser-intelligence/pause", requireLocalhost, async (req, res) => {
+    try {
+      const { browserIntelligenceCoordinator } = await import("../research/browser/index.ts");
+      const { taskId } = req.body || {};
+      if (!taskId || typeof taskId !== "string") {
+        return res.status(400).json({ error: "Missing required field: taskId" });
+      }
+      const paused = browserIntelligenceCoordinator.pauseTask(taskId);
+      res.status(200).json({ ok: true, paused });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Task pause failed") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/resume
+   * Resumes a paused browser task.
+   */
+  app.post("/api/browser-intelligence/resume", requireLocalhost, async (req, res) => {
+    try {
+      const { browserIntelligenceCoordinator } = await import("../research/browser/index.ts");
+      const { taskId } = req.body || {};
+      if (!taskId || typeof taskId !== "string") {
+        return res.status(400).json({ error: "Missing required field: taskId" });
+      }
+      const resumed = browserIntelligenceCoordinator.resumeTask(taskId);
+      res.status(200).json({ ok: true, resumed });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Task resume failed") });
+    }
+  });
+
+  /**
+   * GET /api/browser-intelligence/task/:taskId
+   * Retrieves status and results for a browser task.
+   */
+  app.get("/api/browser-intelligence/task/:taskId", requireLocalhost, async (req, res) => {
+    try {
+      const { browserIntelligenceCoordinator } = await import("../research/browser/index.ts");
+      const task = browserIntelligenceCoordinator.getTask(req.params.taskId);
+      if (!task) {
+        return res.status(404).json({ error: "Task not found" });
+      }
+      res.status(200).json({ ok: true, task });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to retrieve task") });
+    }
+  });
+
+  /**
+   * GET /api/browser-intelligence/tasks
+   * Lists all recent browser tasks.
+   */
+  app.get("/api/browser-intelligence/tasks", requireLocalhost, async (_req, res) => {
+    try {
+      const { browserIntelligenceCoordinator } = await import("../research/browser/index.ts");
+      const tasks = browserIntelligenceCoordinator.listTasks();
+      res.status(200).json({ ok: true, tasks });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to list tasks") });
+    }
+  });
+
+  /**
+   * GET /api/browser-intelligence/tabs
+   * Retrieves all currently active browser tabs and active tab context.
+   */
+  app.get("/api/browser-intelligence/tabs", requireLocalhost, async (_req, res) => {
+    try {
+      const { browserTabManager } = await import("../research/browser/index.ts");
+      const activeTab = browserTabManager.getActiveTab();
+      const tabs = browserTabManager.getAllTabs();
+      res.status(200).json({ ok: true, activeTab, tabs, count: tabs.length });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to retrieve browser tabs") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/tabs
+   * Performs tab lifecycle operation (open, switch, close).
+   */
+  app.post("/api/browser-intelligence/tabs", requireLocalhost, async (req, res) => {
+    try {
+      const { browserTabManager } = await import("../research/browser/index.ts");
+      const { action, tabId, url, title } = req.body || {};
+
+      switch (action) {
+        case "open": {
+          const tab = browserTabManager.createTab(
+            typeof url === "string" ? url.slice(0, 500) : "about:blank",
+            typeof title === "string" ? title.slice(0, 100) : "New Tab"
+          );
+          return res.status(200).json({ ok: true, tab });
+        }
+        case "switch": {
+          if (!tabId || typeof tabId !== "string") {
+            return res.status(400).json({ error: "Missing required field: tabId" });
+          }
+          const switched = browserTabManager.switchTab(tabId);
+          if (!switched) {
+            return res.status(404).json({ error: `Tab '${tabId}' not found.` });
+          }
+          return res.status(200).json({ ok: true, activeTab: switched });
+        }
+        case "close": {
+          if (!tabId || typeof tabId !== "string") {
+            return res.status(400).json({ error: "Missing required field: tabId" });
+          }
+          const closeRes = browserTabManager.closeTab(tabId);
+          return res.status(200).json({ ok: closeRes.closed, activeTab: closeRes.newActiveTab });
+        }
+        default:
+          return res.status(400).json({ error: "Invalid action. Supported: open, switch, close" });
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Tab operation failed") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/execute-action
+   * Executes a single discrete browser control action (click, type, scroll, wait_for, etc.).
+   */
+  app.post("/api/browser-intelligence/execute-action", requireLocalhost, async (req, res) => {
+    try {
+      const { browserIntelligenceCoordinator } = await import("../research/browser/index.ts");
+      const { step, allowedOrigins, autoConfirmSensitiveActions } = req.body || {};
+
+      if (!step || typeof step !== "object" || !step.action) {
+        return res.status(400).json({ error: "Missing required object: step with valid action" });
+      }
+
+      const result = await browserIntelligenceCoordinator.executeAction(step, {
+        allowedOrigins: Array.isArray(allowedOrigins) ? allowedOrigins.slice(0, 20) : [],
+        autoConfirmSensitiveActions: Boolean(autoConfirmSensitiveActions),
+      });
+
+      res.status(200).json({ ok: result.ok, result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Action execution failed") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/compare
+   * Compares two or more documents with section diffing, version compatibility, and contradiction detection.
+   */
+  app.post("/api/browser-intelligence/compare", requireLocalhost, async (req, res) => {
+    try {
+      const { browserIntelligenceCoordinator } = await import("../research/browser/index.ts");
+      const { documents, focusTopics, compareBy } = req.body || {};
+
+      if (!Array.isArray(documents) || documents.length < 2) {
+        return res.status(400).json({ error: "Missing required array 'documents' with at least 2 items." });
+      }
+
+      const result = await browserIntelligenceCoordinator.compareDocuments({
+        documents: documents.slice(0, 5),
+        focusTopics: Array.isArray(focusTopics) ? focusTopics.slice(0, 10) : undefined,
+        compareBy: compareBy === "sections" || compareBy === "apis" ? compareBy : "all",
+      });
+
+      res.status(200).json({ ok: true, result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Document comparison failed") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/extract-document
+   * Extracts structured documentation (sections, code blocks, tables, version metadata) from content or URL.
+   */
+  app.post("/api/browser-intelligence/extract-document", requireLocalhost, async (req, res) => {
+    try {
+      const { browserIntelligenceCoordinator } = await import("../research/browser/index.ts");
+      const { content, url, titleHint, versionHint } = req.body || {};
+
+      if (!content && !url) {
+        return res.status(400).json({ error: "Either 'content' or 'url' must be provided in request body." });
+      }
+
+      const document = await browserIntelligenceCoordinator.extractDocument({
+        content: typeof content === "string" ? content : undefined,
+        url: typeof url === "string" ? url : undefined,
+        titleHint: typeof titleHint === "string" ? titleHint.slice(0, 200) : undefined,
+        versionHint: typeof versionHint === "string" ? versionHint.slice(0, 50) : undefined,
+      });
+
+      res.status(200).json({ ok: true, document });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Document extraction failed") });
+    }
+  });
+
+  // ── Stage 5: Adaptive Knowledge & Skill Ingestion — localhost/core only ────────
+  /**
+   * GET /api/browser-intelligence/proposals
+   * Lists all knowledge and skill proposals.
+   */
+  app.get("/api/browser-intelligence/proposals", requireLocalhost, async (req, res) => {
+    try {
+      const { knowledgeProposalPipeline } = await import("../research/browser/index.ts");
+      const { state, type } = req.query as { state?: string; type?: string };
+      const proposals = knowledgeProposalPipeline.listProposals({
+        state: state as any,
+        type: type as any,
+      });
+      res.status(200).json({ ok: true, proposals, count: proposals.length });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to list proposals") });
+    }
+  });
+
+  /**
+   * GET /api/browser-intelligence/proposals/:id
+   * Retrieves a specific proposal with full provenance and audit trail.
+   */
+  app.get("/api/browser-intelligence/proposals/:id", requireLocalhost, async (req, res) => {
+    try {
+      const { knowledgeProposalPipeline } = await import("../research/browser/index.ts");
+      const proposal = knowledgeProposalPipeline.getProposal(req.params.id);
+      if (!proposal) {
+        return res.status(404).json({ error: "Proposal not found" });
+      }
+      res.status(200).json({ ok: true, proposal });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to retrieve proposal") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/proposals/generate
+   * Converts a research discovery into a validated candidate proposal (Stages 1-7).
+   */
+  app.post("/api/browser-intelligence/proposals/generate", requireLocalhost, async (req, res) => {
+    try {
+      const { knowledgeProposalPipeline } = await import("../research/browser/index.ts");
+      const { opportunity, payload } = req.body || {};
+      if (!opportunity || typeof opportunity !== "object" || !opportunity.title || !opportunity.rawContent) {
+        return res.status(400).json({ error: "Missing required opportunity object (title and rawContent are mandatory)." });
+      }
+
+      const proposal = await knowledgeProposalPipeline.processOpportunity(opportunity, payload);
+      res.status(200).json({ ok: true, proposal });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to generate proposal") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/proposals/:id/approve
+   * Approves a candidate proposal (requires authorized operator).
+   */
+  app.post("/api/browser-intelligence/proposals/:id/approve", requireLocalhost, async (req, res) => {
+    try {
+      const { knowledgeProposalPipeline } = await import("../research/browser/index.ts");
+      const { approver, reason } = req.body || {};
+      if (!approver || typeof approver !== "string") {
+        return res.status(400).json({ error: "Missing required field: approver" });
+      }
+
+      const proposal = knowledgeProposalPipeline.approve(req.params.id, approver, reason);
+      res.status(200).json({ ok: true, proposal });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Proposal approval failed") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/proposals/:id/reject
+   * Rejects a candidate proposal.
+   */
+  app.post("/api/browser-intelligence/proposals/:id/reject", requireLocalhost, async (req, res) => {
+    try {
+      const { knowledgeProposalPipeline } = await import("../research/browser/index.ts");
+      const { rejecter, reason } = req.body || {};
+      if (!rejecter || !reason) {
+        return res.status(400).json({ error: "Missing required fields: rejecter and reason" });
+      }
+
+      const proposal = knowledgeProposalPipeline.reject(req.params.id, rejecter, reason);
+      res.status(200).json({ ok: true, proposal });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Proposal rejection failed") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/proposals/:id/integrate
+   * Integrates an approved proposal into Knowledge Graph or Skill Registry.
+   */
+  app.post("/api/browser-intelligence/proposals/:id/integrate", requireLocalhost, async (req, res) => {
+    try {
+      const { knowledgeProposalPipeline } = await import("../research/browser/index.ts");
+      const { actor, targetStore } = req.body || {};
+      if (!actor || typeof actor !== "string") {
+        return res.status(400).json({ error: "Missing required field: actor" });
+      }
+
+      const proposal = await knowledgeProposalPipeline.integrate(req.params.id, actor, targetStore);
+      res.status(200).json({ ok: true, proposal });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Proposal integration failed") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/proposals/:id/rollback
+   * Reverts an integrated proposal using its rollback token.
+   */
+  app.post("/api/browser-intelligence/proposals/:id/rollback", requireLocalhost, async (req, res) => {
+    try {
+      const { knowledgeProposalPipeline } = await import("../research/browser/index.ts");
+      const { token, actor, reason } = req.body || {};
+      if (!token || !actor) {
+        return res.status(400).json({ error: "Missing required fields: token and actor" });
+      }
+
+      const proposal = knowledgeProposalPipeline.rollback(req.params.id, token, actor, reason);
+      res.status(200).json({ ok: true, proposal });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Proposal rollback failed") });
+    }
+  });
+
+  // ── Stage 6: Skill Proposal System — localhost/core only ─────────────────────
+  /**
+   * GET /api/browser-intelligence/skills/proposals
+   * Lists all skill proposals with optional state filter.
+   */
+  app.get("/api/browser-intelligence/skills/proposals", requireLocalhost, async (req, res) => {
+    try {
+      const { skillProposalManager } = await import("../research/browser/index.ts");
+      const { state } = req.query as { state?: string };
+      const proposals = skillProposalManager.listProposals({
+        state: state as any,
+      });
+      res.status(200).json({ ok: true, count: proposals.length, proposals });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to retrieve skill proposals") });
+    }
+  });
+
+  /**
+   * GET /api/browser-intelligence/skills/proposals/:id
+   * Retrieves a specific skill proposal with full detection evidence, reviews, and audit history.
+   */
+  app.get("/api/browser-intelligence/skills/proposals/:id", requireLocalhost, async (req, res) => {
+    try {
+      const { skillProposalManager } = await import("../research/browser/index.ts");
+      const proposal = skillProposalManager.getProposal(req.params.id);
+      if (!proposal) {
+        return res.status(404).json({ error: "Skill proposal not found" });
+      }
+      res.status(200).json({ ok: true, proposal });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to retrieve skill proposal") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/skills/observe
+   * Submits an execution trace for workflow evidence observation.
+   */
+  app.post("/api/browser-intelligence/skills/observe", requireLocalhost, async (req, res) => {
+    try {
+      const { skillProposalManager } = await import("../research/browser/index.ts");
+      const traceInput = req.body || {};
+      const result = skillProposalManager.recordObservation(traceInput);
+      res.status(result.accepted ? 200 : 400).json({ ok: result.accepted, ...result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to record observation") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/skills/proposals/generate
+   * Evaluates observed workflow patterns and generates candidate skill proposals.
+   */
+  app.post("/api/browser-intelligence/skills/proposals/generate", requireLocalhost, async (req, res) => {
+    try {
+      const { skillProposalManager } = await import("../research/browser/index.ts");
+      const proposals = skillProposalManager.processObservedPatterns();
+      res.status(200).json({ ok: true, count: proposals.length, proposals });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to generate skill proposals") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/skills/proposals/:id/approve
+   * Authenticated human operator approval of a candidate skill proposal.
+   */
+  app.post("/api/browser-intelligence/skills/proposals/:id/approve", requireLocalhost, async (req, res) => {
+    try {
+      const { skillProposalManager } = await import("../research/browser/index.ts");
+      const { approver, approverRole, reason, nonce, expiresAt, proposalVersion, signature } = req.body || {};
+      if (!approver || typeof approver !== "string") {
+        return res.status(400).json({ error: "Missing required field: approver (human operator identifier required)" });
+      }
+      if (!reason || typeof reason !== "string") {
+        return res.status(400).json({ error: "Missing required field: reason" });
+      }
+
+      const proposal = skillProposalManager.approveProposal(req.params.id, {
+        approver,
+        approverRole: approverRole || "standard",
+        reason,
+        nonce,
+        expiresAt,
+        proposalVersion,
+        signature,
+      });
+      res.status(200).json({ ok: true, proposal });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Skill proposal approval failed") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/skills/proposals/:id/reject
+   * Rejects a candidate skill proposal with an explicit reason.
+   */
+  app.post("/api/browser-intelligence/skills/proposals/:id/reject", requireLocalhost, async (req, res) => {
+    try {
+      const { skillProposalManager } = await import("../research/browser/index.ts");
+      const { rejecter, reason } = req.body || {};
+      if (!rejecter || !reason) {
+        return res.status(400).json({ error: "Missing required fields: rejecter and reason" });
+      }
+
+      const proposal = skillProposalManager.rejectProposal(req.params.id, {
+        rejecter,
+        reason,
+      });
+      res.status(200).json({ ok: true, proposal });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Skill proposal rejection failed") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/skills/proposals/:id/integrate
+   * Integrates an approved skill proposal into the skill registry with a rollback token.
+   * STRICT INVARIANT: The newly integrated skill is NOT auto-executed.
+   */
+  app.post("/api/browser-intelligence/skills/proposals/:id/integrate", requireLocalhost, async (req, res) => {
+    try {
+      const { skillProposalManager } = await import("../research/browser/index.ts");
+      const { actor } = req.body || {};
+      if (!actor || typeof actor !== "string") {
+        return res.status(400).json({ error: "Missing required field: actor" });
+      }
+
+      const proposal = skillProposalManager.integrateProposal(req.params.id, actor);
+      res.status(200).json({ ok: true, proposal });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Skill proposal integration failed") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/skills/proposals/:id/rollback
+   * Revokes and rolls back an integrated skill using its rollback token.
+   */
+  app.post("/api/browser-intelligence/skills/proposals/:id/rollback", requireLocalhost, async (req, res) => {
+    try {
+      const { skillProposalManager } = await import("../research/browser/index.ts");
+      const { token, actor, reason } = req.body || {};
+      if (!token || !actor) {
+        return res.status(400).json({ error: "Missing required fields: token and actor" });
+      }
+
+      const proposal = skillProposalManager.rollbackProposal(req.params.id, token, actor, reason || "Operator rollback");
+      res.status(200).json({ ok: true, proposal });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Skill proposal rollback failed") });
+    }
+  });
+
+  // ── Stage 7: Self-Improvement Evaluator — localhost/core only ────────────────
+  /**
+   * GET /api/browser-intelligence/improvements/candidates
+   * Lists all self-improvement candidates with optional state and kind filters.
+   */
+  app.get("/api/browser-intelligence/improvements/candidates", requireLocalhost, async (req, res) => {
+    try {
+      const { selfImprovementEvaluator } = await import("../research/browser/index.ts");
+      const { state, kind } = req.query as { state?: string; kind?: string };
+      const candidates = selfImprovementEvaluator.listCandidates({
+        state: state as any,
+        kind,
+      });
+      res.status(200).json({ ok: true, count: candidates.length, candidates });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to retrieve candidates") });
+    }
+  });
+
+  /**
+   * GET /api/browser-intelligence/improvements/candidates/:id
+   * Retrieves a specific candidate with evaluation report, reviews, and audit history.
+   */
+  app.get("/api/browser-intelligence/improvements/candidates/:id", requireLocalhost, async (req, res) => {
+    try {
+      const { selfImprovementEvaluator } = await import("../research/browser/index.ts");
+      const candidate = selfImprovementEvaluator.getCandidate(req.params.id);
+      if (!candidate) {
+        return res.status(404).json({ error: "Candidate not found" });
+      }
+      res.status(200).json({ ok: true, candidate });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to retrieve candidate") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/improvements/candidates/submit
+   * Submits a new self-improvement candidate for prompts, queries, or heuristics.
+   */
+  app.post("/api/browser-intelligence/improvements/candidates/submit", requireLocalhost, async (req, res) => {
+    try {
+      const { selfImprovementEvaluator } = await import("../research/browser/index.ts");
+      const input = req.body || {};
+      if (!input.name || !input.targetComponent || !input.proposedPayload || !input.kind) {
+        return res.status(400).json({ error: "Missing required fields: name, targetComponent, proposedPayload, kind." });
+      }
+
+      const candidate = selfImprovementEvaluator.submitCandidate(input);
+      res.status(200).json({ ok: true, candidate });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Failed to submit candidate") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/improvements/candidates/:id/evaluate
+   * Executes the isolated evaluation harness across registered fixtures.
+   */
+  app.post("/api/browser-intelligence/improvements/candidates/:id/evaluate", requireLocalhost, async (req, res) => {
+    try {
+      const { selfImprovementEvaluator } = await import("../research/browser/index.ts");
+      const candidate = await selfImprovementEvaluator.evaluateCandidate(req.params.id);
+      res.status(200).json({ ok: true, candidate });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Candidate evaluation failed") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/improvements/candidates/:id/approve
+   * Authenticated human operator approval of evaluated improvement candidate.
+   */
+  app.post("/api/browser-intelligence/improvements/candidates/:id/approve", requireLocalhost, async (req, res) => {
+    try {
+      const { selfImprovementEvaluator } = await import("../research/browser/index.ts");
+      const { approver, approverRole, reason, nonce, expiresAt, candidateVersion, signature } = req.body || {};
+      if (!approver || typeof approver !== "string") {
+        return res.status(400).json({ error: "Missing required field: approver (human operator identifier required)" });
+      }
+      if (!reason || typeof reason !== "string") {
+        return res.status(400).json({ error: "Missing required field: reason" });
+      }
+
+      const candidate = selfImprovementEvaluator.approveCandidate(req.params.id, {
+        approver,
+        approverRole: approverRole || "standard",
+        reason,
+        nonce,
+        expiresAt,
+        candidateVersion,
+        signature,
+      });
+      res.status(200).json({ ok: true, candidate });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Candidate approval failed") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/improvements/candidates/:id/reject
+   * Rejects an improvement candidate with explicit reason.
+   */
+  app.post("/api/browser-intelligence/improvements/candidates/:id/reject", requireLocalhost, async (req, res) => {
+    try {
+      const { selfImprovementEvaluator } = await import("../research/browser/index.ts");
+      const { rejecter, reason } = req.body || {};
+      if (!rejecter || !reason) {
+        return res.status(400).json({ error: "Missing required fields: rejecter and reason" });
+      }
+
+      const candidate = selfImprovementEvaluator.rejectCandidate(req.params.id, {
+        rejecter,
+        reason,
+      });
+      res.status(200).json({ ok: true, candidate });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Candidate rejection failed") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/improvements/candidates/:id/integrate
+   * Integrates approved improvement into in-memory component store with rollback token.
+   * STRICT INVARIANT: autoDeployment is blocked.
+   */
+  app.post("/api/browser-intelligence/improvements/candidates/:id/integrate", requireLocalhost, async (req, res) => {
+    try {
+      const { selfImprovementEvaluator } = await import("../research/browser/index.ts");
+      const { actor } = req.body || {};
+      if (!actor || typeof actor !== "string") {
+        return res.status(400).json({ error: "Missing required field: actor" });
+      }
+
+      const candidate = selfImprovementEvaluator.integrateCandidate(req.params.id, actor);
+      res.status(200).json({ ok: true, candidate });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Candidate integration failed") });
+    }
+  });
+
+  /**
+   * POST /api/browser-intelligence/improvements/candidates/:id/rollback
+   * Revokes and rolls back an integrated candidate using its rollback token.
+   */
+  app.post("/api/browser-intelligence/improvements/candidates/:id/rollback", requireLocalhost, async (req, res) => {
+    try {
+      const { selfImprovementEvaluator } = await import("../research/browser/index.ts");
+      const { token, actor, reason } = req.body || {};
+      if (!token || !actor) {
+        return res.status(400).json({ error: "Missing required fields: token and actor" });
+      }
+
+      const candidate = selfImprovementEvaluator.rollbackCandidate(req.params.id, token, actor, reason || "Operator rollback");
+      res.status(200).json({ ok: true, candidate });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Candidate rollback failed") });
+    }
+  });
+
+  // ── Stage 2: Intelligent Search & Epistemic Research — localhost/core only ────────
+  /**
+   * POST /api/research/epistemic-query
+   * Executes epistemic research query with claim verification, contradiction resolution, and uncertainty reporting.
+   */
+  app.post("/api/research/epistemic-query", requireLocalhost, async (req, res) => {
+    try {
+      const { advancedResearchCoordinator } = await import("../research/index.ts");
+      const { question, maxSources, requireOfficial, projectPath, allowRefinement } = req.body || {};
+      if (!question || typeof question !== "string" || !question.trim()) {
+        return res.status(400).json({ error: "Missing required field: question" });
+      }
+      const boundedQuestion = question.trim().slice(0, 2000);
+      const boundedSources = Math.min(10, Math.max(1, typeof maxSources === "number" ? maxSources : 5));
+      const result = await advancedResearchCoordinator.epistemicQuery({
+        question: boundedQuestion,
+        maxSources: boundedSources,
+        requireOfficial: Boolean(requireOfficial),
+        projectPath: typeof projectPath === "string" ? projectPath.slice(0, 500) : undefined,
+        allowRefinement: Boolean(allowRefinement),
+      });
+      res.status(200).json({ ok: true, result });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Epistemic research query failed") });
+    }
+  });
+
+  /**
+   * POST /api/research/detect-duplicates
+   * Detects duplicate and syndicated sources to avoid false consensus.
+   */
+  app.post("/api/research/detect-duplicates", requireLocalhost, async (req, res) => {
+    try {
+      const { duplicateSourceDetector } = await import("../research/index.ts");
+      const { sources } = req.body || {};
+      if (!Array.isArray(sources)) {
+        return res.status(400).json({ error: "Missing required array: sources" });
+      }
+      const boundedSources = sources.slice(0, 50);
+      const report = duplicateSourceDetector.detectDuplicates(boundedSources);
+      res.status(200).json({ ok: true, report });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Duplicate detection failed") });
+    }
+  });
+
+  /**
+   * POST /api/research/verify-claims
+   * Evaluates claims against epistemic verification policy (FACT, INFERENCE, HYPOTHESIS, VERIFIED_CONCLUSION).
+   */
+  app.post("/api/research/verify-claims", requireLocalhost, async (req, res) => {
+    try {
+      const { epistemicVerifier } = await import("../research/index.ts");
+      const { claims, sources, contradictions } = req.body || {};
+      if (!Array.isArray(claims)) {
+        return res.status(400).json({ error: "Missing required array: claims" });
+      }
+      const boundedClaims = claims.slice(0, 100);
+      const boundedSources = Array.isArray(sources) ? sources.slice(0, 50) : [];
+      const boundedContradictions = Array.isArray(contradictions) ? contradictions.slice(0, 100) : [];
+      const verified = epistemicVerifier.verifyAll(
+        boundedClaims,
+        boundedSources,
+        boundedContradictions
+      );
+      res.status(200).json({ ok: true, claims: verified });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizeError(err?.message || "Claim verification failed") });
     }
   });
 

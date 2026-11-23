@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MYRAA Wake Word Detector (V2).
  *
  * Uses the browser-native Web Speech API (webkitSpeechRecognition) for
@@ -152,8 +152,19 @@ export class MyraaWakeWordDetector {
           const res = e.results[i];
           if (!res) continue;
           for (let j = 0; j < res.length; j++) {
-            const transcript = (res[j]?.transcript || "").toString().toLowerCase();
-            if (transcript.includes(this.phrase)) {
+            const transcript = (res[j]?.transcript || "").toString().toLowerCase().trim();
+            const targetPhrase = this.phrase.toLowerCase().trim();
+            const matchesConfigured = transcript.includes(targetPhrase);
+            const matchesCommonWake =
+              transcript.includes("hello myraa") ||
+              transcript.includes("hey myraa") ||
+              transcript.includes("hi myraa") ||
+              transcript.includes("suno myraa") ||
+              transcript.includes("myraa") ||
+              transcript.includes("myra");
+
+            if (matchesConfigured || (targetPhrase.includes("myra") && matchesCommonWake)) {
+              console.log(`[Myraa Wake Word] Activated via voice keyword: "${transcript}"`);
               this.fire();
               return;
             }

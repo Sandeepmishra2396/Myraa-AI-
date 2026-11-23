@@ -35,7 +35,7 @@ class MyraaApiClient(
 
         fun buildBaseUrl(host: String, port: Int): String {
             val trimmed = host.trim().removeSuffix("/")
-            if (trimmed.startsWith("https://", ignoreCase = true)) {
+            if (trimmed.startsWith("https://", ignoreCase = true) || trimmed.startsWith("http://", ignoreCase = true)) {
                 return trimmed
             }
             val cleanHost = trimmed
@@ -43,9 +43,15 @@ class MyraaApiClient(
                 .removePrefix("http://")
                 .removePrefix("wss://")
                 .removePrefix("ws://")
-            val includePort = port != 443 && port != 80 && port != 3000
+            val isLocal = cleanHost == "10.0.2.2" || cleanHost == "127.0.0.1" || cleanHost == "localhost" ||
+                cleanHost.startsWith("192.168.") || cleanHost.startsWith("10.") || cleanHost.startsWith("172.")
+            val includePort = port != 443 && port != 80
+            if (isLocal) {
+                return if (includePort) "http://$cleanHost:$port" else "http://$cleanHost"
+            }
             return if (includePort) "https://$cleanHost:$port" else "https://$cleanHost"
         }
+
     }
 
     /**

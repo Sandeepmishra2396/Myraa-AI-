@@ -407,7 +407,8 @@ describe("Phase 5 — Device-Aware Intelligence", () => {
       );
       expect(phoneRes.ok).toBe(true);
       expect(phoneRes.targetMode).toBe("CURRENT_DEVICE");
-      expect(phoneRes.targetDevice).toBe("PHONE");
+      expect(phoneRes.targetDevice).toBe("BROWSER");
+      expect(phoneRes.currentDevice.deviceClass).toBe("PHONE");
 
       // On Desktop: CURRENT_DEVICE -> DESKTOP
       deviceRegistry.registerDevice(DESKTOP_IDENTITY);

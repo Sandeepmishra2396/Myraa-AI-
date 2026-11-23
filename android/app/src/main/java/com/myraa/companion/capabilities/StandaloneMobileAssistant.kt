@@ -372,9 +372,46 @@ class StandaloneMobileAssistant(
                 )
             }
 
+            // 15. Conversational Greetings & General Questions
+            if (lower in setOf("hello", "hi", "hey", "namaste", "pranam", "helo") ||
+                lower.startsWith("hello ") || lower.startsWith("hi ") || lower.startsWith("hey ")
+            ) {
+                val args = JSONObject().apply { put("query", raw) }
+                return ParsedMobileIntent(
+                    capability = "mobile.conversational",
+                    args = args,
+                    summaryPrefix = "Hello! Main MYRAA hoon, aapka personal AI assistant. Main aapki kya madad kar sakti hoon?"
+                )
+            }
+            if (lower.contains("kya kar rhe ho") || lower.contains("kya kar rahe ho") || lower.contains("what are you doing")) {
+                val args = JSONObject().apply { put("query", raw) }
+                return ParsedMobileIntent(
+                    capability = "mobile.conversational",
+                    args = args,
+                    summaryPrefix = "Main aapki assistance ke liye active hoon. Aap YouTube, Alarms, Timers ya Apps ke liye commands de sakte hain!"
+                )
+            }
+            if (lower.contains("kaise ho") || lower.contains("kya haal hai") || lower.contains("how are you")) {
+                val args = JSONObject().apply { put("query", raw) }
+                return ParsedMobileIntent(
+                    capability = "mobile.conversational",
+                    args = args,
+                    summaryPrefix = "Main bilkul theek hoon! Aap batayein, aaj main aapki kya madad karoon?"
+                )
+            }
+            if (lower.contains("tum kaun ho") || lower.contains("aap kaun hain") || lower.contains("who are you")) {
+                val args = JSONObject().apply { put("query", raw) }
+                return ParsedMobileIntent(
+                    capability = "mobile.conversational",
+                    args = args,
+                    summaryPrefix = "Main MYRAA hoon — aapka standalone voice aur cross-device AI assistant."
+                )
+            }
+
             return null
         }
     }
+
 
     /**
      * Processes a user voice or text turn on MYRAA Mobile.
@@ -461,6 +498,15 @@ class StandaloneMobileAssistant(
         )
 
         if (parsedIntent != null) {
+            if (parsedIntent.capability == "mobile.conversational") {
+                return StandaloneTurnOutcome(
+                    success = true,
+                    capabilityExecuted = "mobile.conversational",
+                    responseText = parsedIntent.summaryPrefix,
+                    requiresDesktopPairing = false
+                )
+            }
+
             // Enforce explicit screen permission before mobile_screen
             if (parsedIntent.capability == AndroidCapabilities.MOBILE_SCREEN && !screenContextApproved) {
                 return StandaloneTurnOutcome(

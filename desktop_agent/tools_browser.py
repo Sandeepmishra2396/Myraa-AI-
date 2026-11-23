@@ -16,6 +16,7 @@ import threading
 from typing import Any, Dict, Optional
 from urllib.parse import quote_plus
 
+from .egress_proxy import get_or_start_egress_proxy, stop_egress_proxy
 from .registry import STATE, ToolError, register
 
 # A dedicated event loop + thread runs all Playwright coroutines, because
@@ -59,35 +60,147 @@ def _run(coro):
 # --- Async Playwright lifecycle ---------------------------------------------
 
 
-async def _ensure_browser_async() -> Any:
-    if STATE.page is not None:
+import ipaddress
+import socket
+import urllib.parse
+
+
+def is_restricted_destination(url_or_host: str) -> tuple[bool, str]:
+    """
+    Evaluates whether a destination target resolves to loopback, private RFC1918,
+    link-local, cloud-metadata, or other restricted IP ranges.
+    Fails closed if the destination cannot be verified or DNS resolution fails.
+    """
+    if not url_or_host:
+        return True, "Empty target URL or host"
+
+    try:
+        parsed = urllib.parse.urlsplit(url_or_host)
+        scheme = (parsed.scheme or "").lower()
+        if scheme in ("data", "about", "blob", "javascript"):
+            return False, f"Browser internal scheme: {scheme}"
+        host = parsed.hostname or url_or_host
+    except Exception as e:
+        return True, f"Malformed URL: {e}"
+
+    if not host:
+        return True, "Missing host in URL"
+
+    host_lower = host.strip().lower()
+
+    # Immediate rejection for common loopback and metadata names
+    if host_lower in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        return True, f"Restricted loopback host: {host_lower}"
+    if host_lower.endswith(".localhost") or host_lower.endswith(".local"):
+        return True, f"Restricted local domain: {host_lower}"
+
+    # Check if host is already an IP address literal
+    try:
+        ip = ipaddress.ip_address(host_lower)
+        if (
+            ip.is_loopback
+            or ip.is_private
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            return True, f"Restricted IP range: {ip}"
+        # Cloud metadata IP literal check
+        if str(ip) == "169.254.169.254":
+            return True, "Restricted cloud metadata IP"
+        return False, f"Safe public IP literal: {ip}"
+    except ValueError:
+        pass
+
+    # Resolve hostname via getaddrinfo to check all A/AAAA addresses at connection time
+    try:
+        addrinfo = socket.getaddrinfo(host_lower, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        if not addrinfo:
+            return True, f"DNS resolution returned no addresses for host '{host_lower}'"
+
+        for family, socktype, proto, canonname, sockaddr in addrinfo:
+            ip_str = sockaddr[0]
+            ip = ipaddress.ip_address(ip_str)
+            if (
+                ip.is_loopback
+                or ip.is_private
+                or ip.is_link_local
+                or ip.is_reserved
+                or ip.is_multicast
+                or ip.is_unspecified
+            ):
+                return True, f"DNS resolves to restricted IP: {ip}"
+            if str(ip) == "169.254.169.254":
+                return True, "DNS resolves to cloud metadata IP: 169.254.169.254"
+        return False, "Safe public host"
+    except Exception as err:
+        return True, f"Connection-time DNS resolution failed for '{host_lower}': {err}"
+
+
+async def _guard_browser_route(route: Any) -> None:
+    """Intercept all Playwright browser requests and enforce network egress restrictions."""
+    try:
+        req = route.request
+        target_url = req.url
+        restricted, reason = is_restricted_destination(target_url)
+        if restricted:
+            # Abort request immediately at browser connection time
+            await route.abort("accessdenied")
+        else:
+            await route.continue_()
+    except Exception:
+        # Fail closed on any route handler error
         try:
-            # Health check: a cheap op; if the page died, recreate.
-            _ = STATE.page.url
-            return STATE.page
+            await route.abort("failed")
         except Exception:
-            STATE.reset_playwright()
+            pass
+
+
+async def _ensure_browser_async() -> Any:
+    # 1. Recover if browser is missing or disconnected
+    if STATE.browser is None or not STATE.browser.is_connected():
+        STATE.reset_playwright()
 
     if STATE.playwright is None:
         from playwright.async_api import async_playwright
 
         STATE.playwright = await async_playwright().start()
 
-    if STATE.browser is None:
+    if STATE.browser is None or not STATE.browser.is_connected():
+        proxy_port = await get_or_start_egress_proxy()
         STATE.browser = await STATE.playwright.chromium.launch(
             headless=False,
-            args=["--start-maximized", "--no-sandbox"],
+            args=[
+                "--start-maximized",
+                "--no-sandbox",
+                f"--proxy-server=http://127.0.0.1:{proxy_port}",
+                "--proxy-bypass-list=<-loopback>",
+                "--disable-quic",
+                "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+            ],
         )
         STATE.context = await STATE.browser.new_context(viewport=None)
+        await STATE.context.route("**/*", _guard_browser_route)
+        STATE.page = await STATE.context.new_page()
+        return STATE.page
 
+    # 2. Re-create context if missing
     if STATE.context is None:
         STATE.context = await STATE.browser.new_context(viewport=None)
+        await STATE.context.route("**/*", _guard_browser_route)
 
-    pages = STATE.context.pages
-    if pages:
-        STATE.page = pages[-1]
+    # 3. Check if active page is still alive and open
+    if STATE.page is not None and not STATE.page.is_closed():
+        return STATE.page
+
+    # 4. Fallback: inspect context pages for a living tab or create a fresh one
+    open_pages = [p for p in (STATE.context.pages if STATE.context else []) if not p.is_closed()]
+    if open_pages:
+        STATE.page = open_pages[-1]
     else:
         STATE.page = await STATE.context.new_page()
+
     return STATE.page
 
 
@@ -99,9 +212,14 @@ def _normalize_url(raw: str) -> str:
     url = raw.strip()
     if not url:
         raise ToolError("Empty URL.")
-    if "://" not in url:
-        url = "https://" + url
-    return url
+    if (
+        url.startswith("about:")
+        or url.startswith("data:")
+        or url.startswith("javascript:")
+        or "://" in url
+    ):
+        return url
+    return "https://" + url
 
 
 # --- Handlers ---------------------------------------------------------------
@@ -114,7 +232,21 @@ async def browser_open(args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=20000)
     except Exception as e:  # noqa: BLE001
-        raise ToolError(f"Could not open {url}: {e}")
+        err_msg = str(e)
+        if "closed" in err_msg.lower():
+            # State cleanup: discard dead page/browser references
+            if STATE.page is not None and STATE.page.is_closed():
+                STATE.page = None
+            if STATE.browser is not None and not STATE.browser.is_connected():
+                STATE.reset_playwright()
+            # Bounded one-time recovery attempt
+            try:
+                page = await _page()
+                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+            except Exception as retry_err:
+                raise ToolError(f"Could not open {url} after target recovery attempt: {retry_err}")
+        else:
+            raise ToolError(f"Could not open {url}: {e}")
     return {"result": f"Opened {url} in the automation browser.", "url": page.url}
 
 
@@ -129,24 +261,42 @@ async def browser_open_tab(args: Dict[str, Any]) -> Dict[str, Any]:
     url = _normalize_url(args.get("url") or "about:blank")
     await _ensure_browser_async()
     ctx = STATE.context
-    page = await ctx.new_page()
+    try:
+        page = await ctx.new_page()
+    except Exception:
+        # Context might have closed; re-acquire
+        await _ensure_browser_async()
+        page = await STATE.context.new_page()
     STATE.page = page  # make it active
     if url != "about:blank":
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=20000)
         except Exception as e:  # noqa: BLE001
-            raise ToolError(f"Opened tab but navigation failed: {e}")
+            err_msg = str(e)
+            if "closed" in err_msg.lower():
+                if STATE.page is not None and STATE.page.is_closed():
+                    STATE.page = None
+                if STATE.browser is not None and not STATE.browser.is_connected():
+                    STATE.reset_playwright()
+                try:
+                    page = await _page()
+                    await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                except Exception as retry_err:
+                    raise ToolError(f"Opened tab but navigation failed after recovery: {retry_err}")
+            else:
+                raise ToolError(f"Opened tab but navigation failed: {e}")
     return {"result": f"New tab opened at {url}.", "url": url}
 
 
 @register("desktopBrowserCloseTab")
 async def browser_close_tab(args: Dict[str, Any]) -> Dict[str, Any]:
-    page = await _page()
     try:
-        await page.close()
+        page = await _page()
+        if not page.is_closed():
+            await page.close()
     except Exception:
         pass
-    pages = STATE.context.pages if STATE.context else []
+    pages = [p for p in (STATE.context.pages if STATE.context else []) if not p.is_closed()]
     STATE.page = pages[-1] if pages else None
     if STATE.page is None:
         return {"result": "Closed the last tab; browser now empty."}
@@ -173,7 +323,19 @@ async def browser_search(args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=20000)
     except Exception as e:  # noqa: BLE001
-        raise ToolError(f"Search navigation failed: {e}")
+        err_msg = str(e)
+        if "closed" in err_msg.lower():
+            if STATE.page is not None and STATE.page.is_closed():
+                STATE.page = None
+            if STATE.browser is not None and not STATE.browser.is_connected():
+                STATE.reset_playwright()
+            try:
+                page = await _page()
+                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+            except Exception as retry_err:
+                raise ToolError(f"Search navigation failed after recovery: {retry_err}")
+        else:
+            raise ToolError(f"Search navigation failed: {e}")
     return {"result": f"Searched {engine} for '{query}'.", "url": page.url}
 
 

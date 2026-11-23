@@ -86,4 +86,22 @@ describe("DesktopSecurityGate — Code-Gated Desktop Control", () => {
     expect(gate.isUnlocked()).toBe(false);
     expect(gate.getStatus().status).toBe("LOCKED");
   });
+
+  it("allows setting a new custom passcode dynamically and unlocks with it", () => {
+    const setRes = gate.setPasscode("Jarvis Protocol 99");
+    expect(setRes.success).toBe(true);
+    expect(gate.getPasscode()).toBe("Jarvis Protocol 99");
+    expect(gate.isConfigured()).toBe(true);
+
+    // Old code fails now
+    const oldRes = gate.verifyPasscode("Mummy Ka Beta");
+    expect(oldRes.success).toBe(false);
+    expect(gate.isUnlocked()).toBe(false);
+
+    // New code unlocks
+    const newRes = gate.verifyPasscode("jarvis protocol 99");
+    expect(newRes.success).toBe(true);
+    expect(gate.isUnlocked()).toBe(true);
+    expect(newRes.message).toContain("Jarvis Protocol 99");
+  });
 });

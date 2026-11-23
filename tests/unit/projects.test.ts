@@ -11,7 +11,7 @@
  *   - ProjectManager: full analysis, architecture map, task tracking, session resume context card
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
 import fs from "fs/promises";
 import os from "os";
@@ -204,6 +204,335 @@ describe("Phase 3: ProjectStore", () => {
 
     const active = await store.getActiveProject();
     expect(active?.id).toBe("test-proj");
+  });
+
+  it("AUD-P1-01 Test 1: cold load does not clobber a concurrent committed write or cause lost updates", async () => {
+    const baseProj = {
+      id: "base-0",
+      name: "Baseline Project",
+      rootPath: path.join(path.dirname(tempFile), "ws-base"),
+      type: "node_typescript" as const,
+      primaryLanguage: "TypeScript",
+      frameworks: ["Node.js"],
+      summary: "Baseline",
+      tasks: [],
+    };
+    const projA = {
+      id: "proj-a",
+      name: "Project A",
+      rootPath: path.join(path.dirname(tempFile), "ws-a"),
+      type: "node_typescript" as const,
+      primaryLanguage: "TypeScript",
+      frameworks: ["React"],
+      summary: "Project A summary",
+      tasks: [],
+    };
+    const projB = {
+      id: "proj-b",
+      name: "Project B",
+      rootPath: path.join(path.dirname(tempFile), "ws-b"),
+      type: "node_typescript" as const,
+      primaryLanguage: "TypeScript",
+      frameworks: ["Express"],
+      summary: "Project B summary",
+      tasks: [],
+    };
+
+    // Establish baseline on disk and reset cache to cold
+    await store.saveProject(baseProj);
+    store.clearCache();
+
+    // Deterministic barrier pausing the cold load's disk read
+    let signalReadEntered!: () => void;
+    const readEntered = new Promise<void>((r) => {
+      signalReadEntered = r;
+    });
+    let releaseRead!: () => void;
+    const readGate = new Promise<void>((r) => {
+      releaseRead = r;
+    });
+
+    const origReadFile = fs.readFile.bind(fs);
+    let interceptedFirstRead = false;
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (p: any, ...rest: any[]) => {
+      if (!interceptedFirstRead && path.resolve(String(p)) === path.resolve(tempFile)) {
+        interceptedFirstRead = true;
+        const content = await (origReadFile as any)(p, ...rest);
+        signalReadEntered();
+        await readGate;
+        return content;
+      }
+      return (origReadFile as any)(p, ...rest);
+    }) as any);
+
+    const store2 = new ProjectStore(tempFile);
+    try {
+      const coldLoadP = store.load();
+      await readEntered;
+
+      // Concurrently schedule saveProject(A) from another instance targeting the same canonical file
+      const saveAP = store2.saveProject(projA);
+
+      releaseRead();
+      await Promise.all([coldLoadP, saveAP]);
+    } finally {
+      readSpy.mockRestore();
+    }
+
+    // Save Project B after concurrent cold load + saveProject(A) settled
+    await store.saveProject(projB);
+
+    const diskJson = JSON.parse(await fs.readFile(tempFile, "utf-8"));
+    const memState = await store.load();
+    const diskIds = diskJson.projects.map((p: any) => p.id);
+    const memIds = memState.projects.map((p: any) => p.id);
+
+    expect(diskIds).toContain("base-0");
+    expect(diskIds).toContain("proj-a");
+    expect(diskIds).toContain("proj-b");
+    expect(memIds).toEqual(diskIds);
+    expect(memState).toEqual(diskJson);
+  });
+
+  it("AUD-P1-01 Test 2: waiting cold load observes preceding committed write via cache re-check without stale disk overwrite", async () => {
+    const baseProj = {
+      id: "base-w",
+      name: "Base Waiting",
+      rootPath: path.join(path.dirname(tempFile), "ws-base-w"),
+      type: "node_typescript" as const,
+      primaryLanguage: "TypeScript",
+      frameworks: [],
+      summary: "Base",
+      tasks: [],
+    };
+    const projA = {
+      id: "proj-ahead",
+      name: "Project Ahead",
+      rootPath: path.join(path.dirname(tempFile), "ws-ahead"),
+      type: "node_typescript" as const,
+      primaryLanguage: "TypeScript",
+      frameworks: [],
+      summary: "Committed before waiting load",
+      tasks: [],
+    };
+
+    await store.saveProject(baseProj);
+    store.clearCache();
+
+    let signalRenameEntered!: () => void;
+    const renameEntered = new Promise<void>((r) => {
+      signalRenameEntered = r;
+    });
+    let releaseRename!: () => void;
+    const renameGate = new Promise<void>((r) => {
+      releaseRename = r;
+    });
+
+    const origRename = fs.rename.bind(fs);
+    let pausedRename = false;
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation((async (oldP: any, newP: any) => {
+      if (!pausedRename && path.resolve(String(newP)) === path.resolve(tempFile)) {
+        pausedRename = true;
+        signalRenameEntered();
+        await renameGate;
+      }
+      return origRename(oldP, newP);
+    }) as any);
+
+    const origReadFile = fs.readFile.bind(fs);
+    let readsAfterWriteEntered = 0;
+    let countingReads = false;
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (p: any, ...rest: any[]) => {
+      if (countingReads && path.resolve(String(p)) === path.resolve(tempFile)) {
+        readsAfterWriteEntered++;
+      }
+      return (origReadFile as any)(p, ...rest);
+    }) as any);
+
+    try {
+      // Start write first and pause it mid-rename (before cache publication)
+      const saveAP = store.saveProject(projA);
+      await renameEntered;
+
+      // Clear cache before starting waiting cold load so load() misses warm fast path
+      // and queues behind the in-flight saveProject(projA) transaction
+      store.clearCache();
+      countingReads = true;
+      const waitingLoadP = store.load();
+
+      releaseRename();
+      const [, loaded] = await Promise.all([saveAP, waitingLoadP]);
+
+      // Waiting load re-checked cache inside transaction -> observed proj-ahead without re-reading disk
+      expect(loaded.projects.map((p) => p.id)).toEqual(["base-w", "proj-ahead"]);
+      expect(readsAfterWriteEntered).toBe(0);
+
+      const diskJson = JSON.parse(await fs.readFile(tempFile, "utf-8"));
+      expect(loaded).toEqual(diskJson);
+      expect(await store.load()).toEqual(diskJson);
+    } finally {
+      renameSpy.mockRestore();
+      readSpy.mockRestore();
+    }
+  });
+
+  it("AUD-P1-01 Test 3: concurrent cold loads serialize hydration, read disk once, and return isolated defensive clones", async () => {
+    const baseProj = {
+      id: "cold-multi",
+      name: "Cold Multi",
+      rootPath: path.join(path.dirname(tempFile), "ws-cm"),
+      type: "node_typescript" as const,
+      primaryLanguage: "TypeScript",
+      frameworks: ["Vite"],
+      summary: "Shared disk state",
+      tasks: [
+        {
+          id: "t-1",
+          title: "Original Task",
+          status: "todo" as const,
+          createdAt: "2026-11-18T10:00:00.000Z",
+          updatedAt: "2026-11-18T10:00:00.000Z",
+        },
+      ],
+    };
+
+    await store.saveProject(baseProj);
+    store.clearCache();
+
+    let signalFirstRead!: () => void;
+    const firstReadEntered = new Promise<void>((r) => {
+      signalFirstRead = r;
+    });
+    let releaseFirstRead!: () => void;
+    const firstReadGate = new Promise<void>((r) => {
+      releaseFirstRead = r;
+    });
+
+    const origReadFile = fs.readFile.bind(fs);
+    let targetReadCount = 0;
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (p: any, ...rest: any[]) => {
+      if (path.resolve(String(p)) === path.resolve(tempFile)) {
+        targetReadCount++;
+        const res = await (origReadFile as any)(p, ...rest);
+        if (targetReadCount === 1) {
+          signalFirstRead();
+          await firstReadGate;
+        }
+        return res;
+      }
+      return (origReadFile as any)(p, ...rest);
+    }) as any);
+
+    try {
+      const p1 = store.load();
+      await firstReadEntered;
+      // Enqueue 4 additional concurrent cold loads while the first hydration is in progress
+      const p2 = store.load();
+      const p3 = store.load();
+      const p4 = store.load();
+      const p5 = store.load();
+      releaseFirstRead();
+
+      const results = await Promise.all([p1, p2, p3, p4, p5]);
+      // Hydration read disk strictly once; remaining callers reused the published cache inside the queue
+      expect(targetReadCount).toBe(1);
+
+      // Verify all callers received equivalent defensive clones
+      const diskJson = JSON.parse(await origReadFile(tempFile, "utf-8"));
+      for (const r of results) {
+        expect(r).toEqual(diskJson);
+      }
+
+      // Mutate results[0] deeply -> other snapshots and warm cache must remain completely unaffected
+      results[0].projects[0].name = "MUTATED_CLONE";
+      results[0].projects[0].tasks.push({
+        id: "t-mut",
+        title: "Mutated",
+        status: "done",
+        createdAt: "2026-11-18T12:00:00.000Z",
+        updatedAt: "2026-11-18T12:00:00.000Z",
+      });
+      expect(results[1].projects[0].name).toBe("Cold Multi");
+      expect(results[1].projects[0].tasks.length).toBe(1);
+
+      // Warm-cache fast path does not hit disk again
+      const warm = await store.load();
+      expect(targetReadCount).toBe(1);
+      expect(warm.projects[0].name).toBe("Cold Multi");
+      expect(warm.projects[0].tasks.length).toBe(1);
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  it("AUD-P1-01 Test 4: cold load read error does not poison queue or publish partial state, and preserves ENOENT initialization", async () => {
+    const baseProj = {
+      id: "err-base",
+      name: "Error Recovery Base",
+      rootPath: path.join(path.dirname(tempFile), "ws-err-base"),
+      type: "node_typescript" as const,
+      primaryLanguage: "TypeScript",
+      frameworks: [],
+      summary: "Persisted baseline",
+      tasks: [],
+    };
+    const nextProj = {
+      id: "err-next",
+      name: "After Read Error",
+      rootPath: path.join(path.dirname(tempFile), "ws-err-next"),
+      type: "node_typescript" as const,
+      primaryLanguage: "TypeScript",
+      frameworks: [],
+      summary: "Saved after transient read error",
+      tasks: [],
+    };
+
+    await store.saveProject(baseProj);
+    store.clearCache();
+
+    // 1. Simulate a transient non-ENOENT read failure (EACCES) during cold hydration
+    const origReadFile = fs.readFile.bind(fs);
+    let failOnce = true;
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (p: any, ...rest: any[]) => {
+      if (failOnce && path.resolve(String(p)) === path.resolve(tempFile)) {
+        failOnce = false;
+        const err: any = new Error("Simulated EACCES during cold load");
+        err.code = "EACCES";
+        throw err;
+      }
+      return (origReadFile as any)(p, ...rest);
+    }) as any);
+
+    try {
+      const fallback = await store.load();
+      expect(fallback).toEqual({ activeProjectId: null, projects: [] });
+    } finally {
+      readSpy.mockRestore();
+    }
+
+    // Failed hydration MUST NOT have cached empty state -> next load reads real persisted baseline
+    const recoveredLoad = await store.load();
+    expect(recoveredLoad.projects.map((p) => p.id)).toEqual(["err-base"]);
+
+    // Queue is healthy -> subsequent save preserves both baseline and new project
+    await store.saveProject(nextProj);
+    const diskJson = JSON.parse(await fs.readFile(tempFile, "utf-8"));
+    expect(diskJson.projects.map((p: any) => p.id)).toEqual(["err-base", "err-next"]);
+    expect(await store.load()).toEqual(diskJson);
+
+    // 2. Existing ENOENT missing-file initialization behavior is preserved
+    const missingFile = path.join(path.dirname(tempFile), "brand-new-projects.json");
+    const freshStore = new ProjectStore(missingFile);
+    try {
+      const emptyInit = await freshStore.load();
+      expect(emptyInit).toEqual({ activeProjectId: null, projects: [] });
+      await freshStore.saveProject(nextProj);
+      const freshDisk = JSON.parse(await fs.readFile(missingFile, "utf-8"));
+      expect(freshDisk.projects.map((p: any) => p.id)).toEqual(["err-next"]);
+      expect(await freshStore.load()).toEqual(freshDisk);
+    } finally {
+      freshStore.clearCache();
+    }
   });
 });
 
