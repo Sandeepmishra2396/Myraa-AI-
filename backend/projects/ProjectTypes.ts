@@ -83,6 +83,7 @@ export interface ProjectContext {
   primaryLanguage: string;
   frameworks: string[];
   summary: string;
+  status?: "active" | "completed" | "archived";
   manifest?: ProjectManifest;
   architectureMap?: ArchitectureMap;
   git?: ProjectGitInfo;

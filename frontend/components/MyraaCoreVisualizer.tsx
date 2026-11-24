@@ -21,6 +21,8 @@ interface MyraaCoreVisualizerProps {
   themeColor: string; // Violet, crimson, emerald, celestial, gold, rose, charcoal
   activeEmotion?: MyraaEmotion;
   characterState: "idle" | "thinking" | "talking";
+  avatarMode?: "image" | "video" | "vrm";
+  imageSrc?: string;
   isResearching?: boolean;
   hasError?: boolean;
   errorText?: string | null;
@@ -32,6 +34,8 @@ export const MyraaCoreVisualizer: React.FC<MyraaCoreVisualizerProps> = ({
   themeColor,
   activeEmotion = "idle",
   characterState,
+  avatarMode = "video",
+  imageSrc = "/assets/myraa-avatar.png",
   isResearching = false,
   hasError = false,
   errorText = null,
@@ -295,11 +299,24 @@ export const MyraaCoreVisualizer: React.FC<MyraaCoreVisualizerProps> = ({
         ref={presenceRef}
         className="absolute z-10 w-full h-full flex items-center justify-center pointer-events-auto transition-all duration-700"
       >
-        <div className="relative w-full max-w-4xl aspect-[16/9] flex items-center justify-center scale-[0.95] sm:scale-110 select-none pointer-events-none md:max-h-[72vh] max-h-[62vh]">
-          {/* Subtle Outer Ambient Shadow Cast */}
-          <div className={`absolute inset-0 rounded-[2.5rem] blur-[30px] opacity-20 pointer-events-none mix-blend-screen transition-all duration-700 ${
-            getPresenceAura().outer
-          }`} />
+        {/* ================================================================ */}
+        {/* AVATAR STAGE: 16:9 landscape frame fills full center area       */}
+        {/* Avatar image is centered+contained; video/vrm use aspect frame  */}
+        {/* ================================================================ */}
+        <div className={`relative ${
+          avatarMode === "image"
+            ? "w-full h-full"
+            : "w-full max-w-full max-h-full aspect-[16/9] flex items-center justify-center"
+        } select-none pointer-events-none`}>
+          {/* Ambient glow aura behind avatar */}
+          <div className={`absolute inset-0 blur-[30px] opacity-20 pointer-events-none mix-blend-screen transition-all duration-700 ${
+            avatarMode !== "image" ? "rounded-[2rem]" : ""
+          } ${getPresenceAura().outer}`} />
+
+          {/* Subtle Cyan / Blue Holographic Aura behind character (Light & Dark theme compatible) */}
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="w-[85%] h-[85%] rounded-full blur-[45px] opacity-40 bg-gradient-to-tr from-cyan-400/40 via-sky-400/30 to-blue-500/25 pointer-events-none" />
+          </div>
 
           {/* Modular Avatar Renderer (Living Interface States) */}
           <AvatarRenderer
@@ -309,14 +326,17 @@ export const MyraaCoreVisualizer: React.FC<MyraaCoreVisualizerProps> = ({
             themeColor={themeColor}
             session={session}
             mouseNorm={mouseRef.current}
-            avatarMode="video"
+            avatarMode={avatarMode}
+            imageSrc={imageSrc}
             isResearching={isResearching}
             hasError={hasError}
             errorText={errorText}
           />
 
-          {/* Faint cybernetic visual edge grid guard */}
-          <div className="absolute inset-0 rounded-[2.5rem] border border-white/5 pointer-events-none bg-radial-gradient from-transparent to-black/35" />
+          {/* Faint cybernetic visual edge grid guard (video/vrm frame only) */}
+          {avatarMode !== "image" && (
+            <div className="absolute inset-0 rounded-[2rem] border border-cyan-400/10 pointer-events-none" />
+          )}
         </div>
       </div>
 

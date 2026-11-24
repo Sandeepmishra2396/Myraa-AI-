@@ -1,87 +1,339 @@
 @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
 
+@variant dark (&:where([data-theme="dark"], [data-theme="dark"] *, .dark, .dark *));
+
 @theme {
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: "Space Grotesk", "Sora", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 
   /* MYRAA — Neural Glass OS Color Palette */
-  --color-neural-bg: #05070D;
-  --color-neural-surface: #0B0F17;
-  --color-neural-elevated: #111722;
-  --color-neural-border: #202938;
-  --color-neural-text-primary: #F4F7FB;
-  --color-neural-text-secondary: #8994A6;
+  --color-neural-bg: var(--myraa-bg-color, #05070D);
+  --color-neural-surface: var(--myraa-surface, #0B0F17);
+  --color-neural-elevated: var(--myraa-surface-elevated, #111722);
+  --color-neural-border: var(--myraa-border, #202938);
+  --color-neural-text-primary: var(--myraa-text-primary, #F4F7FB);
+  --color-neural-text-secondary: var(--myraa-text-secondary, #8994A6);
 
-  --color-accent-cyan: #00F0FF;
+  --color-accent-cyan: var(--myraa-accent-cyan, #00F0FF);
   --color-accent-violet: #8B5CF6;
-  --color-accent-blue: #3B82F6;
+  --color-accent-blue: var(--myraa-accent-blue, #3B82F6);
   --color-accent-emerald: #10B981;
   --color-accent-amber: #F59E0B;
   --color-accent-red: #EF4444;
 }
 
+/* =========================================================================
+   MYRAA — CENTRALIZED DESIGN TOKENS (LIGHT BLUE & DARK THEMES)
+   ========================================================================= */
+
+:root,
+[data-theme="light"] {
+  /* Light Blue & White Design System (Phase 1 Foundation) */
+  --myraa-bg-gradient: linear-gradient(180deg, #F0F6FC 0%, #E6EFF8 50%, #DCE8F5 100%);
+  --myraa-bg-color: #F0F6FC;
+  --myraa-text-primary: #0F172A;
+  --myraa-text-secondary: #334155;
+  --myraa-text-muted: #475569;
+  --myraa-border: rgba(186, 215, 243, 0.75);
+  --myraa-border-subtle: rgba(203, 226, 248, 0.55);
+  --myraa-border-hover: rgba(2, 132, 199, 0.5);
+  --myraa-surface: rgba(255, 255, 255, 0.88);
+  --myraa-surface-elevated: rgba(255, 255, 255, 0.96);
+  --myraa-surface-dock: rgba(245, 250, 255, 0.94);
+  --myraa-pill-bg: rgba(235, 244, 255, 0.88);
+  --myraa-pill-hover: rgba(220, 238, 255, 0.98);
+  --myraa-accent-blue: #0284C7;
+  --myraa-accent-cyan: #0284C7;
+  --myraa-accent-glow: rgba(2, 132, 199, 0.15);
+  --myraa-shadow-sm: 0 4px 16px rgba(12, 74, 110, 0.05);
+  --myraa-shadow-md: 0 8px 30px rgba(12, 74, 110, 0.08);
+  --myraa-shadow-lg: 0 16px 40px rgba(12, 74, 110, 0.12);
+  --myraa-inset-glow: inset 0 1px 0 0 rgba(255, 255, 255, 0.85);
+}
+
+[data-theme="dark"] {
+  /* Dark Cyber Fallback Theme */
+  --myraa-bg-gradient: linear-gradient(180deg, #000000 0%, #030712 50%, #0A101D 100%);
+  --myraa-bg-color: #05070D;
+  --myraa-text-primary: #F4F7FB;
+  --myraa-text-secondary: #8994A6;
+  --myraa-text-muted: #64748B;
+  --myraa-border: rgba(32, 41, 56, 0.75);
+  --myraa-border-subtle: rgba(32, 41, 56, 0.5);
+  --myraa-border-hover: rgba(59, 130, 246, 0.35);
+  --myraa-surface: rgba(11, 15, 23, 0.72);
+  --myraa-surface-elevated: rgba(17, 23, 34, 0.84);
+  --myraa-surface-dock: rgba(11, 15, 23, 0.82);
+  --myraa-pill-bg: rgba(17, 23, 34, 0.65);
+  --myraa-pill-hover: rgba(25, 33, 49, 0.8);
+  --myraa-accent-blue: #3B82F6;
+  --myraa-accent-cyan: #00F0FF;
+  --myraa-accent-glow: rgba(0, 240, 255, 0.12);
+  --myraa-shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.3);
+  --myraa-shadow-md: 0 8px 32px rgba(0, 0, 0, 0.4);
+  --myraa-shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.65);
+  --myraa-inset-glow: inset 0 1px 0 0 rgba(255, 255, 255, 0.04);
+}
+
 /* Custom smooth transition classes */
 .theme-transition {
-  transition: background-color 1.2s cubic-bezier(0.4, 0, 0.2, 1), 
-              background-image 1.2s cubic-bezier(0.4, 0, 0.2, 1),
-              box-shadow 0.8s ease;
+  transition: background-color 0.8s cubic-bezier(0.4, 0, 0.2, 1), 
+              background-image 0.8s cubic-bezier(0.4, 0, 0.2, 1),
+              color 0.4s ease,
+              border-color 0.4s ease,
+              box-shadow 0.6s ease;
 }
 
 /* =========================================================================
-   MYRAA — Neural Glass OS Surfaces
-   Strict 85% dark/neutral (#05070D, #0B0F17, #111722),
-   10% glass/surface (rgba backdrop-blur, 1px subtle border #202938),
-   5% accent (Electric Cyan #00F0FF, Soft Violet #8B5CF6, Blue #3B82F6).
-   Clean typography, Apple Vision Pro + modern AI dashboard OS feel.
+   MYRAA — Sleek Custom Scrollbars & Accessible Focus (Phase 6 Polish)
+   ========================================================================= */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.45);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(14, 165, 233, 0.7);
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: rgba(71, 85, 105, 0.5);
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(56, 189, 248, 0.65);
+}
+
+/* Accessible keyboard focus outlines */
+:focus-visible {
+  outline: 2px solid var(--myraa-accent-blue);
+  outline-offset: 2px;
+}
+
+/* =========================================================================
+   MYRAA — Neural Glass Surfaces (Theme-Driven)
    ========================================================================= */
 
 .neural-glass-panel {
-  background: rgba(11, 15, 23, 0.72);
+  background: var(--myraa-surface);
   backdrop-filter: blur(24px) saturate(160%);
   -webkit-backdrop-filter: blur(24px) saturate(160%);
-  border: 1px solid rgba(32, 41, 56, 0.75);
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4), inset 0 1px 0 0 rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--myraa-border);
+  box-shadow: var(--myraa-shadow-md), var(--myraa-inset-glow);
 }
 
 .neural-glass-panel-hover {
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .neural-glass-panel-hover:hover {
-  background: rgba(17, 23, 34, 0.82);
-  border-color: rgba(59, 130, 246, 0.35);
-  box-shadow: 0 12px 36px 0 rgba(0, 0, 0, 0.55), 0 0 20px -8px rgba(0, 240, 255, 0.08), inset 0 1px 0 0 rgba(255, 255, 255, 0.07);
+  background: var(--myraa-surface-elevated);
+  border-color: var(--myraa-border-hover);
+  box-shadow: var(--myraa-shadow-lg), 0 0 20px -8px var(--myraa-accent-glow), var(--myraa-inset-glow);
 }
 
 .neural-glass-elevated {
-  background: rgba(17, 23, 34, 0.84);
+  background: var(--myraa-surface-elevated);
   backdrop-filter: blur(28px) saturate(180%);
   -webkit-backdrop-filter: blur(28px) saturate(180%);
-  border: 1px solid rgba(32, 41, 56, 0.85);
-  box-shadow: 0 16px 40px 0 rgba(0, 0, 0, 0.65), inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--myraa-border);
+  box-shadow: var(--myraa-shadow-lg), var(--myraa-inset-glow);
 }
 
 .neural-glass-dock {
-  background: rgba(11, 15, 23, 0.82);
+  background: var(--myraa-surface-dock);
   backdrop-filter: blur(32px) saturate(180%);
   -webkit-backdrop-filter: blur(32px) saturate(180%);
-  border: 1px solid rgba(32, 41, 56, 0.85);
-  box-shadow: 0 20px 50px -10px rgba(0, 0, 0, 0.8), 0 0 24px -10px rgba(0, 240, 255, 0.12), inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--myraa-border);
+  box-shadow: var(--myraa-shadow-lg), 0 0 24px -10px var(--myraa-accent-glow), var(--myraa-inset-glow);
+}
+
+.neural-glass-subtle {
+  background: var(--myraa-pill-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--myraa-border-subtle);
+  box-shadow: var(--myraa-shadow-sm);
 }
 
 .neural-pill {
-  background: rgba(17, 23, 34, 0.65);
+  background: var(--myraa-pill-bg);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(32, 41, 56, 0.7);
+  border: 1px solid var(--myraa-border);
   transition: all 0.2s ease;
 }
 
 .neural-pill:hover {
-  background: rgba(25, 33, 49, 0.8);
-  border-color: rgba(0, 240, 255, 0.35);
-  box-shadow: 0 0 12px -3px rgba(0, 240, 255, 0.15);
+  background: var(--myraa-pill-hover);
+  border-color: var(--myraa-border-hover);
+  box-shadow: 0 0 12px -3px var(--myraa-accent-glow);
+}
+
+/* =========================================================================
+   LIGHT BLUE THEME ADAPTIVE MODIFIERS
+   ========================================================================= */
+
+[data-theme="light"] {
+  color: var(--myraa-text-primary);
+}
+
+/* Base Desktop Viewport */
+[data-theme="light"] #myraa-holographic-desktop {
+  background: var(--myraa-bg-gradient) !important;
+  color: var(--myraa-text-primary) !important;
+}
+
+[data-theme="light"] #myraa-holographic-desktop .ambient-glow-1 {
+  background-color: rgba(186, 230, 253, 0.55) !important;
+}
+
+[data-theme="light"] #myraa-holographic-desktop .ambient-glow-2 {
+  background-color: rgba(199, 210, 254, 0.45) !important;
+}
+
+[data-theme="light"] #myraa-holographic-desktop .ambient-glow-3 {
+  background-color: rgba(224, 242, 254, 0.45) !important;
+}
+
+[data-theme="light"] #myraa-holographic-desktop .os-grid-pattern {
+  background-image: linear-gradient(rgba(14, 165, 233, 0.06) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(14, 165, 233, 0.06) 1px, transparent 1px) !important;
+  opacity: 0.8 !important;
+}
+
+/* Text Overrides for Light Mode */
+[data-theme="light"] .text-\[\#F4F7FB\] {
+  color: var(--myraa-text-primary) !important;
+}
+
+[data-theme="light"] .text-\[\#8994A6\] {
+  color: var(--myraa-text-secondary) !important;
+}
+
+[data-theme="light"] .text-\[\#00F0FF\] {
+  color: var(--myraa-accent-blue) !important;
+}
+
+/* Accessible slate contrast in Light Mode (WCAG AA Compliant) */
+[data-theme="light"] .text-slate-400 {
+  color: var(--myraa-text-muted) !important; /* #475569 instead of washed-out #94a3b8 */
+}
+
+[data-theme="light"] .text-slate-500 {
+  color: var(--myraa-text-secondary) !important; /* #334155 instead of #64748B */
+}
+
+/* Ensure bright cyans/skies are readable against light surfaces */
+[data-theme="light"] .text-cyan-400,
+[data-theme="light"] .text-cyan-300,
+[data-theme="light"] .text-sky-300 {
+  color: var(--myraa-accent-blue) !important;
+}
+
+/* Border Overrides for Light Mode */
+[data-theme="light"] .border-\[\#202938\] {
+  border-color: var(--myraa-border) !important;
+}
+
+[data-theme="light"] .border-\[\#202938\]\/60,
+[data-theme="light"] .border-\[\#202938\]\/70,
+[data-theme="light"] .border-\[\#202938\]\/80 {
+  border-color: var(--myraa-border-subtle) !important;
+}
+
+[data-theme="light"] .border-\[\#00F0FF\]\/30,
+[data-theme="light"] .border-\[\#00F0FF\]\/40,
+[data-theme="light"] .border-\[\#00F0FF\]\/50,
+[data-theme="light"] .border-\[\#00F0FF\]\/60,
+[data-theme="light"] .border-\[\#3B82F6\]\/40,
+[data-theme="light"] .border-\[\#3B82F6\]\/50 {
+  border-color: rgba(14, 165, 233, 0.45) !important;
+}
+
+/* Subtle backgrounds */
+[data-theme="light"] .bg-\[\#111722\] {
+  background-color: rgba(224, 238, 255, 0.75) !important;
+}
+
+[data-theme="light"] .bg-\[\#111722\]\/80,
+[data-theme="light"] .bg-\[\#111722\]\/90 {
+  background-color: rgba(235, 245, 255, 0.75) !important;
+}
+
+[data-theme="light"] .hover\:bg-\[\#111722\]\/80:hover {
+  background-color: rgba(219, 234, 254, 0.8) !important;
+}
+
+/* Header border */
+[data-theme="light"] header {
+  border-color: var(--myraa-border-subtle) !important;
+}
+
+/* Modal and Drawer Backdrops */
+[data-theme="light"] .bg-slate-900\/40,
+[data-theme="light"] .bg-black\/40 {
+  background-color: rgba(15, 23, 42, 0.28) !important;
+}
+
+/* Form Controls for Light Theme */
+[data-theme="light"] input[type="text"],
+[data-theme="light"] input[type="password"],
+[data-theme="light"] input[type="number"],
+[data-theme="light"] input[type="search"],
+[data-theme="light"] textarea,
+[data-theme="light"] select {
+  background-color: rgba(255, 255, 255, 0.95) !important;
+  color: var(--myraa-text-primary) !important;
+  border-color: var(--myraa-border) !important;
+}
+
+[data-theme="light"] input::placeholder,
+[data-theme="light"] textarea::placeholder {
+  color: #64748B !important;
+  opacity: 1 !important;
+}
+
+[data-theme="light"] select option {
+  background-color: #FFFFFF !important;
+  color: #0F172A !important;
+}
+
+[data-theme="light"] input:focus,
+[data-theme="light"] textarea:focus,
+[data-theme="light"] select:focus {
+  border-color: var(--myraa-accent-blue) !important;
+  box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.2) !important;
+}
+
+/* Talk to MYRAA button in dock when idle */
+[data-theme="light"] .neural-glass-dock button.group {
+  background-color: rgba(255, 255, 255, 0.88) !important;
+  border-color: var(--myraa-border) !important;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.08) !important;
+}
+[data-theme="light"] .neural-glass-dock button.group:hover {
+  border-color: rgba(37, 99, 235, 0.45) !important;
+  box-shadow: 0 6px 20px rgba(37, 99, 235, 0.16) !important;
+}
+[data-theme="light"] .neural-glass-dock button.group span.font-sans {
+  color: #0F172A !important;
+}
+
+/* Avatar Renderer frame border */
+[data-theme="light"] #myraa-animated-presence .border-white\/5 {
+  border-color: rgba(14, 165, 233, 0.2) !important;
 }
 
 @keyframes float {
@@ -129,4 +381,3 @@
 .animate-fade-in {
   animation: fade-in 0.4s ease-out forwards;
 }
-

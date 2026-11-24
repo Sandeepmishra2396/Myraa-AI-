@@ -76,4 +76,7 @@ ui_kb.xml
 window_dump.xml
 /*.png
 test-artifacts/
+backups/
+runtime_verification/
+strix_runs/
 

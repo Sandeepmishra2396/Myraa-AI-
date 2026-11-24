@@ -51,17 +51,17 @@ export class ErrorBoundary extends Component<Props, State> {
   public render() {
     if (this.state.hasError) {
       return (
-        <div className="p-6 rounded-2xl border border-rose-500/30 bg-rose-950/40 backdrop-blur-xl text-left max-w-lg mx-auto my-4 shadow-2xl">
-          <div className="flex items-center gap-3 text-rose-300 font-mono text-sm font-semibold mb-2">
-            <CircleAlert size={20} className="text-rose-400 shrink-0" />
+        <div className="p-6 rounded-2xl border border-rose-300 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-950/40 backdrop-blur-xl text-left max-w-lg mx-auto my-4 shadow-xl">
+          <div className="flex items-center gap-3 text-rose-700 dark:text-rose-300 font-mono text-sm font-semibold mb-2">
+            <CircleAlert size={20} className="text-rose-500 dark:text-rose-400 shrink-0" />
             <span>{this.props.fallbackTitle || "Interface Module Recovered"}</span>
           </div>
-          <p className="text-xs text-rose-200/90 font-mono leading-relaxed mb-4 break-words">
+          <p className="text-xs text-rose-800 dark:text-rose-200/90 font-mono leading-relaxed mb-4 break-words">
             {this.state.error?.message || "An unexpected error occurred in this view."}
           </p>
           <button
             onClick={this.handleReset}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-mono font-medium transition cursor-pointer border border-white/10"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-100 hover:bg-rose-200 dark:bg-white/10 dark:hover:bg-white/20 text-rose-800 dark:text-white text-xs font-mono font-medium transition cursor-pointer border border-rose-200 dark:border-white/10"
           >
             <RefreshCw size={14} />
             <span>Restore Component</span>

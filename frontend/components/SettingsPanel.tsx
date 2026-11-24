@@ -22,6 +22,9 @@ import {
   Brain,
   Lock,
   Database,
+  Radio,
+  Sliders,
+  SlidersHorizontal,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { MyraaSettings, SupportedLanguageSetting, DEFAULT_SETTINGS, loadSettings, saveSettings } from "../lib/settingsStore";
@@ -45,7 +48,7 @@ interface SettingsPanelProps {
 
 type SettingsTab = "general" | "voice" | "system" | "security" | "memory" | "about";
 
-/** A single toggle row matching the existing "Screen Vision Mode" switch style. */
+/** A single toggle row styled with Light Blue and Dark theme tokens. */
 function ToggleRow({
   label,
   description,
@@ -58,21 +61,24 @@ function ToggleRow({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <div className="pt-2 border-t border-white/5 flex items-center justify-between text-left">
-      <div className="flex flex-col">
-        <span className="text-[10px] font-bold font-mono text-slate-200">{label}</span>
-        <span className="text-[8px] text-slate-400 uppercase font-mono max-w-[200px]">
+    <div className="pt-3 pb-1 border-t border-slate-200 dark:border-[#202938]/60 flex items-center justify-between text-left">
+      <div className="flex flex-col pr-4">
+        <span className="text-xs font-mono font-bold tracking-wider text-slate-900 dark:text-[#F4F7FB]">{label}</span>
+        <span className="text-[11px] text-slate-600 dark:text-[#8994A6] font-sans mt-0.5 leading-snug">
           {description}
         </span>
       </div>
       <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
         onClick={() => onChange(!checked)}
-        className={`w-10 h-5 rounded-full p-0.5 transition-colors duration-200 focus:outline-none cursor-pointer ${
-          checked ? "bg-cyan-500" : "bg-white/10"
+        className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-200 focus:outline-none cursor-pointer shrink-0 ${
+          checked ? "bg-[#0284C7] shadow-[0_0_10px_rgba(2,132,199,0.35)]" : "bg-slate-300 dark:bg-white/10"
         }`}
       >
         <div
-          className={`bg-white w-4 h-4 rounded-full shadow-md transform duration-200 ease-in-out ${
+          className={`bg-white w-5 h-5 rounded-full shadow-md transform duration-200 ease-in-out ${
             checked ? "translate-x-5" : "translate-x-0"
           }`}
         />
@@ -347,7 +353,7 @@ export function SettingsPanel({
       case "rose": return "border-pink-500/30 text-pink-400 bg-pink-500/10";
       case "charcoal":
       default:
-        return "border-indigo-500/30 text-indigo-400 bg-indigo-500/10";
+        return "border-blue-500/30 text-[#0284C7] bg-[#0284C7]/10";
     }
   };
 
@@ -364,63 +370,66 @@ export function SettingsPanel({
     <AnimatePresence>
       {isOpen && (
         <>
-          {/* Backdrop Overlay — identical to MemoryDashboard */}
+          {/* Backdrop Overlay */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
-            className="absolute inset-0 bg-black/60 z-40 backdrop-blur-sm"
+            className="absolute inset-0 bg-black/40 z-40 backdrop-blur-sm"
           />
 
-          {/* Slide-over Container — identical shell to MemoryDashboard */}
+          {/* Slide-over Container — Right side panel matching Light Blue theme */}
           <motion.div
             initial={{ x: "100%" }}
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
-            transition={{ type: "spring", damping: 25, stiffness: 200 }}
-            className="absolute inset-y-0 right-0 w-full max-w-lg bg-[#0B0F17]/95 border-l border-[#202938] text-[#F4F7FB] backdrop-blur-2xl z-50 flex flex-col shadow-[0_0_50px_rgba(0,0,0,0.8)]"
+            transition={{ duration: 0.25, ease: "easeInOut" }}
+            className="absolute inset-y-0 right-0 w-full max-w-xl neural-glass-panel border-l border-slate-200 dark:border-[#202938] text-slate-900 dark:text-[#F4F7FB] backdrop-blur-3xl z-50 flex flex-col shadow-2xl"
           >
             {/* Header */}
-            <div className="p-6 border-b border-[#202938]/80 flex items-center justify-between">
+            <div className="p-5 sm:p-6 border-b border-slate-200 dark:border-[#202938]/60 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className={`p-2.5 rounded-xl border ${getThemeBadgeGlow()}`}>
                   <Settings size={22} className="animate-spin [animation-duration:6s]" />
                 </div>
                 <div>
-                  <h3 className="font-display font-medium text-lg tracking-tight text-white flex items-center gap-2">
+                  <h3 className="font-display font-medium text-lg tracking-tight text-slate-900 dark:text-[#F4F7FB] flex items-center gap-2">
                     Myraa Configuration
-                    <Sparkles size={14} className="text-cyan-400" />
+                    <Sparkles size={14} className="text-[#0284C7]" />
                   </h3>
-                  <p className="text-[10px] font-mono uppercase tracking-widest text-slate-400 mt-0.5">
+                  <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500 dark:text-[#8994A6] mt-0.5">
                     System settings &amp; preferences
                   </p>
                 </div>
               </div>
               <button
                 onClick={onClose}
-                className="p-2 rounded-xl border border-white/5 bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition cursor-pointer"
+                className="p-2 rounded-xl neural-pill hover:bg-rose-500/10 hover:border-rose-500/30 text-slate-500 hover:text-rose-500 dark:text-[#8994A6] dark:hover:text-rose-400 transition cursor-pointer"
+                title="Close Settings"
+                data-testid="close-settings-btn"
               >
                 <X size={18} />
               </button>
             </div>
 
-            {/* Tab selector row — mirrors MemoryDashboard pill style */}
-            <div className="px-6 py-4 border-b border-white/5 flex items-center gap-2 overflow-x-auto">
+            {/* Navigation Tabs row */}
+            <div className="px-5 sm:px-6 py-3 border-b border-slate-200 dark:border-[#202938]/60 flex items-center gap-2 overflow-x-auto no-scrollbar">
               {tabs.map((t) => {
                 const Icon = t.icon;
                 const active = activeTab === t.id;
                 return (
                   <button
                     key={t.id}
+                    data-testid={`settings-tab-${t.id}`}
                     onClick={() => setActiveTab(t.id)}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-mono tracking-wider transition shrink-0 cursor-pointer ${
                       active
-                        ? "border-cyan-400 bg-cyan-400/10 text-cyan-300"
-                        : "border-white/5 bg-white/5 text-slate-400 hover:bg-white/10"
+                        ? "border-[#0284C7] bg-[#0284C7]/15 text-[#0284C7] font-semibold shadow-sm"
+                        : "border-slate-200 dark:border-[#202938]/60 bg-transparent text-slate-600 dark:text-[#8994A6] hover:bg-slate-100 dark:hover:bg-[#111722]/80 hover:text-slate-900 dark:hover:text-[#F4F7FB]"
                     }`}
                   >
-                    <Icon size={12} />
+                    <Icon size={13} className={active ? "text-[#0284C7]" : "text-slate-500 dark:text-[#8994A6]"} />
                     <span>{t.label}</span>
                   </button>
                 );
@@ -428,55 +437,60 @@ export function SettingsPanel({
             </div>
 
             {/* Scrollable content area */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-5">
-              {/* ---------------- GENERAL ---------------- */}
+            <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-5">
+              {/* ---------------- 1. GENERAL ---------------- */}
               {activeTab === "general" && (
                 <div className="space-y-4">
-                  <div className="text-[10px] font-mono uppercase tracking-widest text-slate-500">
-                    Startup &amp; Appearance
+                  <div className="text-xs font-mono font-bold uppercase tracking-widest text-[#0284C7] flex items-center gap-1.5">
+                    <Power size={13} />
+                    <span>Startup &amp; Appearance</span>
                   </div>
 
-                  <ToggleRow
-                    label="LAUNCH AT STARTUP"
-                    description="Start Myraa silently when Windows logs in"
-                    checked={settings.autoStart}
-                    onChange={(v) => {
-                      onChange({ autoStart: v });
-                      // Persist + push to backend; the desktop agent flips the
-                      // HKCU Run registry key. We just record intent here.
-                      void fetch("/api/settings", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ autoStart: v }),
-                      }).catch(() => {});
-                    }}
-                  />
+                  {/* Startup & Animations Card */}
+                  <div className="neural-glass-subtle rounded-2xl p-4 border border-slate-200 dark:border-[#202938]/60 space-y-3">
+                    <ToggleRow
+                      label="LAUNCH AT STARTUP"
+                      description="Start Myraa silently when Windows logs in"
+                      checked={settings.autoStart}
+                      onChange={(v) => {
+                        onChange({ autoStart: v });
+                        void fetch("/api/settings", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ autoStart: v }),
+                        }).catch(() => {});
+                      }}
+                    />
 
-                  <ToggleRow
-                    label="UI ANIMATIONS"
-                    description="Enable motion and orb transitions"
-                    checked={settings.animations}
-                    onChange={(v) => onChange({ animations: v })}
-                  />
+                    <ToggleRow
+                      label="UI ANIMATIONS"
+                      description="Enable smooth motion, holographic glow, and transitions"
+                      checked={settings.animations}
+                      onChange={(v) => onChange({ animations: v })}
+                    />
 
-                  {settings.autoStart && (
-                    <div className="mt-2 p-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 flex items-center gap-2">
-                      <Check size={14} className="text-emerald-400 shrink-0" />
-                      <span className="text-[10px] font-mono text-emerald-300/80">
-                        Myraa will auto-launch on next Windows login.
-                      </span>
-                    </div>
-                  )}
+                    {settings.autoStart && (
+                      <div className="mt-2 p-3 rounded-xl border border-emerald-500/20 bg-emerald-500/10 flex items-center gap-2">
+                        <Check size={14} className="text-emerald-500 shrink-0" />
+                        <span className="text-[11px] font-mono text-emerald-600 dark:text-emerald-300">
+                          Myraa will auto-launch on next Windows login.
+                        </span>
+                      </div>
+                    )}
+                  </div>
 
-                  {/* --- Gemini Credentials Section --- */}
-                  <div className="pt-4 border-t border-white/10 space-y-3">
-                    <div className="text-[10px] font-mono uppercase tracking-widest text-slate-500 flex items-center justify-between">
-                      <span>Gemini Live Credentials</span>
+                  {/* Gemini Credentials Card */}
+                  <div className="neural-glass-subtle rounded-2xl p-4 border border-slate-200 dark:border-[#202938]/60 space-y-3.5">
+                    <div className="text-xs font-mono font-bold uppercase tracking-widest text-[#0284C7] flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <KeyRound size={13} />
+                        <span>Gemini Live Credentials</span>
+                      </div>
                       <a
                         href="https://aistudio.google.com/apikey"
                         target="_blank"
                         rel="noreferrer"
-                        className="text-[9px] text-cyan-400 hover:text-cyan-300 flex items-center gap-1 normal-case font-sans"
+                        className="text-[10px] text-[#0284C7] hover:underline flex items-center gap-1 normal-case font-sans"
                       >
                         Get free key <ExternalLink size={10} />
                       </a>
@@ -486,18 +500,18 @@ export function SettingsPanel({
                     <div
                       className={`p-3 rounded-xl border flex items-center justify-between ${
                         apiKeyMeta.hasApiKey
-                          ? "border-emerald-500/20 bg-emerald-500/5"
-                          : "border-rose-500/20 bg-rose-500/5"
+                          ? "border-emerald-500/30 bg-emerald-500/10"
+                          : "border-rose-500/30 bg-rose-500/10"
                       }`}
                     >
                       <div className="flex items-center gap-2.5">
                         <div
-                          className={`w-2 h-2 rounded-full shrink-0 ${
-                            apiKeyMeta.hasApiKey ? "bg-emerald-400 animate-pulse" : "bg-rose-400"
+                          className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                            apiKeyMeta.hasApiKey ? "bg-emerald-500 shadow-[0_0_8px_#10B981] animate-pulse" : "bg-rose-500"
                           }`}
                         />
                         <div>
-                          <div className="text-xs font-mono text-white">
+                          <div className="text-xs font-mono font-semibold text-slate-900 dark:text-[#F4F7FB]">
                             {apiKeyMeta.hasApiKey
                               ? !isLocalOrigin
                                 ? "Server Gemini API Key Active"
@@ -508,7 +522,7 @@ export function SettingsPanel({
                                 : "No Server Gemini API Key Configured"
                               : "No Valid API Key"}
                           </div>
-                          <div className="text-[10px] font-mono text-slate-400">
+                          <div className="text-[10px] font-mono text-slate-600 dark:text-[#8994A6] mt-0.5">
                             {apiKeyMeta.hasApiKey
                               ? `Active: ${apiKeyMeta.masked || "Configured"} (${apiKeyMeta.source || "server"})`
                               : !isLocalOrigin
@@ -522,7 +536,7 @@ export function SettingsPanel({
                           type="button"
                           onClick={handleClearApiKey}
                           title="Remove API Key"
-                          className="p-1.5 rounded-lg border border-white/10 hover:border-rose-500/40 bg-white/5 hover:bg-rose-500/10 text-slate-400 hover:text-rose-300 transition cursor-pointer"
+                          className="p-1.5 rounded-lg border border-slate-200 dark:border-[#202938]/60 hover:border-rose-500/40 hover:bg-rose-500/10 text-slate-500 dark:text-[#8994A6] hover:text-rose-500 transition cursor-pointer"
                         >
                           <Trash2 size={13} />
                         </button>
@@ -530,20 +544,20 @@ export function SettingsPanel({
                     </div>
 
                     {!isLocalOrigin ? (
-                      <div className="p-3.5 rounded-xl border border-indigo-500/20 bg-indigo-500/5 text-xs font-mono space-y-2">
-                        <div className="text-indigo-300 font-semibold flex items-center gap-1.5 text-[11px]">
+                      <div className="p-3.5 rounded-xl border border-blue-500/20 bg-blue-500/5 text-xs font-mono space-y-2">
+                        <div className="text-[#0284C7] font-semibold flex items-center gap-1.5 text-[11px]">
                           <Shield size={13} />
                           <span>Server-Side Cloud Key Management</span>
                         </div>
-                        <p className="text-[10px] text-slate-400 leading-relaxed">
+                        <p className="text-[11px] text-slate-600 dark:text-[#8994A6] leading-relaxed">
                           In Cloud Companion mode, the Gemini API key is configured strictly on the server host (Render Dashboard → Environment) to protect secret credentials from client exposure.
                         </p>
                         {(!apiKeyMeta.hasApiKey || apiKeyMeta.isPlaceholder) && (
-                          <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[10px] text-amber-300 space-y-1">
-                            <div className="font-semibold text-amber-200">Action Required in Render Dashboard:</div>
-                            <div>1. Open Render → Your Web Service (<span className="text-white">myraa-ai-q0h3</span>).</div>
-                            <div>2. Go to the <span className="text-white font-semibold">Environment</span> tab.</div>
-                            <div>3. Set <span className="text-white font-semibold">GEMINI_API_KEY</span> to your real Google Gemini API key (starts with <span className="text-white">AIzaSy</span>).</div>
+                          <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[10px] text-amber-600 dark:text-amber-300 space-y-1">
+                            <div className="font-semibold text-amber-700 dark:text-amber-200">Action Required in Render Dashboard:</div>
+                            <div>1. Open Render → Your Web Service (<span className="font-bold">myraa-ai-q0h3</span>).</div>
+                            <div>2. Go to the <span className="font-semibold">Environment</span> tab.</div>
+                            <div>3. Set <span className="font-semibold">GEMINI_API_KEY</span> to your real Google Gemini API key (starts with <span className="font-bold">AIzaSy</span>).</div>
                             <div>4. Save Changes to trigger automated redeployment.</div>
                           </div>
                         )}
@@ -551,7 +565,7 @@ export function SettingsPanel({
                     ) : (
                       <>
                         {/* Input form for local desktop Electron / development */}
-                        <form onSubmit={handleSaveApiKey} className="space-y-2">
+                        <form onSubmit={handleSaveApiKey} className="space-y-2.5">
                           <div className="relative">
                             <input
                               id="gemini-api-key-input"
@@ -562,12 +576,12 @@ export function SettingsPanel({
                               value={apiKeyInput}
                               onChange={(e) => setApiKeyInput(e.target.value)}
                               placeholder={apiKeyMeta.hasApiKey ? "Replace with new API or Auth key" : "Paste API key (AIza… or AQ.…)"}
-                              className="w-full pl-3 pr-10 py-2 rounded-xl border border-white/10 bg-white/5 text-xs text-white font-mono focus:outline-none focus:border-cyan-400/50 transition"
+                              className="w-full pl-3 pr-10 py-2.5 rounded-xl border border-slate-300 dark:border-[#202938] bg-white dark:bg-white/5 text-xs text-slate-900 dark:text-[#F4F7FB] font-mono focus:outline-none focus:border-[#0284C7] transition placeholder-slate-400 dark:placeholder-slate-500"
                             />
                             <button
                               type="button"
                               onClick={() => setShowApiKey(!showApiKey)}
-                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition cursor-pointer"
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 dark:text-[#8994A6] hover:text-slate-900 dark:hover:text-[#F4F7FB] transition cursor-pointer"
                             >
                               {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
                             </button>
@@ -575,10 +589,10 @@ export function SettingsPanel({
 
                           {keyStatusMsg && (
                             <div
-                              className={`p-2.5 rounded-xl border text-[10px] font-mono leading-relaxed ${
+                              className={`p-2.5 rounded-xl border text-[11px] font-mono leading-relaxed ${
                                 keyStatusMsg.type === "success"
-                                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-                                  : "border-rose-500/30 bg-rose-500/10 text-rose-300"
+                                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
+                                  : "border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300"
                               }`}
                             >
                               {keyStatusMsg.text}
@@ -588,7 +602,7 @@ export function SettingsPanel({
                           <button
                             type="submit"
                             disabled={savingKey || !apiKeyInput.trim()}
-                            className="w-full py-2 rounded-xl bg-gradient-to-r from-indigo-500 to-cyan-500 text-xs font-mono font-semibold text-white hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-1.5 cursor-pointer"
+                            className="w-full py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-sky-500 to-cyan-500 text-xs font-mono font-semibold text-white shadow-md hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-1.5 cursor-pointer"
                           >
                             {savingKey ? (
                               <>
@@ -604,56 +618,57 @@ export function SettingsPanel({
                           </button>
                         </form>
 
-                        <p className="text-[9px] text-slate-500 font-mono leading-relaxed">
-                          Supports Google Gemini API keys (<span className="text-slate-300 font-bold">AIza...</span>) and AI Studio Auth keys (<span className="text-slate-300 font-bold">AQ....</span>). Stored locally and never exposed.
+                        <p className="text-[10px] text-slate-600 dark:text-[#8994A6] font-mono leading-relaxed">
+                          Supports Google Gemini API keys (<span className="text-[#0284C7] font-bold">AIza...</span>) and AI Studio Auth keys (<span className="text-[#0284C7] font-bold">AQ....</span>). Stored securely and never exposed.
                         </p>
                       </>
                     )}
                   </div>
 
+                  {/* Cloud Companion Device Card */}
                   {remoteSession && (
-                    <div className="p-4 rounded-xl border border-indigo-500/20 bg-indigo-500/5 space-y-3">
+                    <div className="neural-glass-subtle rounded-2xl p-4 border border-slate-200 dark:border-[#202938]/60 space-y-3">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <Shield size={14} className="text-indigo-400" />
-                          <span className="text-xs font-mono text-white">Cloud Companion Device</span>
+                          <Shield size={14} className="text-[#0284C7]" />
+                          <span className="text-xs font-mono font-bold text-slate-900 dark:text-[#F4F7FB]">Cloud Companion Device</span>
                         </div>
-                        <span className="text-[10px] font-mono text-emerald-400 font-semibold px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20">
+                        <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-semibold px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20">
                           Authenticated
                         </span>
                       </div>
-                      <div className="space-y-1 text-[10px] font-mono text-slate-400">
+                      <div className="space-y-1.5 text-[11px] font-mono text-slate-600 dark:text-[#8994A6]">
                         <div className="flex justify-between">
                           <span>DEVICE NAME</span>
-                          <span className="text-slate-200">{remoteSession.deviceName}</span>
+                          <span className="text-slate-900 dark:text-[#F4F7FB] font-medium">{remoteSession.deviceName}</span>
                         </div>
                         <div className="flex justify-between">
                           <span>ROLE</span>
-                          <span className="text-indigo-300 uppercase font-bold">{liveRole || remoteSession.role}</span>
+                          <span className="text-[#0284C7] uppercase font-bold">{liveRole || remoteSession.role}</span>
                         </div>
                         <div className="flex justify-between">
                           <span>DEVICE ID</span>
-                          <span className="text-slate-300 font-mono">{remoteSession.deviceId.slice(0, 10)}...</span>
+                          <span className="text-slate-500 dark:text-[#8994A6] font-mono">{remoteSession.deviceId.slice(0, 10)}...</span>
                         </div>
                       </div>
 
                       {/* Admin-Only Secondary Device Pairing Button */}
                       {(liveRole || remoteSession.role) === "admin" && (
-                        <div className="pt-2 border-t border-indigo-500/20 space-y-2.5">
+                        <div className="pt-2 border-t border-slate-200 dark:border-[#202938]/60 space-y-2.5">
                           <button
                             onClick={handleGeneratePairCode}
                             disabled={isGeneratingPairCode}
                             type="button"
-                            className="w-full py-2 px-3 rounded-lg border border-cyan-500/40 bg-cyan-500/15 hover:bg-cyan-500/25 text-xs font-mono text-cyan-200 font-semibold flex items-center justify-center gap-2 transition cursor-pointer shadow-sm shadow-cyan-500/10"
+                            className="w-full py-2 px-3 rounded-xl border border-[#0284C7]/40 bg-[#0284C7]/15 hover:bg-[#0284C7]/25 text-xs font-mono text-[#0284C7] font-semibold flex items-center justify-center gap-2 transition cursor-pointer shadow-sm"
                           >
                             {isGeneratingPairCode ? (
                               <>
-                                <Loader2 size={13} className="animate-spin text-cyan-400" />
+                                <Loader2 size={13} className="animate-spin text-[#0284C7]" />
                                 <span>Generating Pairing PIN...</span>
                               </>
                             ) : (
                               <>
-                                <KeyRound size={13} className="text-cyan-400" />
+                                <KeyRound size={13} className="text-[#0284C7]" />
                                 <span>Pair Another Device</span>
                               </>
                             )}
@@ -661,17 +676,17 @@ export function SettingsPanel({
 
                           {/* Active Generated Pairing PIN Display */}
                           {generatedPairCode && (
-                            <div className="p-3 rounded-xl border border-cyan-500/30 bg-cyan-950/40 space-y-2">
+                            <div className="p-3.5 rounded-xl border border-[#0284C7]/30 bg-[#0284C7]/10 space-y-2">
                               <div className="flex items-center justify-between">
-                                <span className="text-[10px] font-mono font-bold text-cyan-300 uppercase tracking-wider">
+                                <span className="text-[10px] font-mono font-bold text-[#0284C7] uppercase tracking-wider">
                                   Secondary Device PIN
                                 </span>
-                                <span className="text-[10px] font-mono text-cyan-400 font-semibold bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
+                                <span className="text-[10px] font-mono text-[#0284C7] font-semibold bg-[#0284C7]/10 px-2 py-0.5 rounded border border-[#0284C7]/20">
                                   {Math.floor(countdownSeconds / 60)}:{(countdownSeconds % 60).toString().padStart(2, "0")}
                                 </span>
                               </div>
-                              <div className="flex items-center justify-center py-2 bg-black/40 rounded-lg border border-cyan-500/20">
-                                <span className="text-2xl font-mono font-bold tracking-[0.3em] text-white select-all">
+                              <div className="flex items-center justify-center py-2 bg-white/60 dark:bg-black/40 rounded-lg border border-[#0284C7]/20">
+                                <span className="text-2xl font-mono font-bold tracking-[0.3em] text-slate-900 dark:text-[#F4F7FB] select-all">
                                   {generatedPairCode.code}
                                 </span>
                               </div>
@@ -683,28 +698,28 @@ export function SettingsPanel({
                                     setCopiedCode(true);
                                     setTimeout(() => setCopiedCode(false), 2000);
                                   }}
-                                  className="flex-1 py-1.5 px-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20 text-[11px] font-mono text-cyan-300 flex items-center justify-center gap-1.5 transition cursor-pointer"
+                                  className="flex-1 py-1.5 px-2 rounded-lg border border-[#0284C7]/30 bg-[#0284C7]/10 hover:bg-[#0284C7]/20 text-[11px] font-mono text-[#0284C7] flex items-center justify-center gap-1.5 transition cursor-pointer"
                                 >
-                                  {copiedCode ? <Check size={12} className="text-emerald-400" /> : <Sparkles size={12} />}
+                                  {copiedCode ? <Check size={12} className="text-emerald-500" /> : <Sparkles size={12} />}
                                   <span>{copiedCode ? "Copied!" : "Copy PIN"}</span>
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => setGeneratedPairCode(null)}
-                                  className="py-1.5 px-3 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-[11px] font-mono text-slate-400 hover:text-white transition cursor-pointer"
+                                  className="py-1.5 px-3 rounded-lg border border-slate-200 dark:border-[#202938]/60 bg-transparent text-[11px] font-mono text-slate-600 dark:text-[#8994A6] hover:text-slate-900 dark:hover:text-[#F4F7FB] transition cursor-pointer"
                                 >
                                   Dismiss
                                 </button>
                               </div>
-                              <p className="text-[9px] font-mono text-slate-400 text-center leading-tight">
+                              <p className="text-[10px] font-mono text-slate-600 dark:text-[#8994A6] text-center leading-tight">
                                 Enter this 6-character PIN on your PC to pair as a standard companion device. Single-use PIN.
                               </p>
                             </div>
                           )}
 
                           {pairCodeError && (
-                            <div className="p-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 text-[10px] font-mono text-rose-300 flex items-center gap-1.5">
-                              <AlertTriangle size={12} className="shrink-0 text-rose-400" />
+                            <div className="p-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 text-[10px] font-mono text-rose-600 dark:text-rose-300 flex items-center gap-1.5">
+                              <AlertTriangle size={12} className="shrink-0 text-rose-500" />
                               <span>{pairCodeError}</span>
                             </div>
                           )}
@@ -715,7 +730,7 @@ export function SettingsPanel({
                         <button
                           onClick={onUnpair}
                           type="button"
-                          className="w-full py-1.5 px-3 rounded-lg border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-xs font-mono text-rose-300 flex items-center justify-center gap-1.5 transition cursor-pointer"
+                          className="w-full py-2 px-3 rounded-xl border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-xs font-mono text-rose-500 flex items-center justify-center gap-1.5 transition cursor-pointer"
                         >
                           <Trash2 size={12} />
                           <span>Unpair Device</span>
@@ -726,21 +741,21 @@ export function SettingsPanel({
                 </div>
               )}
 
-              {/* ---------------- VOICE ---------------- */}
+              {/* ---------------- 2. VOICE ---------------- */}
               {activeTab === "voice" && (
                 <div className="space-y-4">
-                  {/* --- Multilingual Voice Engine Section --- */}
-                  <div className="space-y-3">
-                    <div className="text-[10px] font-mono uppercase tracking-widest text-slate-500 flex items-center justify-between">
-                      <div className="flex items-center gap-1.5">
-                        <Globe size={13} className="text-cyan-400" />
-                        <span>Language &amp; Voice Engine</span>
-                      </div>
-                      <span className="text-[9px] text-cyan-300 font-mono">10 Languages</span>
+                  <div className="text-xs font-mono font-bold uppercase tracking-widest text-[#0284C7] flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Globe size={13} />
+                      <span>Language &amp; Voice Engine</span>
                     </div>
+                    <span className="text-[10px] text-[#0284C7] font-mono">10 Languages</span>
+                  </div>
 
+                  {/* Language Selection Card */}
+                  <div className="neural-glass-subtle rounded-2xl p-4 border border-slate-200 dark:border-[#202938]/60 space-y-3">
                     <div className="space-y-1.5">
-                      <label htmlFor="language-select" className="block text-[10px] font-mono tracking-wider text-slate-300 uppercase">
+                      <label htmlFor="language-select" className="block text-[11px] font-mono font-semibold tracking-wider text-slate-900 dark:text-[#F4F7FB] uppercase">
                         Conversation Language
                       </label>
                       <select
@@ -757,7 +772,7 @@ export function SettingsPanel({
                             body: JSON.stringify({ language: lang }),
                           }).catch(() => {});
                         }}
-                        className="w-full px-3 py-2 rounded-xl border border-white/10 bg-white/5 text-sm text-white font-mono focus:outline-none focus:border-cyan-400/50 transition cursor-pointer"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-[#202938] bg-white dark:bg-white/5 text-xs text-slate-900 dark:text-[#F4F7FB] font-mono focus:outline-none focus:border-[#0284C7] transition cursor-pointer"
                       >
                         <option value="auto">🌐 Auto Detect (Real-Time)</option>
                         <option value="hindi">🇮🇳 Hindi (हिन्दी)</option>
@@ -771,13 +786,13 @@ export function SettingsPanel({
                         <option value="telugu">🇮🇳 Telugu (తెలుగు)</option>
                         <option value="russian">🇷🇺 Russian (Русский)</option>
                       </select>
-                      <div className="text-[9px] font-mono text-slate-400 flex items-center justify-between">
+                      <div className="text-[10px] font-mono text-slate-600 dark:text-[#8994A6] flex items-center justify-between mt-1">
                         <span>
                           {settings.languagePreference === "auto" || !settings.languagePreference
                             ? "Auto-detects spoken language dynamically"
                             : `Locked to ${settings.languagePreference.toUpperCase()}`}
                         </span>
-                        <span className="text-cyan-400 font-semibold">
+                        <span className="text-[#0284C7] font-semibold">
                           {settings.languagePreference === "bhojpuri" || settings.languagePreference === "maithili"
                             ? "Dialectal Prosody Active"
                             : "Native Voice Engine Active"}
@@ -786,210 +801,244 @@ export function SettingsPanel({
                     </div>
                   </div>
 
-                  <div className="pt-2 border-t border-white/10 text-[10px] font-mono uppercase tracking-widest text-slate-500">
-                    Wake Word &amp; Microphone
+                  {/* Wake Word & Hardware Card */}
+                  <div className="text-xs font-mono font-bold uppercase tracking-widest text-[#0284C7] flex items-center gap-1.5 pt-2">
+                    <Mic size={13} />
+                    <span>Wake Word &amp; Microphone</span>
                   </div>
 
-                  <ToggleRow
-                    label="WAKE WORD"
-                    description="Always-listen for the activation phrase"
-                    checked={settings.wakeWordEnabled}
-                    onChange={(v) => onChange({ wakeWordEnabled: v })}
-                  />
-
-                  <div className="space-y-1.5">
-                    <label htmlFor="wake-phrase-input" className="block text-[10px] font-mono tracking-wider text-slate-300 uppercase">
-                      Wake Phrase
-                    </label>
-                    <input
-                      id="wake-phrase-input"
-                      name="wakePhrase"
-                      type="text"
-                      value={settings.wakePhrase}
-                      onChange={(e) => onChange({ wakePhrase: e.target.value })}
-                      placeholder="hey myraa"
-                      className="w-full px-3 py-2 rounded-xl border border-white/10 bg-white/5 text-sm text-white font-mono focus:outline-none focus:border-cyan-400/50 transition"
+                  <div className="neural-glass-subtle rounded-2xl p-4 border border-slate-200 dark:border-[#202938]/60 space-y-3.5">
+                    <ToggleRow
+                      label="WAKE WORD DETECTION"
+                      description="Always listen for the hands-free activation phrase"
+                      checked={settings.wakeWordEnabled}
+                      onChange={(v) => onChange({ wakeWordEnabled: v })}
                     />
-                    <span className="text-[8px] text-slate-500 uppercase font-mono">
-                      Say this phrase to activate Myraa
-                    </span>
-                  </div>
 
-                  <div className="space-y-1.5">
-                    <label htmlFor="mic-device-select" className="block text-[10px] font-mono tracking-wider text-slate-300 uppercase">
-                      Microphone
-                    </label>
-                    <select
-                      id="mic-device-select"
-                      name="micDeviceId"
-                      value={settings.micDeviceId}
-                      onChange={(e) => onChange({ micDeviceId: e.target.value })}
-                      className="w-full px-3 py-2 rounded-xl border border-white/10 bg-white/5 text-sm text-white font-mono focus:outline-none focus:border-cyan-400/50 transition cursor-pointer"
-                    >
-                      <option value="">System Default</option>
-                      {mics.map((m, i) => (
-                        <option key={m.deviceId || i} value={m.deviceId}>
-                          {m.label || `Microphone ${i + 1}`}
-                        </option>
-                      ))}
-                    </select>
-                    <span className="text-[8px] text-slate-500 uppercase font-mono">
-                      {mics.length === 0
-                        ? "Grant mic permission to list devices"
-                        : `${mics.length} device(s) detected`}
-                    </span>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <label htmlFor="sensitivity-slider" className="block text-[10px] font-mono tracking-wider text-slate-300 uppercase">
-                        Sensitivity
+                    <div className="space-y-1.5 pt-1">
+                      <label htmlFor="wake-phrase-input" className="block text-[11px] font-mono font-semibold tracking-wider text-slate-900 dark:text-[#F4F7FB] uppercase">
+                        Wake Phrase
                       </label>
-                      <span className="text-[10px] font-mono text-cyan-300">
-                        {settings.sensitivity}
+                      <input
+                        id="wake-phrase-input"
+                        name="wakePhrase"
+                        type="text"
+                        value={settings.wakePhrase}
+                        onChange={(e) => onChange({ wakePhrase: e.target.value })}
+                        placeholder="hey myraa"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-[#202938] bg-white dark:bg-white/5 text-xs text-slate-900 dark:text-[#F4F7FB] font-mono focus:outline-none focus:border-[#0284C7] transition placeholder-slate-400 dark:placeholder-slate-500"
+                      />
+                      <span className="text-[10px] text-slate-600 dark:text-[#8994A6] uppercase font-mono">
+                        Say this phrase to activate MYRAA voice processing
                       </span>
                     </div>
-                    <input
-                      id="sensitivity-slider"
-                      name="sensitivity"
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={settings.sensitivity}
-                      onChange={(e) => onChange({ sensitivity: Number(e.target.value) })}
-                      className="w-full accent-cyan-500 cursor-pointer"
-                    />
-                    <span className="text-[8px] text-slate-500 uppercase font-mono">
-                      Higher = faster re-arm &amp; more matches
-                    </span>
+
+                    <div className="space-y-1.5 pt-1">
+                      <label htmlFor="mic-device-select" className="block text-[11px] font-mono font-semibold tracking-wider text-slate-900 dark:text-[#F4F7FB] uppercase">
+                        Microphone Input Device
+                      </label>
+                      <select
+                        id="mic-device-select"
+                        name="micDeviceId"
+                        value={settings.micDeviceId}
+                        onChange={(e) => onChange({ micDeviceId: e.target.value })}
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-[#202938] bg-white dark:bg-white/5 text-xs text-slate-900 dark:text-[#F4F7FB] font-mono focus:outline-none focus:border-[#0284C7] transition cursor-pointer"
+                      >
+                        <option value="">System Default</option>
+                        {mics.map((m, i) => (
+                          <option key={m.deviceId || i} value={m.deviceId}>
+                            {m.label || `Microphone ${i + 1}`}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="text-[10px] text-slate-600 dark:text-[#8994A6] uppercase font-mono">
+                        {mics.length === 0
+                          ? "Grant mic permission to list available devices"
+                          : `${mics.length} audio input device(s) detected`}
+                      </span>
+                    </div>
+
+                    <div className="space-y-1.5 pt-1">
+                      <div className="flex items-center justify-between">
+                        <label htmlFor="sensitivity-slider" className="block text-[11px] font-mono font-semibold tracking-wider text-slate-900 dark:text-[#F4F7FB] uppercase">
+                          Wake Sensitivity
+                        </label>
+                        <span className="text-xs font-mono text-[#0284C7] font-bold">
+                          {settings.sensitivity}%
+                        </span>
+                      </div>
+                      <input
+                        id="sensitivity-slider"
+                        name="sensitivity"
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={settings.sensitivity}
+                        onChange={(e) => onChange({ sensitivity: Number(e.target.value) })}
+                        className="w-full accent-[#0284C7] cursor-pointer"
+                      />
+                      <span className="text-[10px] text-slate-600 dark:text-[#8994A6] uppercase font-mono">
+                        Higher = faster re-arm &amp; more matches
+                      </span>
+                    </div>
                   </div>
                 </div>
               )}
 
-              {/* ---------------- SYSTEM ---------------- */}
+              {/* ---------------- 3. SYSTEM ---------------- */}
               {activeTab === "system" && (
                 <div className="space-y-4">
-                  <div className="text-[10px] font-mono uppercase tracking-widest text-slate-500">
-                    Desktop Control Agent
+                  <div className="text-xs font-mono font-bold uppercase tracking-widest text-[#0284C7] flex items-center gap-1.5">
+                    <Cpu size={13} />
+                    <span>Desktop Control Agent</span>
                   </div>
 
+                  {/* Agent Health Card */}
                   <div
-                    className={`p-4 rounded-xl border flex items-center gap-3 ${
+                    className={`p-4 rounded-2xl border flex items-center gap-3.5 ${
                       agentHealth.online
-                        ? "border-emerald-500/20 bg-emerald-500/5"
-                        : "border-rose-500/20 bg-rose-500/5"
+                        ? "border-emerald-500/30 bg-emerald-500/10"
+                        : "border-rose-500/30 bg-rose-500/10"
                     }`}
                   >
                     <div
-                      className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                        agentHealth.online ? "bg-emerald-400 animate-pulse" : "bg-rose-400"
+                      className={`w-3 h-3 rounded-full shrink-0 ${
+                        agentHealth.online ? "bg-emerald-500 shadow-[0_0_8px_#10B981] animate-pulse" : "bg-rose-500"
                       }`}
                     />
                     <div className="flex-1">
-                      <div className="text-xs font-mono text-white">
-                        {agentHealth.online ? "Agent Online" : "Agent Offline"}
+                      <div className="text-xs font-mono font-bold text-slate-900 dark:text-[#F4F7FB]">
+                        {agentHealth.online ? "Desktop Agent Online" : "Desktop Agent Offline"}
                       </div>
-                      <div className="text-[10px] font-mono text-slate-400">
+                      <div className="text-[10px] font-mono text-slate-600 dark:text-[#8994A6] mt-0.5">
                         {agentHealth.online
-                          ? `${agentHealth.toolCount ?? 0} tools registered`
-                          : "Start the Python agent on port 8765"}
+                          ? `${agentHealth.toolCount ?? 0} native OS tools registered`
+                          : "FastAPI agent service listening on port 8765"}
                       </div>
                     </div>
-                    <Cpu size={16} className="text-slate-500" />
+                    <Cpu size={18} className="text-slate-500 dark:text-[#8994A6]" />
                   </div>
 
-                  <div className="p-3 rounded-xl border border-white/5 bg-white/5 space-y-2">
-                    <div className="flex items-center gap-2 text-[10px] font-mono text-slate-400 uppercase tracking-wider">
-                      <Volume2 size={12} /> Capabilities
+                  {/* Capabilities Card */}
+                  <div className="neural-glass-subtle rounded-2xl p-4 border border-slate-200 dark:border-[#202938]/60 space-y-3">
+                    <div className="flex items-center gap-2 text-xs font-mono text-[#0284C7] font-semibold uppercase tracking-wider">
+                      <Volume2 size={13} /> Native System Capabilities
                     </div>
-                    <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono text-slate-300">
-                      <span>✓ App control</span>
-                      <span>✓ Browser</span>
-                      <span>✓ Volume</span>
-                      <span>✓ Brightness</span>
-                      <span>✓ Power</span>
-                      <span>✓ Files</span>
-                      <span>✓ Screenshot</span>
-                      <span>✓ Clipboard</span>
+                    <div className="grid grid-cols-2 gap-2 text-xs font-mono text-slate-800 dark:text-[#F4F7FB]">
+                      <div className="flex items-center gap-1.5">
+                        <Check size={12} className="text-emerald-500 shrink-0" />
+                        <span>App control</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Check size={12} className="text-emerald-500 shrink-0" />
+                        <span>Browser execution</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Check size={12} className="text-emerald-500 shrink-0" />
+                        <span>Volume &amp; Audio</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Check size={12} className="text-emerald-500 shrink-0" />
+                        <span>Brightness</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Check size={12} className="text-emerald-500 shrink-0" />
+                        <span>Power controls</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Check size={12} className="text-emerald-500 shrink-0" />
+                        <span>File operations</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Check size={12} className="text-emerald-500 shrink-0" />
+                        <span>Screenshot perception</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Check size={12} className="text-emerald-500 shrink-0" />
+                        <span>Clipboard sync</span>
+                      </div>
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* ---------------- SECURITY ---------------- */}
+              {/* ---------------- 4. SECURITY ---------------- */}
               {activeTab === "security" && (
                 <div className="space-y-4">
-                  <div className="text-[10px] font-mono uppercase tracking-widest text-[#8994A6]">
-                    Zero-Trust Security &amp; Guardrails
+                  <div className="text-xs font-mono font-bold uppercase tracking-widest text-[#0284C7] flex items-center gap-1.5">
+                    <ShieldCheck size={13} />
+                    <span>Zero-Trust Security &amp; Guardrails</span>
                   </div>
 
                   {/* System Status Card */}
-                  <div className="p-4 rounded-xl border border-emerald-500/30 bg-emerald-500/5 space-y-2.5">
+                  <div className="p-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <ShieldCheck size={16} className="text-emerald-400" />
-                        <span className="text-xs font-mono font-bold text-[#F4F7FB] uppercase tracking-wider">
+                        <ShieldCheck size={16} className="text-emerald-500" />
+                        <span className="text-xs font-mono font-bold text-slate-900 dark:text-[#F4F7FB] uppercase tracking-wider">
                           Zero-Trust Policy Core
                         </span>
                       </div>
-                      <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                      <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20 font-semibold">
                         ACTIVE
                       </span>
                     </div>
-                    <p className="text-[11px] font-sans text-[#8994A6] leading-relaxed">
+                    <p className="text-[11px] font-sans text-slate-600 dark:text-[#8994A6] leading-relaxed">
                       Every tool invocation, desktop agent task, and memory query is evaluated against strict real-time safety policies and confirmation tiers.
                     </p>
                   </div>
 
                   {/* Active Defense Tiers */}
-                  <div className="p-3.5 rounded-xl border border-[#202938] bg-[#111722]/80 space-y-2.5">
-                    <div className="text-[10px] font-mono text-[#8994A6] uppercase tracking-wider">
+                  <div className="neural-glass-subtle rounded-2xl p-4 border border-slate-200 dark:border-[#202938]/60 space-y-3">
+                    <div className="text-xs font-mono font-bold text-[#0284C7] uppercase tracking-wider">
                       Active Defense Tiers
                     </div>
                     <div className="space-y-2 text-xs font-mono">
                       <div className="flex items-center justify-between">
-                        <span className="text-[#8994A6]">Policy Engine</span>
-                        <span className="text-emerald-400 font-medium">● Enforced</span>
+                        <span className="text-slate-600 dark:text-[#8994A6]">Policy Engine</span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">● Enforced</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-[#8994A6]">Risk Evaluator</span>
-                        <span className="text-emerald-400 font-medium">● 3-Tier Guard</span>
+                        <span className="text-slate-600 dark:text-[#8994A6]">Risk Evaluator</span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">● 3-Tier Guard</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-[#8994A6]">Tool Firewall</span>
-                        <span className="text-emerald-400 font-medium">● 129 Tools Protected</span>
+                        <span className="text-slate-600 dark:text-[#8994A6]">Tool Firewall</span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">● 129 Tools Protected</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-[#8994A6]">Data Loss Prevention (DLP)</span>
-                        <span className="text-emerald-400 font-medium">● Token Redaction On</span>
+                        <span className="text-slate-600 dark:text-[#8994A6]">Data Loss Prevention (DLP)</span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">● Token Redaction On</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-[#8994A6]">Audit Trail</span>
-                        <span className="text-emerald-400 font-medium">● Cryptographic Log</span>
+                        <span className="text-slate-600 dark:text-[#8994A6]">Audit Trail</span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">● Cryptographic Log</span>
                       </div>
                     </div>
                   </div>
 
                   {/* Toggles */}
-                  <ToggleRow
-                    label="STRICT TOOL CONFIRMATION"
-                    description="Require confirmation prompt before executing high-risk file modifications or system bash commands"
-                    checked={true}
-                    onChange={() => {}}
-                  />
+                  <div className="neural-glass-subtle rounded-2xl p-4 border border-slate-200 dark:border-[#202938]/60 space-y-3">
+                    <ToggleRow
+                      label="STRICT TOOL CONFIRMATION"
+                      description="Require confirmation prompt before executing high-risk file modifications or system bash commands"
+                      checked={true}
+                      onChange={() => {}}
+                    />
 
-                  <ToggleRow
-                    label="AUTOMATIC SECRET MASKING"
-                    description="Redact API keys, tokens, and credentials from terminal and screen context before cloud processing"
-                    checked={true}
-                    onChange={() => {}}
-                  />
+                    <ToggleRow
+                      label="AUTOMATIC SECRET MASKING"
+                      description="Redact API keys, tokens, and credentials from terminal and screen context before cloud processing"
+                      checked={true}
+                      onChange={() => {}}
+                    />
+                  </div>
 
                   {/* Emergency Stop Safe Halt */}
-                  <div className="pt-2 border-t border-[#202938]/60 flex items-center justify-between">
+                  <div className="neural-glass-subtle rounded-2xl p-4 border border-rose-500/20 bg-rose-500/5 flex items-center justify-between">
                     <div>
-                      <div className="text-xs font-mono text-[#F4F7FB]">Emergency Safe Halt</div>
-                      <div className="text-[10px] font-mono text-[#8994A6]">Instantly pause all active agents</div>
+                      <div className="text-xs font-mono font-bold text-slate-900 dark:text-[#F4F7FB]">Emergency Safe Halt</div>
+                      <div className="text-[10px] font-mono text-slate-600 dark:text-[#8994A6]">Instantly pause all active background agents</div>
                     </div>
                     <button
                       onClick={async () => {
@@ -1004,7 +1053,7 @@ export function SettingsPanel({
                           } catch {}
                         }
                       }}
-                      className="px-3 py-1.5 rounded-xl border border-rose-500/30 text-rose-300 hover:bg-rose-500/10 text-xs font-mono transition cursor-pointer"
+                      className="px-3.5 py-2 rounded-xl border border-rose-500/40 text-rose-500 hover:bg-rose-500/10 text-xs font-mono font-semibold transition cursor-pointer"
                     >
                       Safe Halt
                     </button>
@@ -1012,146 +1061,149 @@ export function SettingsPanel({
                 </div>
               )}
 
-              {/* ---------------- MEMORY ---------------- */}
+              {/* ---------------- 5. MEMORY ---------------- */}
               {activeTab === "memory" && (
                 <div className="space-y-4">
-                  <div className="text-[10px] font-mono uppercase tracking-widest text-[#8994A6]">
-                    Persistent Recollections &amp; Brain
+                  <div className="text-xs font-mono font-bold uppercase tracking-widest text-[#0284C7] flex items-center gap-1.5">
+                    <Brain size={13} />
+                    <span>Persistent Recollections &amp; Brain</span>
                   </div>
 
                   {/* Memory Subsystem Card */}
-                  <div className="p-4 rounded-xl border border-[#3B82F6]/30 bg-[#3B82F6]/5 space-y-2.5">
+                  <div className="p-4 rounded-2xl border border-[#0284C7]/30 bg-[#0284C7]/10 space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <Brain size={16} className="text-[#00F0FF]" />
-                        <span className="text-xs font-mono font-bold text-[#F4F7FB] uppercase tracking-wider">
+                        <Brain size={16} className="text-[#0284C7]" />
+                        <span className="text-xs font-mono font-bold text-slate-900 dark:text-[#F4F7FB] uppercase tracking-wider">
                           Neural Knowledge Core
                         </span>
                       </div>
-                      <span className="text-[10px] font-mono text-[#00F0FF] bg-[#00F0FF]/10 px-2 py-0.5 rounded-full border border-[#00F0FF]/20">
+                      <span className="text-[10px] font-mono text-[#0284C7] bg-[#0284C7]/15 px-2 py-0.5 rounded-full border border-[#0284C7]/30 font-semibold">
                         {memories ? `${memories.length} STORED` : "ONLINE"}
                       </span>
                     </div>
-                    <p className="text-[11px] font-sans text-[#8994A6] leading-relaxed">
+                    <p className="text-[11px] font-sans text-slate-600 dark:text-[#8994A6] leading-relaxed">
                       MYRAA preserves long-term project context, developer preferences, and conversational insights across sessions.
                     </p>
                   </div>
 
                   {/* Architecture Details */}
-                  <div className="p-3.5 rounded-xl border border-[#202938] bg-[#111722]/80 space-y-2.5">
-                    <div className="text-[10px] font-mono text-[#8994A6] uppercase tracking-wider">
+                  <div className="neural-glass-subtle rounded-2xl p-4 border border-slate-200 dark:border-[#202938]/60 space-y-3">
+                    <div className="text-xs font-mono font-bold text-[#0284C7] uppercase tracking-wider">
                       Memory Subsystems
                     </div>
                     <div className="space-y-2 text-xs font-mono">
                       <div className="flex items-center justify-between">
-                        <span className="text-[#8994A6]">Episodic Memory</span>
-                        <span className="text-emerald-400 font-medium">● Active</span>
+                        <span className="text-slate-600 dark:text-[#8994A6]">Episodic Memory</span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">● Active</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-[#8994A6]">Semantic Knowledge</span>
-                        <span className="text-emerald-400 font-medium">● Connected</span>
+                        <span className="text-slate-600 dark:text-[#8994A6]">Semantic Knowledge</span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">● Connected</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-[#8994A6]">Working Workspace Cache</span>
-                        <span className="text-[#00F0FF] font-medium">● 12 Sources Sync</span>
+                        <span className="text-slate-600 dark:text-[#8994A6]">Working Workspace Cache</span>
+                        <span className="text-[#0284C7] font-medium">● 12 Sources Sync</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-[#8994A6]">Device Boundary</span>
-                        <span className="text-[#F4F7FB] font-medium">Isolated / Encrypted</span>
+                        <span className="text-slate-600 dark:text-[#8994A6]">Device Boundary</span>
+                        <span className="text-slate-900 dark:text-[#F4F7FB] font-medium">Isolated / Encrypted</span>
                       </div>
                     </div>
                   </div>
 
                   {/* Toggles */}
-                  <ToggleRow
-                    label="AUTO-LEARN PREFERENCES"
-                    description="Automatically extract key facts, coding patterns, and project habits"
-                    checked={true}
-                    onChange={() => {}}
-                  />
+                  <div className="neural-glass-subtle rounded-2xl p-4 border border-slate-200 dark:border-[#202938]/60 space-y-3">
+                    <ToggleRow
+                      label="AUTO-LEARN PREFERENCES"
+                      description="Automatically extract key facts, coding patterns, and project habits"
+                      checked={true}
+                      onChange={() => {}}
+                    />
 
-                  <ToggleRow
-                    label="STRICT LOCAL MEMORY ISOLATION"
-                    description="Prevent memory synchronization to remote cloud companion devices"
-                    checked={false}
-                    onChange={() => {}}
-                  />
+                    <ToggleRow
+                      label="STRICT LOCAL MEMORY ISOLATION"
+                      description="Prevent memory synchronization to remote cloud companion devices"
+                      checked={false}
+                      onChange={() => {}}
+                    />
+                  </div>
 
                   {/* Actions */}
-                  <div className="pt-2 border-t border-[#202938]/60 flex items-center justify-between">
+                  <div className="neural-glass-subtle rounded-2xl p-4 border border-slate-200 dark:border-[#202938]/60 flex items-center justify-between">
                     <button
                       onClick={() => {
                         onClose();
                         onOpenMemoryDashboard?.();
                       }}
-                      className="px-3.5 py-2 rounded-xl bg-[#00F0FF]/15 border border-[#00F0FF]/40 text-[#00F0FF] hover:bg-[#00F0FF]/25 text-xs font-mono transition cursor-pointer flex items-center gap-1.5"
+                      className="px-4 py-2 rounded-xl bg-[#0284C7]/15 border border-[#0284C7]/40 text-[#0284C7] hover:bg-[#0284C7]/25 text-xs font-mono font-semibold transition cursor-pointer flex items-center gap-1.5"
                     >
                       <Database size={13} />
                       <span>Open Memory Database</span>
                     </button>
-                    <span className="text-[10px] font-mono text-[#8994A6]">Encrypted on disk</span>
+                    <span className="text-[10px] font-mono text-slate-600 dark:text-[#8994A6]">Encrypted on disk</span>
                   </div>
                 </div>
               )}
 
-              {/* ---------------- ABOUT ---------------- */}
+              {/* ---------------- 6. ABOUT ---------------- */}
               {activeTab === "about" && (
                 <div className="space-y-4">
-                  <div className="text-[10px] font-mono uppercase tracking-widest text-slate-500">
-                    About Myraa
+                  <div className="text-xs font-mono font-bold uppercase tracking-widest text-[#0284C7] flex items-center gap-1.5">
+                    <Info size={13} />
+                    <span>About Myraa</span>
                   </div>
 
-                  <div className="p-4 rounded-xl border border-white/5 bg-white/5 space-y-3">
+                  <div className="neural-glass-subtle rounded-2xl p-4 border border-slate-200 dark:border-[#202938]/60 space-y-3.5">
                     <div className="flex items-center gap-2">
-                      <Info size={14} className="text-cyan-400" />
-                      <span className="text-sm font-display text-white">MYRAA AI Assistant</span>
+                      <Info size={16} className="text-[#0284C7]" />
+                      <span className="text-sm font-display font-semibold text-slate-900 dark:text-[#F4F7FB]">MYRAA AI Assistant</span>
                     </div>
-                    <div className="space-y-1.5 text-[10px] font-mono text-slate-400">
-                      <div className="flex justify-between">
+                    <div className="space-y-2 text-xs font-mono text-slate-600 dark:text-[#8994A6]">
+                      <div className="flex justify-between border-b border-slate-200 dark:border-[#202938]/40 pb-1.5">
                         <span>VERSION</span>
-                        <span className="text-slate-300">V2.0.0</span>
+                        <span className="text-slate-900 dark:text-[#F4F7FB] font-semibold">V2.0.0</span>
                       </div>
-                      <div className="flex justify-between">
+                      <div className="flex justify-between border-b border-slate-200 dark:border-[#202938]/40 pb-1.5">
                         <span>ENGINE</span>
-                        <span className="text-slate-300">Gemini Live</span>
+                        <span className="text-slate-900 dark:text-[#F4F7FB] font-semibold">Gemini Live</span>
                       </div>
-                      <div className="flex justify-between">
+                      <div className="flex justify-between border-b border-slate-200 dark:border-[#202938]/40 pb-1.5">
                         <span>DESKTOP</span>
-                        <span className="text-slate-300">FastAPI Agent</span>
+                        <span className="text-slate-900 dark:text-[#F4F7FB] font-semibold">FastAPI Agent</span>
                       </div>
-                      <div className="flex justify-between">
+                      <div className="flex justify-between border-b border-slate-200 dark:border-[#202938]/40 pb-1.5">
                         <span>WAKE WORD</span>
-                        <span className="text-slate-300">Web Speech API</span>
+                        <span className="text-slate-900 dark:text-[#F4F7FB] font-semibold">Web Speech API</span>
                       </div>
-                      <div className="flex justify-between">
+                      <div className="flex justify-between border-b border-slate-200 dark:border-[#202938]/40 pb-1.5">
                         <span>DEVELOPER</span>
-                        <span className="text-cyan-300">Sandeep Mishra</span>
+                        <span className="text-[#0284C7] font-semibold">Sandeep Mishra</span>
                       </div>
                       <div className="flex justify-between">
                         <span>COMPANY</span>
-                        <span className="text-cyan-300">Mishtron Labs</span>
+                        <span className="text-[#0284C7] font-semibold">Mishtron Labs</span>
                       </div>
                     </div>
                   </div>
 
-                  <div className="p-3 rounded-xl border border-amber-500/15 bg-amber-500/5 flex items-start gap-2">
-                    <AlertTriangle size={12} className="text-amber-400 shrink-0 mt-0.5" />
-                    <span className="text-[10px] font-mono text-amber-300/70 leading-relaxed">
-                      Keep this tab active for wake-word detection. Microphone access
-                      is required for voice activation.
+                  <div className="p-3.5 rounded-2xl border border-amber-500/20 bg-amber-500/10 flex items-start gap-2.5">
+                    <AlertTriangle size={14} className="text-amber-500 shrink-0 mt-0.5" />
+                    <span className="text-[11px] font-mono text-amber-700 dark:text-amber-300 leading-relaxed">
+                      Keep this desktop application active for wake-word detection. Microphone permission is required for real-time voice activation.
                     </span>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* Footer status bar — mirrors MemoryDashboard */}
-            <div className="px-6 py-3 border-t border-white/5 bg-white/5 flex items-center justify-between">
-              <span className="text-[9px] font-mono uppercase tracking-widest text-slate-500">
+            {/* Footer status bar */}
+            <div className="px-6 py-3 border-t border-slate-200 dark:border-[#202938]/60 neural-glass-subtle flex items-center justify-between">
+              <span className="text-[10px] font-mono uppercase tracking-widest text-slate-500 dark:text-[#8994A6]">
                 Preferences auto-save
               </span>
-              <span className="text-[9px] font-mono uppercase tracking-widest text-slate-500">
-                Myraa V2
+              <span className="text-[10px] font-mono uppercase tracking-widest text-[#0284C7] font-semibold">
+                Myraa V2 · Light Blue System
               </span>
             </div>
           </motion.div>

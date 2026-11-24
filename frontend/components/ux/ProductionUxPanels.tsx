@@ -47,14 +47,14 @@ export const RemoteBridgeStatusCard: React.FC<RemoteBridgeStatusCardProps> = ({
   return (
     <div
       data-testid="remote-bridge-status-card"
-      className="rounded-2xl border border-slate-800 bg-slate-950/90 p-4 text-slate-100 shadow-xl"
+      className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-950/90 p-4 text-slate-800 dark:text-slate-100 shadow-md dark:shadow-xl"
     >
-      <div className="flex items-center justify-between gap-3 border-b border-slate-800 pb-3">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-3">
         <div>
-          <div className="text-xs font-mono uppercase tracking-wider text-slate-400">
+          <div className="text-xs font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400">
             Optional Remote Bridge
           </div>
-          <div className="mt-0.5 text-sm font-bold text-white" data-testid="remote-bridge-badge-text">
+          <div className="mt-0.5 text-sm font-bold text-slate-900 dark:text-white" data-testid="remote-bridge-badge-text">
             {remoteState.statusBadgeText}
           </div>
         </div>
@@ -62,8 +62,8 @@ export const RemoteBridgeStatusCard: React.FC<RemoteBridgeStatusCardProps> = ({
           data-testid="remote-bridge-connection-status"
           className={`rounded-full px-3 py-1 text-xs font-mono font-bold ${
             isConnected
-              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
-              : "bg-slate-800 text-slate-300 border border-slate-700"
+              ? "bg-emerald-50 text-emerald-700 border border-emerald-300 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/40"
+              : "bg-slate-100 text-slate-700 border border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
           }`}
         >
           {remoteState.connectionStatus}
@@ -72,26 +72,26 @@ export const RemoteBridgeStatusCard: React.FC<RemoteBridgeStatusCardProps> = ({
 
       {/* Device Identity Section */}
       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 text-xs">
-        <div className="rounded-xl bg-slate-900/80 p-2.5 border border-slate-800">
-          <div className="text-[10px] font-mono uppercase text-slate-400">Local Device</div>
-          <div className="font-semibold text-white">{remoteState.localDevice.deviceName}</div>
-          <div className="text-slate-400 font-mono">
+        <div className="rounded-xl bg-slate-50 dark:bg-slate-900/80 p-2.5 border border-slate-200 dark:border-slate-800">
+          <div className="text-[10px] font-mono uppercase text-slate-500 dark:text-slate-400">Local Device</div>
+          <div className="font-semibold text-slate-900 dark:text-white">{remoteState.localDevice.deviceName}</div>
+          <div className="text-slate-600 dark:text-slate-400 font-mono">
             {remoteState.localDevice.deviceId} · {remoteState.localDevice.productType}
           </div>
         </div>
 
-        <div className="rounded-xl bg-slate-900/80 p-2.5 border border-slate-800">
-          <div className="text-[10px] font-mono uppercase text-slate-400">Remote Target</div>
+        <div className="rounded-xl bg-slate-50 dark:bg-slate-900/80 p-2.5 border border-slate-200 dark:border-slate-800">
+          <div className="text-[10px] font-mono uppercase text-slate-500 dark:text-slate-400">Remote Target</div>
           {remoteState.remoteDevice ? (
             <>
-              <div className="font-semibold text-white">{remoteState.remoteDevice.deviceName}</div>
-              <div className="text-slate-400 font-mono">
+              <div className="font-semibold text-slate-900 dark:text-white">{remoteState.remoteDevice.deviceName}</div>
+              <div className="text-slate-600 dark:text-slate-400 font-mono">
                 {remoteState.remoteDevice.deviceId} ·{" "}
                 {remoteState.remoteDevice.online ? "ONLINE" : "OFFLINE"}
               </div>
             </>
           ) : (
-            <div className="text-slate-400">
+            <div className="text-slate-500 dark:text-slate-400">
               No Remote Device Connected (Standalone Mode Active)
             </div>
           )}
@@ -105,7 +105,7 @@ export const RemoteBridgeStatusCard: React.FC<RemoteBridgeStatusCardProps> = ({
             type="button"
             data-testid="remote-bridge-disconnect-btn"
             onClick={() => onDisconnect?.()}
-            className="rounded-xl bg-rose-600/20 border border-rose-500/40 px-3 py-1.5 text-xs font-semibold text-rose-300 hover:bg-rose-600/30 cursor-pointer"
+            className="rounded-xl bg-rose-50 text-rose-700 border border-rose-300 hover:bg-rose-100 dark:bg-rose-600/20 dark:border-rose-500/40 px-3 py-1.5 text-xs font-semibold dark:text-rose-300 dark:hover:bg-rose-600/30 cursor-pointer"
           >
             Disconnect Remote Bridge
           </button>
@@ -117,7 +117,7 @@ export const RemoteBridgeStatusCard: React.FC<RemoteBridgeStatusCardProps> = ({
                 type="button"
                 data-testid={`remote-bridge-connect-${dev.deviceId}`}
                 onClick={() => onConnect?.(dev.deviceId)}
-                className="rounded-xl bg-cyan-600/20 border border-cyan-500/40 px-3 py-1.5 text-xs font-semibold text-cyan-300 hover:bg-cyan-600/30 cursor-pointer"
+                className="rounded-xl bg-sky-50 text-sky-800 border border-sky-300 hover:bg-sky-100 dark:bg-cyan-600/20 dark:border-cyan-500/40 px-3 py-1.5 text-xs font-semibold dark:text-cyan-300 dark:hover:bg-cyan-600/30 cursor-pointer"
               >
                 Connect to {dev.deviceName}
               </button>
@@ -127,7 +127,7 @@ export const RemoteBridgeStatusCard: React.FC<RemoteBridgeStatusCardProps> = ({
                 type="button"
                 data-testid="remote-bridge-generate-pin-btn"
                 onClick={() => onRequestPairPin()}
-                className="rounded-xl bg-indigo-600/20 border border-indigo-500/40 px-3 py-1.5 text-xs font-semibold text-indigo-300 hover:bg-indigo-600/30 cursor-pointer"
+                className="rounded-xl bg-indigo-50 text-indigo-800 border border-indigo-200 hover:bg-indigo-100 dark:bg-indigo-600/20 dark:border-indigo-500/40 px-3 py-1.5 text-xs font-semibold dark:text-indigo-300 dark:hover:bg-indigo-600/30 cursor-pointer"
               >
                 Generate 6-Digit Pairing PIN
               </button>
@@ -138,7 +138,7 @@ export const RemoteBridgeStatusCard: React.FC<RemoteBridgeStatusCardProps> = ({
 
       {/* Explicit 6-Digit Pairing Confirmation Box */}
       {!isConnected && onConfirmPairPin && (
-        <div className="mt-2.5 flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 p-2 text-xs">
+        <div className="mt-2.5 flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 p-2 text-xs">
           <input
             id="remote-bridge-pin-input"
             name="remoteBridgePin"
@@ -149,7 +149,7 @@ export const RemoteBridgeStatusCard: React.FC<RemoteBridgeStatusCardProps> = ({
             onChange={(e) => setPinInput(e.target.value)}
             placeholder="6-digit PIN"
             maxLength={6}
-            className="w-28 rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1 font-mono text-xs text-white"
+            className="w-28 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2.5 py-1 font-mono text-xs text-slate-900 dark:text-white placeholder-slate-400"
           />
           <button
             type="button"
@@ -157,14 +157,14 @@ export const RemoteBridgeStatusCard: React.FC<RemoteBridgeStatusCardProps> = ({
             onClick={() => {
               if (pinInput.trim()) onConfirmPairPin(pinInput.trim());
             }}
-            className="rounded-lg bg-emerald-600/30 border border-emerald-500/40 px-2.5 py-1 text-xs font-semibold text-emerald-200 hover:bg-emerald-600/40 cursor-pointer"
+            className="rounded-lg bg-emerald-600 text-white dark:bg-emerald-600/30 dark:border dark:border-emerald-500/40 px-2.5 py-1 text-xs font-semibold dark:text-emerald-200 hover:bg-emerald-700 dark:hover:bg-emerald-600/40 cursor-pointer shadow-xs"
           >
             Confirm Pairing & Connect
           </button>
           {activePairPin && (
             <span
               data-testid="remote-bridge-active-pin"
-              className="ml-auto font-mono text-[11px] text-amber-300"
+              className="ml-auto font-mono text-[11px] text-amber-700 dark:text-amber-300 font-bold"
             >
               PIN: <strong>{activePairPin}</strong>
             </span>
@@ -174,8 +174,8 @@ export const RemoteBridgeStatusCard: React.FC<RemoteBridgeStatusCardProps> = ({
 
       {/* Negotiated Remote Capabilities */}
       {remoteState.negotiatedCapabilities.allowedRemoteCapabilities.length > 0 && (
-        <div className="mt-3 border-t border-slate-800 pt-2.5">
-          <div className="text-[10px] font-mono uppercase text-slate-400 mb-1">
+        <div className="mt-3 border-t border-slate-200 dark:border-slate-800 pt-2.5">
+          <div className="text-[10px] font-mono uppercase text-slate-500 dark:text-slate-400 mb-1">
             Allowed Remote Capabilities (
             {remoteState.negotiatedCapabilities.allowedRemoteCapabilities.length}) · Blocked Local-Only (
             {remoteState.negotiatedCapabilities.blockedCapabilities?.length ?? 0})
@@ -184,7 +184,7 @@ export const RemoteBridgeStatusCard: React.FC<RemoteBridgeStatusCardProps> = ({
             {remoteState.negotiatedCapabilities.allowedRemoteCapabilities.slice(0, 10).map((cap) => (
               <span
                 key={cap}
-                className="rounded bg-slate-900 px-2 py-0.5 text-[10px] font-mono text-cyan-300 border border-slate-800"
+                className="rounded bg-slate-100 dark:bg-slate-900 px-2 py-0.5 text-[10px] font-mono text-sky-800 dark:text-cyan-300 border border-slate-200 dark:border-slate-800"
               >
                 {cap}
               </span>
@@ -194,10 +194,10 @@ export const RemoteBridgeStatusCard: React.FC<RemoteBridgeStatusCardProps> = ({
       )}
 
       {/* Remote Audit Trail */}
-      <div className="mt-3 border-t border-slate-800 pt-2.5">
-        <div className="flex items-center justify-between text-[10px] font-mono uppercase text-slate-400">
+      <div className="mt-3 border-t border-slate-200 dark:border-slate-800 pt-2.5">
+        <div className="flex items-center justify-between text-[10px] font-mono uppercase text-slate-500 dark:text-slate-400">
           <span>Remote Audit History ({remoteState.auditHistory.length})</span>
-          <span data-testid="remote-audit-integrity">
+          <span data-testid="remote-audit-integrity" className="font-semibold text-slate-700 dark:text-slate-300">
             Chain Integrity: {remoteState.auditChainIntegrityValid ? "VERIFIED" : "ALERT"}
           </span>
         </div>
@@ -206,12 +206,12 @@ export const RemoteBridgeStatusCard: React.FC<RemoteBridgeStatusCardProps> = ({
             {remoteState.auditHistory.slice(-4).map((entry) => (
               <div
                 key={entry.id}
-                className="flex items-center justify-between rounded bg-slate-900/70 px-2 py-1 text-[10px] font-mono text-slate-300"
+                className="flex items-center justify-between rounded bg-slate-100 dark:bg-slate-900/70 px-2 py-1 text-[10px] font-mono text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-transparent"
               >
                 <span>
                   {entry.eventType} ({entry.sourceDeviceId} → {entry.targetDeviceId || "local"})
                 </span>
-                <span className={entry.outcome === "ALLOW" ? "text-emerald-400" : "text-rose-400"}>
+                <span className={entry.outcome === "ALLOW" ? "text-emerald-700 dark:text-emerald-400 font-semibold" : "text-rose-700 dark:text-rose-400 font-semibold"}>
                   {entry.outcome}
                 </span>
               </div>
@@ -278,19 +278,19 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
   return (
     <div
       data-testid="mobile-production-ux-surface"
-      className="mx-auto max-w-md rounded-3xl border border-slate-800 bg-slate-950 p-4 text-slate-100 shadow-2xl"
+      className="mx-auto max-w-md rounded-3xl border border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-950 p-4 text-slate-800 dark:text-slate-100 shadow-xl"
     >
       {/* Header & Standalone Status */}
-      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+      <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
         <div>
-          <div className="text-xs font-mono uppercase tracking-widest text-cyan-400">
+          <div className="text-xs font-mono uppercase tracking-widest text-sky-700 dark:text-cyan-400 font-semibold">
             MYRAA MOBILE · {view.standaloneMode ? "STANDALONE" : "BRIDGE ACTIVE"}
           </div>
-          <h2 className="text-base font-bold text-white">{view.deviceName}</h2>
+          <h2 className="text-base font-bold text-slate-900 dark:text-white">{view.deviceName}</h2>
         </div>
         <span
           data-testid="mobile-selected-target-badge"
-          className="rounded-full bg-slate-900 px-2.5 py-1 text-[10px] font-mono text-slate-300 border border-slate-800"
+          className="rounded-full bg-slate-100 dark:bg-slate-900 px-2.5 py-1 text-[10px] font-mono text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-800"
         >
           Target: {view.voiceUi.selectedTarget}
         </span>
@@ -306,8 +306,8 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
             onClick={() => onSelectTarget?.(entry.target)}
             className={`rounded-xl p-2 text-left text-xs transition border cursor-pointer ${
               entry.selected
-                ? "border-cyan-500/60 bg-cyan-950/40 text-white"
-                : "border-slate-800 bg-slate-900/60 text-slate-400"
+                ? "border-sky-500 bg-sky-50 text-sky-900 dark:border-cyan-500/60 dark:bg-cyan-950/40 dark:text-white font-semibold"
+                : "border-slate-200 bg-slate-50 text-slate-600 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-400"
             }`}
           >
             <div className="font-mono font-bold text-[10px]">{entry.target}</div>
@@ -320,13 +320,13 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
       {view.voiceUi.activeError && (
         <div
           data-testid="mobile-actionable-error"
-          className="mt-3 rounded-2xl border border-rose-500/40 bg-rose-950/40 p-3 text-xs text-rose-200"
+          className="mt-3 rounded-2xl border border-rose-300 dark:border-rose-500/40 bg-rose-50 dark:bg-rose-950/40 p-3 text-xs text-rose-800 dark:text-rose-200"
         >
-          <div className="font-bold text-rose-300">
+          <div className="font-bold text-rose-700 dark:text-rose-300">
             {view.voiceUi.activeError.title} ({view.voiceUi.activeError.errorCode})
           </div>
           <p className="mt-1">{view.voiceUi.activeError.userMessage}</p>
-          <ul className="mt-1.5 list-disc pl-4 text-[11px] text-rose-300/90">
+          <ul className="mt-1.5 list-disc pl-4 text-[11px] text-rose-700/90 dark:text-rose-300/90">
             {view.voiceUi.activeError.remediationSteps.map((step, i) => (
               <li key={i}>{step}</li>
             ))}
@@ -335,7 +335,7 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
       )}
 
       {/* Navigation Tabs */}
-      <div className="mt-3 flex flex-wrap gap-1 border-b border-slate-800 pb-2 text-[11px]">
+      <div className="mt-3 flex flex-wrap gap-1 border-b border-slate-200 dark:border-slate-800 pb-2 text-[11px]">
         {(
           [
             "voice",
@@ -355,8 +355,8 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
             onClick={() => setActiveTab(tab)}
             className={`rounded-lg px-2.5 py-1 font-mono uppercase cursor-pointer ${
               activeTab === tab
-                ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
-                : "text-slate-400 hover:text-white"
+                ? "bg-sky-100 text-sky-800 border border-sky-300 dark:bg-cyan-500/20 dark:text-cyan-300 dark:border-cyan-500/40 font-semibold"
+                : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
             }`}
           >
             {tab}
@@ -368,17 +368,17 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
       <div className="mt-3">
         {activeTab === "voice" && (
           <div className="space-y-3">
-            <div className="rounded-xl bg-slate-900 p-3 text-xs">
-              <div className="font-mono text-[10px] uppercase text-slate-400">
+            <div className="rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-transparent p-3 text-xs">
+              <div className="font-mono text-[10px] uppercase text-slate-500 dark:text-slate-400">
                 Voice-First Status: {view.voiceUi.phase}
               </div>
-              <div className="mt-1 text-slate-200" data-testid="mobile-voice-response">
+              <div className="mt-1 text-slate-800 dark:text-slate-200" data-testid="mobile-voice-response">
                 {view.voiceUi.lastTurn
                   ? view.voiceUi.lastTurn.responseText
                   : view.onboarding.subtitle}
               </div>
               {view.voiceUi.lastTurn && (
-                <div className="mt-1 font-mono text-[10px] text-cyan-400">
+                <div className="mt-1 font-mono text-[10px] text-sky-700 dark:text-cyan-400 font-semibold">
                   Executed on: {view.voiceUi.lastTurn.executingDeviceId || view.deviceId} (
                   {view.voiceUi.lastTurn.resolvedTarget})
                 </div>
@@ -394,7 +394,7 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                 value={commandInput}
                 onChange={(e) => setCommandInput(e.target.value)}
                 placeholder="Bolkar ya likhkar command dein..."
-                className="flex-1 rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-white"
+                className="flex-1 rounded-xl border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400"
               />
               <button
                 type="button"
@@ -405,7 +405,7 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                     setCommandInput("");
                   }
                 }}
-                className="rounded-xl bg-cyan-600 px-3 py-2 text-xs font-bold text-white cursor-pointer"
+                className="rounded-xl bg-cyan-600 hover:bg-cyan-700 px-3 py-2 text-xs font-bold text-white cursor-pointer shadow-xs"
               >
                 Send
               </button>
@@ -415,12 +415,12 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
 
         {activeTab === "onboarding" && (
           <div className="space-y-2 text-xs" data-testid="mobile-onboarding-panel">
-            <div className="flex items-center justify-between rounded-xl bg-slate-900 p-2.5 border border-slate-800">
+            <div className="flex items-center justify-between rounded-xl bg-slate-50 dark:bg-slate-900 p-2.5 border border-slate-200 dark:border-slate-800">
               <div>
-                <div className="font-bold text-white">{view.onboarding.headline}</div>
-                <div className="text-[11px] text-slate-400">{view.onboarding.subtitle}</div>
+                <div className="font-bold text-slate-900 dark:text-white">{view.onboarding.headline}</div>
+                <div className="text-[11px] text-slate-600 dark:text-slate-400">{view.onboarding.subtitle}</div>
               </div>
-              <span className="rounded-full bg-cyan-500/20 px-2.5 py-0.5 font-mono text-[10px] text-cyan-300">
+              <span className="rounded-full bg-sky-100 text-sky-800 border border-sky-300 dark:bg-cyan-500/20 dark:border-transparent px-2.5 py-0.5 font-mono text-[10px] dark:text-cyan-300 font-semibold">
                 {view.onboarding.completed ? "COMPLETED" : "IN PROGRESS"}
               </span>
             </div>
@@ -431,17 +431,17 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
               return (
                 <div
                   key={stepId}
-                  className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/70 p-2.5"
+                  className="flex items-center justify-between rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/70 p-2.5"
                 >
-                  <div className="font-semibold text-white">{stepId}</div>
+                  <div className="font-semibold text-slate-900 dark:text-white">{stepId}</div>
                   <button
                     type="button"
                     data-testid={`onboarding-step-${stepId}`}
                     onClick={() => onCompleteOnboardingStep?.(stepId, false)}
                     className={`rounded-lg px-2.5 py-1 text-[10px] font-mono font-bold cursor-pointer ${
                       isCompleted
-                        ? "bg-emerald-500/20 text-emerald-300"
-                        : "bg-cyan-500/20 text-cyan-300"
+                        ? "bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-transparent"
+                        : "bg-sky-50 text-sky-800 border border-sky-200 dark:bg-cyan-500/20 dark:text-cyan-300 dark:border-transparent"
                     }`}
                   >
                     {isCompleted ? "DONE" : "COMPLETE"}
@@ -454,7 +454,7 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                 type="button"
                 data-testid="onboarding-complete-all-btn"
                 onClick={() => onCompleteOnboardingStep?.(undefined, true)}
-                className="w-full rounded-xl bg-emerald-600/30 border border-emerald-500/40 py-2 text-xs font-bold text-emerald-200 cursor-pointer"
+                className="w-full rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white dark:bg-emerald-600/30 dark:border dark:border-emerald-500/40 py-2 text-xs font-bold dark:text-emerald-200 cursor-pointer shadow-xs"
               >
                 Finish Onboarding (Standalone Ready)
               </button>
@@ -467,11 +467,11 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
             {view.permissions.map((perm) => (
               <div
                 key={perm.key}
-                className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/70 p-2.5 text-xs"
+                className="flex items-center justify-between rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/70 p-2.5 text-xs"
               >
                 <div>
-                  <div className="font-semibold text-white">{perm.label}</div>
-                  <div className="text-[11px] text-slate-400">{perm.description}</div>
+                  <div className="font-semibold text-slate-900 dark:text-white">{perm.label}</div>
+                  <div className="text-[11px] text-slate-600 dark:text-slate-400">{perm.description}</div>
                 </div>
                 <button
                   type="button"
@@ -479,8 +479,8 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                   onClick={() => onTogglePermission?.(perm.key, !perm.granted)}
                   className={`rounded-lg px-2.5 py-1 text-[10px] font-mono font-bold cursor-pointer ${
                     perm.granted
-                      ? "bg-emerald-500/20 text-emerald-300"
-                      : "bg-rose-500/20 text-rose-300"
+                      ? "bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-transparent"
+                      : "bg-rose-50 text-rose-800 border border-rose-200 dark:bg-rose-500/20 dark:text-rose-300 dark:border-transparent"
                   }`}
                 >
                   {perm.granted ? "GRANTED" : "REVOKED"}
@@ -504,12 +504,12 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
         {activeTab === "privacy" && (
           <div
             data-testid="mobile-privacy-panel"
-            className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/70 p-3 text-xs"
+            className="space-y-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/70 p-3 text-xs"
           >
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between text-slate-800 dark:text-slate-200">
               <span>
                 Privacy Shield:{" "}
-                <strong>{view.privacyControls.privacyShieldEnabled ? "ACTIVE" : "OFF"}</strong>
+                <strong className="text-slate-900 dark:text-white">{view.privacyControls.privacyShieldEnabled ? "ACTIVE" : "OFF"}</strong>
               </span>
               <button
                 type="button"
@@ -519,15 +519,15 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                     privacyShieldEnabled: !view.privacyControls.privacyShieldEnabled,
                   })
                 }
-                className="rounded-lg bg-slate-800 px-2.5 py-1 font-mono text-[10px] text-cyan-300 cursor-pointer"
+                className="rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-transparent px-2.5 py-1 font-mono text-[10px] text-sky-700 dark:text-cyan-300 cursor-pointer shadow-xs"
               >
                 Toggle Shield
               </button>
             </div>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between text-slate-800 dark:text-slate-200">
               <span>
                 Local-Only Mode:{" "}
-                <strong>{view.privacyControls.localOnlyMode ? "ENABLED" : "DISABLED"}</strong>
+                <strong className="text-slate-900 dark:text-white">{view.privacyControls.localOnlyMode ? "ENABLED" : "DISABLED"}</strong>
               </span>
               <button
                 type="button"
@@ -537,14 +537,14 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                     localOnlyMode: !view.privacyControls.localOnlyMode,
                   })
                 }
-                className="rounded-lg bg-slate-800 px-2.5 py-1 font-mono text-[10px] text-amber-300 cursor-pointer"
+                className="rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-transparent px-2.5 py-1 font-mono text-[10px] text-amber-700 dark:text-amber-300 cursor-pointer shadow-xs"
               >
                 Toggle Local-Only
               </button>
             </div>
-            <div>
+            <div className="text-slate-800 dark:text-slate-200">
               DLP Firewall:{" "}
-              <strong>ACTIVE ({view.privacyControls.dlpProtectionActive ? "ENFORCED" : "OFF"})</strong>
+              <strong className="text-slate-900 dark:text-white">ACTIVE ({view.privacyControls.dlpProtectionActive ? "ENFORCED" : "OFF"})</strong>
             </div>
           </div>
         )}
@@ -552,18 +552,18 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
         {activeTab === "account" && (
           <div
             data-testid="mobile-account-panel"
-            className="space-y-2.5 rounded-xl border border-slate-800 bg-slate-900/70 p-3 text-xs"
+            className="space-y-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/70 p-3 text-xs text-slate-800 dark:text-slate-200"
           >
             <div>
               Account:{" "}
-              <strong data-testid="mobile-account-status">
+              <strong data-testid="mobile-account-status" className="text-slate-900 dark:text-white">
                 {view.accountView.signedIn
                   ? `${view.accountView.displayName} (${view.accountView.accountId})`
                   : "Standalone Local Mode (Not Signed In)"}
               </strong>
             </div>
             <div>Authorized Devices: {view.accountView.authorizedDevices.length}</div>
-            <div className="text-[11px] text-slate-400">
+            <div className="text-[11px] text-slate-600 dark:text-slate-400">
               Same account syncs Shared Memory & Preferences only; Remote Bridge never auto-connects.
             </div>
             <div className="flex flex-wrap gap-2 pt-1">
@@ -572,7 +572,7 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                   type="button"
                   data-testid="mobile-account-logout-btn"
                   onClick={() => onAccountAction?.("logout")}
-                  className="rounded-lg bg-rose-600/20 border border-rose-500/40 px-2.5 py-1 text-[11px] font-semibold text-rose-300 cursor-pointer"
+                  className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 dark:bg-rose-600/20 dark:border-rose-500/40 px-2.5 py-1 text-[11px] font-semibold dark:text-rose-300 cursor-pointer"
                 >
                   Sign Out (Return to Local Standalone)
                 </button>
@@ -581,7 +581,7 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                   type="button"
                   data-testid="mobile-account-login-btn"
                   onClick={() => onAccountAction?.("login")}
-                  className="rounded-lg bg-cyan-600/20 border border-cyan-500/40 px-2.5 py-1 text-[11px] font-semibold text-cyan-300 cursor-pointer"
+                  className="rounded-lg bg-sky-50 border border-sky-300 text-sky-800 hover:bg-sky-100 dark:bg-cyan-600/20 dark:border-cyan-500/40 px-2.5 py-1 text-[11px] font-semibold dark:text-cyan-300 cursor-pointer"
                 >
                   Sign In Shared Account
                 </button>
@@ -592,31 +592,31 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
 
         {activeTab === "memory" && (
           <div className="space-y-2.5 text-xs" data-testid="mobile-memory-panel">
-            <div className="rounded-xl border border-cyan-500/30 bg-cyan-950/20 p-2.5">
-              <div className="font-mono text-[10px] uppercase text-cyan-300">
+            <div className="rounded-xl border border-sky-200 dark:border-cyan-500/30 bg-sky-50/70 dark:bg-cyan-950/20 p-2.5">
+              <div className="font-mono text-[10px] uppercase text-sky-800 dark:text-cyan-300 font-semibold">
                 Shared Account Memory ({view.memoryView.sharedMemories.length}) & Preferences (
                 {view.memoryView.sharedPreferences.length})
               </div>
               {view.memoryView.sharedMemories.slice(0, 4).map((m) => (
-                <div key={m.key} className="mt-1 font-mono text-[11px] text-slate-200">
+                <div key={m.key} className="mt-1 font-mono text-[11px] text-slate-800 dark:text-slate-200">
                   {m.key}: {String(m.value)}
                 </div>
               ))}
             </div>
-            <div className="rounded-xl border border-amber-500/30 bg-amber-950/20 p-2.5">
-              <div className="font-mono text-[10px] uppercase text-amber-300">
+            <div className="rounded-xl border border-amber-200 dark:border-amber-500/30 bg-amber-50/70 dark:bg-amber-950/20 p-2.5">
+              <div className="font-mono text-[10px] uppercase text-amber-800 dark:text-amber-300 font-semibold">
                 Device-Local Mobile Context ({view.memoryView.deviceLocalContext.length}) — Never
                 Synced
               </div>
               {view.memoryView.deviceLocalContext.slice(0, 4).map((c) => (
-                <div key={c.key} className="mt-1 font-mono text-[11px] text-slate-200">
+                <div key={c.key} className="mt-1 font-mono text-[11px] text-slate-800 dark:text-slate-200">
                   {c.key}: {String(c.value)}
                 </div>
               ))}
             </div>
 
             {onSaveMemory && (
-              <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-2.5 space-y-2">
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/80 p-2.5 space-y-2">
                 <div className="flex items-center gap-2">
                   <select
                     id="mobile-memory-scope-select"
@@ -625,7 +625,7 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                     data-testid="mobile-memory-scope-select"
                     value={memScope}
                     onChange={(e) => setMemScope(e.target.value as "SHARED" | "DEVICE_LOCAL")}
-                    className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-white"
+                    className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1 text-[11px] text-slate-900 dark:text-white"
                   >
                     <option value="SHARED">SHARED (Account)</option>
                     <option value="DEVICE_LOCAL">DEVICE_LOCAL (Phone Only)</option>
@@ -639,7 +639,7 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                     value={memKey}
                     onChange={(e) => setMemKey(e.target.value)}
                     placeholder="Key (e.g. coding_style)"
-                    className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-white"
+                    className="flex-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1 text-[11px] text-slate-900 dark:text-white placeholder-slate-400"
                   />
                 </div>
                 <div className="flex gap-2">
@@ -652,7 +652,7 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                     value={memValue}
                     onChange={(e) => setMemValue(e.target.value)}
                     placeholder="Value..."
-                    className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-white"
+                    className="flex-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1 text-[11px] text-slate-900 dark:text-white placeholder-slate-400"
                   />
                   <button
                     type="button"
@@ -664,7 +664,7 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                         setMemValue("");
                       }
                     }}
-                    className="rounded-lg bg-cyan-600 px-3 py-1 text-[11px] font-bold text-white cursor-pointer"
+                    className="rounded-lg bg-cyan-600 hover:bg-cyan-700 px-3 py-1 text-[11px] font-bold text-white cursor-pointer shadow-xs"
                   >
                     Save
                   </button>
@@ -681,7 +681,7 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                           memValue.trim() || "Queued while offline",
                         )
                       }
-                      className="rounded-lg bg-amber-600/20 border border-amber-500/40 px-2.5 py-1 text-[10px] font-mono text-amber-300 cursor-pointer"
+                      className="rounded-lg bg-amber-50 text-amber-800 border border-amber-200 dark:bg-amber-600/20 dark:border-amber-500/40 px-2.5 py-1 text-[10px] font-mono dark:text-amber-300 cursor-pointer"
                     >
                       Queue Offline Write ({view.memoryView.offlineQueuePendingCount})
                     </button>
@@ -689,7 +689,7 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                       type="button"
                       data-testid="mobile-memory-sync-offline-btn"
                       onClick={() => onOfflineMemoryAction("sync_offline")}
-                      className="rounded-lg bg-emerald-600/20 border border-emerald-500/40 px-2.5 py-1 text-[10px] font-mono text-emerald-300 cursor-pointer"
+                      className="rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-600/20 dark:border-emerald-500/40 px-2.5 py-1 text-[10px] font-mono dark:text-emerald-300 cursor-pointer"
                     >
                       Sync Offline Queue
                     </button>
@@ -703,10 +703,10 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
         {activeTab === "settings" && (
           <div
             data-testid="mobile-settings-panel"
-            className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/70 p-3 text-xs"
+            className="space-y-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/70 p-3 text-xs text-slate-800 dark:text-slate-200"
           >
             <div className="flex items-center justify-between">
-              <span>Language Preference: {view.settings.languagePreference}</span>
+              <span>Language Preference: <strong className="text-slate-900 dark:text-white">{view.settings.languagePreference}</strong></span>
               {onUpdateSettings && (
                 <div className="flex gap-1">
                   {(["hinglish", "english", "hindi"] as const).map((lang) => (
@@ -717,8 +717,8 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                       onClick={() => onUpdateSettings({ languagePreference: lang })}
                       className={`rounded px-2 py-0.5 font-mono text-[10px] cursor-pointer ${
                         view.settings.languagePreference === lang
-                          ? "bg-cyan-500/30 text-cyan-200 border border-cyan-500/40"
-                          : "bg-slate-800 text-slate-400"
+                          ? "bg-sky-100 text-sky-800 border border-sky-300 dark:bg-cyan-500/30 dark:text-cyan-200 dark:border-cyan-500/40 font-semibold"
+                          : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400"
                       }`}
                     >
                       {lang}
@@ -727,9 +727,9 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                 </div>
               )}
             </div>
-            <div>Wake Word: {view.settings.wakePhrase}</div>
+            <div>Wake Word: <strong className="text-slate-900 dark:text-white">{view.settings.wakePhrase}</strong></div>
             <div className="flex items-center justify-between">
-              <span>Theme: {view.settings.theme}</span>
+              <span>Theme: <strong className="text-slate-900 dark:text-white">{view.settings.theme}</strong></span>
               {onUpdateSettings && (
                 <div className="flex gap-1">
                   {(["dark_cyber", "midnight_slate", "high_contrast"] as const).map((thm) => (
@@ -740,8 +740,8 @@ export const MobileProductionUxSurface: React.FC<MobileProductionUxSurfaceProps>
                       onClick={() => onUpdateSettings({ theme: thm })}
                       className={`rounded px-2 py-0.5 font-mono text-[10px] cursor-pointer ${
                         view.settings.theme === thm
-                          ? "bg-indigo-500/30 text-indigo-200 border border-indigo-500/40"
-                          : "bg-slate-800 text-slate-400"
+                          ? "bg-indigo-100 text-indigo-800 border border-indigo-300 dark:bg-indigo-500/30 dark:text-indigo-200 dark:border-indigo-500/40 font-semibold"
+                          : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400"
                       }`}
                     >
                       {thm}
@@ -797,14 +797,14 @@ export const DesktopProductionUxSurface: React.FC<DesktopProductionUxSurfaceProp
   return (
     <div
       data-testid="desktop-production-ux-surface"
-      className="rounded-3xl border border-slate-800 bg-slate-950 p-6 text-slate-100 shadow-2xl"
+      className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-950 p-6 text-slate-800 dark:text-slate-100 shadow-xl"
     >
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-4">
         <div>
-          <div className="text-xs font-mono uppercase tracking-widest text-cyan-400">
+          <div className="text-xs font-mono uppercase tracking-widest text-sky-700 dark:text-cyan-400">
             MYRAA DESKTOP · {view.standaloneMode ? "STANDALONE" : "REMOTE BRIDGE ACTIVE"}
           </div>
-          <h1 className="text-lg font-bold text-white">{view.deviceName}</h1>
+          <h1 className="text-lg font-bold text-slate-900 dark:text-white">{view.deviceName}</h1>
         </div>
         <div className="flex flex-wrap gap-1.5">
           {view.voiceUi.targetSelector.map((entry) => (
@@ -815,8 +815,8 @@ export const DesktopProductionUxSurface: React.FC<DesktopProductionUxSurfaceProp
               onClick={() => onSelectTarget?.(entry.target)}
               className={`rounded-xl px-3 py-1.5 text-xs font-mono border cursor-pointer ${
                 entry.selected
-                  ? "border-cyan-500/60 bg-cyan-950/40 text-cyan-200"
-                  : "border-slate-800 bg-slate-900 text-slate-400"
+                  ? "border-sky-500 bg-sky-50 text-sky-800 dark:border-cyan-500/60 dark:bg-cyan-950/40 dark:text-cyan-200 font-semibold"
+                  : "border-slate-200 bg-slate-100 text-slate-600 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400"
               }`}
             >
               {entry.target}
@@ -828,9 +828,9 @@ export const DesktopProductionUxSurface: React.FC<DesktopProductionUxSurfaceProp
       {view.voiceUi.activeError && (
         <div
           data-testid="desktop-actionable-error"
-          className="mt-4 rounded-2xl border border-rose-500/40 bg-rose-950/40 p-3 text-xs text-rose-200"
+          className="mt-4 rounded-2xl border border-rose-300 dark:border-rose-500/40 bg-rose-50 dark:bg-rose-950/40 p-3 text-xs text-rose-800 dark:text-rose-200"
         >
-          <div className="font-bold text-rose-300">
+          <div className="font-bold text-rose-700 dark:text-rose-300">
             {view.voiceUi.activeError.title} ({view.voiceUi.activeError.errorCode})
           </div>
           <p className="mt-1">{view.voiceUi.activeError.userMessage}</p>
@@ -841,22 +841,22 @@ export const DesktopProductionUxSurface: React.FC<DesktopProductionUxSurfaceProp
         {/* Project Dashboard */}
         <div
           data-testid="desktop-project-dashboard"
-          className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 text-xs"
+          className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/60 p-4 text-xs"
         >
           <div className="flex items-center justify-between">
-            <span className="font-mono text-[10px] uppercase text-cyan-400">Project Dashboard</span>
-            <span className="font-mono text-[10px] text-slate-400">
+            <span className="font-mono text-[10px] uppercase text-sky-700 dark:text-cyan-400 font-semibold">Project Dashboard</span>
+            <span className="font-mono text-[10px] text-slate-500 dark:text-slate-400">
               Stages: {view.projectDashboard.workflowStages.length}
             </span>
           </div>
-          <div className="mt-1 text-sm font-bold text-white">
+          <div className="mt-1 text-sm font-bold text-slate-900 dark:text-white">
             {view.projectDashboard.projectName}
           </div>
-          <div className="mt-0.5 font-mono text-slate-400">
+          <div className="mt-0.5 font-mono text-slate-600 dark:text-slate-400">
             {view.projectDashboard.projectPath}
           </div>
-          <div className="mt-2 text-slate-300">
-            Active File: <span className="font-mono">{view.projectDashboard.activeFile}</span>
+          <div className="mt-2 text-slate-700 dark:text-slate-300">
+            Active File: <span className="font-mono font-semibold text-slate-900 dark:text-white">{view.projectDashboard.activeFile}</span>
           </div>
           {onUpdateProject && (
             <div className="mt-2 flex gap-1.5">
@@ -871,7 +871,7 @@ export const DesktopProductionUxSurface: React.FC<DesktopProductionUxSurfaceProp
                         : "src/App.tsx",
                   })
                 }
-                className="rounded-lg bg-slate-800 px-2 py-1 font-mono text-[10px] text-cyan-300 hover:bg-slate-700 cursor-pointer"
+                className="rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-transparent px-2 py-1 font-mono text-[10px] text-sky-700 dark:text-cyan-300 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer shadow-xs"
               >
                 Switch Active File
               </button>
@@ -882,15 +882,15 @@ export const DesktopProductionUxSurface: React.FC<DesktopProductionUxSurfaceProp
         {/* Active Application / Local Context */}
         <div
           data-testid="desktop-active-context"
-          className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 text-xs"
+          className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/60 p-4 text-xs"
         >
-          <div className="font-mono text-[10px] uppercase text-amber-400">
+          <div className="font-mono text-[10px] uppercase text-amber-700 dark:text-amber-400 font-semibold">
             {view.activeContext.scopeBadge}
           </div>
-          <div className="mt-1 font-semibold text-white">
+          <div className="mt-1 font-semibold text-slate-900 dark:text-white">
             Window: {view.activeContext.currentWindow || "None"}
           </div>
-          <div className="mt-1 text-slate-300">
+          <div className="mt-1 text-slate-700 dark:text-slate-300">
             Application: {view.activeContext.activeApplication || "None"}
           </div>
           {onUpdateContext && (
@@ -903,7 +903,7 @@ export const DesktopProductionUxSurface: React.FC<DesktopProductionUxSurfaceProp
                     privacyShieldActive: !view.activeContext.privacyShieldActive,
                   })
                 }
-                className="rounded-lg bg-slate-800 px-2 py-1 font-mono text-[10px] text-amber-300 hover:bg-slate-700 cursor-pointer"
+                className="rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-transparent px-2 py-1 font-mono text-[10px] text-amber-700 dark:text-amber-300 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer shadow-xs"
               >
                 Privacy Shield: {view.activeContext.privacyShieldActive ? "ON" : "OFF"}
               </button>
@@ -914,39 +914,39 @@ export const DesktopProductionUxSurface: React.FC<DesktopProductionUxSurfaceProp
         {/* Tools & Capabilities Summary */}
         <div
           data-testid="desktop-tools-capabilities"
-          className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 text-xs"
+          className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/60 p-4 text-xs"
         >
           <div className="flex items-center justify-between">
-            <span className="font-mono text-[10px] uppercase text-emerald-400">
+            <span className="font-mono text-[10px] uppercase text-emerald-700 dark:text-emerald-400 font-semibold">
               Tools & Capabilities View
             </span>
             <button
               type="button"
               data-testid="desktop-toggle-tools-catalog-btn"
               onClick={() => setShowToolsCatalog(!showToolsCatalog)}
-              className="rounded bg-slate-800 px-2 py-0.5 font-mono text-[10px] text-emerald-300 cursor-pointer"
+              className="rounded bg-emerald-50 dark:bg-slate-800 border border-emerald-200 dark:border-transparent px-2 py-0.5 font-mono text-[10px] text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-slate-700 cursor-pointer shadow-xs"
             >
               {showToolsCatalog ? "Hide Catalog" : "Inspect 126 Tools"}
             </button>
           </div>
-          <div className="mt-1 font-semibold text-white" data-testid="desktop-gemini-live-tools-count">
+          <div className="mt-1 font-semibold text-slate-900 dark:text-white" data-testid="desktop-gemini-live-tools-count">
             Gemini Live Tools: {view.toolsAndCapabilities.totalGeminiLiveTools}
           </div>
-          <div className="mt-1 text-slate-300">
+          <div className="mt-1 text-slate-700 dark:text-slate-300">
             Desktop Capabilities: {view.toolsAndCapabilities.desktopCapabilitiesCount} · Mobile
             Capabilities: {view.toolsAndCapabilities.mobileCapabilitiesCount}
           </div>
           {showToolsCatalog && (
             <div
               data-testid="desktop-tools-catalog-list"
-              className="mt-2 max-h-28 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950 p-2 font-mono text-[10px] text-slate-300"
+              className="mt-2 max-h-28 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-2 font-mono text-[10px] text-slate-800 dark:text-slate-300 shadow-inner"
             >
-              <div className="text-cyan-300 mb-1">
+              <div className="text-sky-700 dark:text-cyan-300 mb-1 font-semibold">
                 Gemini Live Tools ({view.toolsAndCapabilities.geminiLiveToolNames.length} registered):
               </div>
               <div className="flex flex-wrap gap-1">
                 {view.toolsAndCapabilities.geminiLiveToolNames.slice(0, 24).map((t) => (
-                  <span key={t} className="rounded bg-slate-900 px-1.5 py-0.5 text-slate-200">
+                  <span key={t} className="rounded bg-slate-100 dark:bg-slate-900 px-1.5 py-0.5 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-transparent">
                     {t}
                   </span>
                 ))}
@@ -958,17 +958,17 @@ export const DesktopProductionUxSurface: React.FC<DesktopProductionUxSurfaceProp
 
       {/* Voice Command Input & Remote Connection Panel */}
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-          <div className="text-xs font-mono uppercase text-slate-400 mb-2">
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/60 p-4">
+          <div className="text-xs font-mono uppercase text-slate-500 dark:text-slate-400 mb-2">
             Desktop Voice-First Interface ({view.voiceUi.phase})
           </div>
           {view.voiceUi.lastTurn && (
             <div
               data-testid="desktop-voice-response"
-              className="mb-2 rounded-xl bg-slate-950 p-2.5 text-xs text-slate-200 border border-slate-800"
+              className="mb-2 rounded-xl bg-white dark:bg-slate-950 p-2.5 text-xs text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-800 shadow-xs"
             >
               <div>{view.voiceUi.lastTurn.responseText}</div>
-              <div className="mt-0.5 font-mono text-[10px] text-cyan-400">
+              <div className="mt-0.5 font-mono text-[10px] text-sky-700 dark:text-cyan-400 font-semibold">
                 Executed on: {view.voiceUi.lastTurn.executingDeviceId || view.deviceId} (
                 {view.voiceUi.lastTurn.resolvedTarget})
               </div>
@@ -984,7 +984,7 @@ export const DesktopProductionUxSurface: React.FC<DesktopProductionUxSurfaceProp
               value={commandInput}
               onChange={(e) => setCommandInput(e.target.value)}
               placeholder="VS Code open karo, project inspect karo..."
-              className="flex-1 rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-white"
+              className="flex-1 rounded-xl border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400"
             />
             <button
               type="button"
@@ -995,7 +995,7 @@ export const DesktopProductionUxSurface: React.FC<DesktopProductionUxSurfaceProp
                   setCommandInput("");
                 }
               }}
-              className="rounded-xl bg-cyan-600 px-4 py-2 text-xs font-bold text-white cursor-pointer"
+              className="rounded-xl bg-cyan-600 hover:bg-cyan-700 px-4 py-2 text-xs font-bold text-white cursor-pointer shadow-xs"
             >
               Execute
             </button>
@@ -1095,16 +1095,16 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
   return (
     <div
       data-testid="production-control-hub-modal"
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md overflow-y-auto"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 dark:bg-black/80 p-4 backdrop-blur-md overflow-y-auto"
     >
-      <div className="relative my-auto w-full max-w-5xl rounded-3xl border border-slate-800 bg-slate-950 p-6 text-slate-100 shadow-2xl max-h-[92vh] overflow-y-auto">
+      <div className="relative my-auto w-full max-w-5xl rounded-3xl border border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-950 p-6 text-slate-800 dark:text-slate-100 shadow-2xl max-h-[92vh] overflow-y-auto">
         {/* Top Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-4">
           <div>
-            <div className="text-xs font-mono uppercase tracking-widest text-cyan-400">
+            <div className="text-xs font-mono uppercase tracking-widest text-sky-700 dark:text-cyan-400 font-semibold">
               MYRAA PRODUCTION CONTROL HUB · DUAL-PRODUCT ARCHITECTURE
             </div>
-            <h2 className="text-lg font-bold text-white">
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white">
               Standalone Mobile + Standalone Desktop + Optional Remote Bridge
             </h2>
           </div>
@@ -1116,8 +1116,8 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
               onClick={() => setSurface("desktop")}
               className={`rounded-xl px-3 py-1.5 text-xs font-mono uppercase cursor-pointer border ${
                 surface === "desktop"
-                  ? "border-cyan-500/60 bg-cyan-950/50 text-cyan-200"
-                  : "border-slate-800 bg-slate-900 text-slate-400"
+                  ? "border-sky-500 bg-sky-50 text-sky-800 dark:border-cyan-500/60 dark:bg-cyan-950/50 dark:text-cyan-200 font-semibold"
+                  : "border-slate-200 bg-slate-100 text-slate-600 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400"
               }`}
             >
               Desktop UX
@@ -1128,8 +1128,8 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
               onClick={() => setSurface("mobile")}
               className={`rounded-xl px-3 py-1.5 text-xs font-mono uppercase cursor-pointer border ${
                 surface === "mobile"
-                  ? "border-cyan-500/60 bg-cyan-950/50 text-cyan-200"
-                  : "border-slate-800 bg-slate-900 text-slate-400"
+                  ? "border-sky-500 bg-sky-50 text-sky-800 dark:border-cyan-500/60 dark:bg-cyan-950/50 dark:text-cyan-200 font-semibold"
+                  : "border-slate-200 bg-slate-100 text-slate-600 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400"
               }`}
             >
               Mobile UX
@@ -1140,8 +1140,8 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
               onClick={() => setSurface("handoff_security")}
               className={`rounded-xl px-3 py-1.5 text-xs font-mono uppercase cursor-pointer border ${
                 surface === "handoff_security"
-                  ? "border-cyan-500/60 bg-cyan-950/50 text-cyan-200"
-                  : "border-slate-800 bg-slate-900 text-slate-400"
+                  ? "border-sky-500 bg-sky-50 text-sky-800 dark:border-cyan-500/60 dark:bg-cyan-950/50 dark:text-cyan-200 font-semibold"
+                  : "border-slate-200 bg-slate-100 text-slate-600 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400"
               }`}
             >
               Handoff & Security
@@ -1150,7 +1150,7 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
               type="button"
               data-testid="hub-close-btn"
               onClick={onClose}
-              className="rounded-xl border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-mono text-slate-300 hover:text-white cursor-pointer"
+              className="rounded-xl border border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-200 dark:border-slate-800 dark:bg-slate-900 px-3 py-1.5 text-xs font-mono dark:text-slate-300 dark:hover:text-white cursor-pointer shadow-xs"
             >
               Close
             </button>
@@ -1161,7 +1161,7 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
         {statusBanner && (
           <div
             data-testid="hub-status-banner"
-            className="mt-3 rounded-2xl border border-cyan-500/40 bg-cyan-950/30 p-3 text-xs text-cyan-200"
+            className="mt-3 rounded-2xl border border-sky-300 dark:border-cyan-500/40 bg-sky-50 dark:bg-cyan-950/30 p-3 text-xs text-sky-800 dark:text-cyan-200 font-medium"
           >
             {statusBanner}
           </div>
@@ -1169,9 +1169,9 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
         {errorBanner && (
           <div
             data-testid="hub-error-banner"
-            className="mt-3 rounded-2xl border border-rose-500/40 bg-rose-950/40 p-3 text-xs text-rose-200"
+            className="mt-3 rounded-2xl border border-rose-300 dark:border-rose-500/40 bg-rose-50 dark:bg-rose-950/40 p-3 text-xs text-rose-800 dark:text-rose-200"
           >
-            <div className="font-bold text-rose-300">
+            <div className="font-bold text-rose-700 dark:text-rose-300">
               {errorBanner.title} ({errorBanner.errorCode})
             </div>
             <p className="mt-1">{errorBanner.userMessage}</p>
@@ -1179,7 +1179,7 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
         )}
 
         {!uxState ? (
-          <div className="py-12 text-center text-xs font-mono text-slate-400">
+          <div className="py-12 text-center text-xs font-mono text-slate-500 dark:text-slate-400">
             {loading ? "Loading MYRAA Production UX State..." : "Initializing..."}
           </div>
         ) : (
@@ -1271,11 +1271,11 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
             {surface === "handoff_security" && (
               <div
                 data-testid="hub-handoff-security-surface"
-                className="space-y-4 rounded-3xl border border-slate-800 bg-slate-900/50 p-5 text-xs"
+                className="space-y-4 rounded-3xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 p-5 text-xs text-slate-800 dark:text-slate-100"
               >
                 {/* Cross-Device Handoff Controls */}
-                <div className="rounded-2xl border border-slate-800 bg-slate-950 p-4 space-y-3">
-                  <div className="font-mono text-[10px] uppercase text-cyan-400">
+                <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-4 space-y-3 shadow-xs">
+                  <div className="font-mono text-[10px] uppercase text-sky-700 dark:text-cyan-400 font-semibold">
                     Cross-Device Workflow Handoff (Phone ↔ Desktop)
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -1287,7 +1287,7 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
                       data-testid="handoff-utterance-input"
                       value={handoffUtterance}
                       onChange={(e) => setHandoffUtterance(e.target.value)}
-                      className="flex-1 rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-white"
+                      className="flex-1 rounded-xl border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400"
                     />
                     <button
                       type="button"
@@ -1300,7 +1300,7 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
                           utterance: handoffUtterance,
                         })
                       }
-                      className="rounded-xl bg-cyan-600 px-3 py-2 font-bold text-white cursor-pointer"
+                      className="rounded-xl bg-cyan-600 hover:bg-cyan-700 px-3 py-2 font-bold text-white cursor-pointer shadow-xs"
                     >
                       Handoff Phone → Desktop
                     </button>
@@ -1315,7 +1315,7 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
                           utterance: "Ye task phone par continue karo",
                         })
                       }
-                      className="rounded-xl bg-indigo-600 px-3 py-2 font-bold text-white cursor-pointer"
+                      className="rounded-xl bg-indigo-600 hover:bg-indigo-700 px-3 py-2 font-bold text-white cursor-pointer shadow-xs"
                     >
                       Continue Desktop → Phone
                     </button>
@@ -1323,20 +1323,20 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
 
                   {/* Active Cross-Device Workflows */}
                   <div className="space-y-2 pt-2">
-                    <div className="font-mono text-[10px] uppercase text-slate-400">
+                    <div className="font-mono text-[10px] uppercase text-slate-500 dark:text-slate-400 font-medium">
                       Active Workflows ({uxState.activeWorkflows.length})
                     </div>
                     {uxState.activeWorkflows.map((wf: any) => (
                       <div
                         key={wf.workflowId}
                         data-testid={`workflow-item-${wf.workflowId}`}
-                        className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-900 p-2.5"
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 p-2.5"
                       >
                         <div>
-                          <div className="font-semibold text-white">
-                            {wf.title} · <span className="text-cyan-300 font-mono">{wf.state}</span>
+                          <div className="font-semibold text-slate-900 dark:text-white">
+                            {wf.title} · <span className="text-sky-700 dark:text-cyan-300 font-mono">{wf.state}</span>
                           </div>
-                          <div className="font-mono text-[10px] text-slate-400">
+                          <div className="font-mono text-[10px] text-slate-500 dark:text-slate-400">
                             {wf.initiatingDeviceId} → {wf.currentExecutingDeviceId} ({wf.workflowId})
                           </div>
                         </div>
@@ -1350,7 +1350,7 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
                                 workflowId: wf.workflowId,
                               })
                             }
-                            className="rounded bg-amber-600/20 px-2 py-1 font-mono text-[10px] text-amber-300 cursor-pointer"
+                            className="rounded bg-amber-50 text-amber-800 border border-amber-200 dark:border-transparent dark:bg-amber-600/20 px-2 py-1 font-mono text-[10px] dark:text-amber-300 cursor-pointer"
                           >
                             Pause
                           </button>
@@ -1363,7 +1363,7 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
                                 workflowId: wf.workflowId,
                               })
                             }
-                            className="rounded bg-emerald-600/20 px-2 py-1 font-mono text-[10px] text-emerald-300 cursor-pointer"
+                            className="rounded bg-emerald-50 text-emerald-800 border border-emerald-200 dark:border-transparent dark:bg-emerald-600/20 px-2 py-1 font-mono text-[10px] dark:text-emerald-300 cursor-pointer"
                           >
                             Resume
                           </button>
@@ -1376,7 +1376,7 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
                                 workflowId: wf.workflowId,
                               })
                             }
-                            className="rounded bg-rose-600/20 px-2 py-1 font-mono text-[10px] text-rose-300 cursor-pointer"
+                            className="rounded bg-rose-50 text-rose-800 border border-rose-200 dark:border-transparent dark:bg-rose-600/20 px-2 py-1 font-mono text-[10px] dark:text-rose-300 cursor-pointer"
                           >
                             Simulate Disconnect
                           </button>
@@ -1389,7 +1389,7 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
                                 workflowId: wf.workflowId,
                               })
                             }
-                            className="rounded bg-cyan-600/20 px-2 py-1 font-mono text-[10px] text-cyan-300 cursor-pointer"
+                            className="rounded bg-sky-50 text-sky-800 border border-sky-200 dark:border-transparent dark:bg-cyan-600/20 px-2 py-1 font-mono text-[10px] dark:text-cyan-300 cursor-pointer"
                           >
                             Recover & Resume
                           </button>
@@ -1401,11 +1401,11 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
 
                 {/* Emergency Stop & Security Lockdown Controls */}
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div className="rounded-2xl border border-rose-500/30 bg-rose-950/20 p-4 space-y-2">
-                    <div className="font-mono text-[10px] uppercase text-rose-300">
+                  <div className="rounded-2xl border border-rose-200 dark:border-rose-500/30 bg-rose-50/70 dark:bg-rose-950/20 p-4 space-y-2">
+                    <div className="font-mono text-[10px] uppercase text-rose-700 dark:text-rose-300 font-semibold">
                       Global Emergency Stop (Killswitch)
                     </div>
-                    <div className="text-sm font-bold text-white" data-testid="hub-emergency-status">
+                    <div className="text-sm font-bold text-slate-900 dark:text-white" data-testid="hub-emergency-status">
                       Status: {uxState.emergencyStop.active ? "HALTED (ACTIVE)" : "READY (INACTIVE)"}
                     </div>
                     <div className="flex gap-2 pt-1">
@@ -1418,7 +1418,7 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
                             reason: "Manual Emergency Stop from Control Hub",
                           })
                         }
-                        className="rounded-xl bg-rose-600 px-3 py-1.5 text-xs font-bold text-white cursor-pointer"
+                        className="rounded-xl bg-rose-600 hover:bg-rose-700 px-3 py-1.5 text-xs font-bold text-white cursor-pointer shadow-xs"
                       >
                         Trigger Emergency Stop
                       </button>
@@ -1430,18 +1430,18 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
                             action: "reset",
                           })
                         }
-                        className="rounded-xl bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-200 cursor-pointer"
+                        className="rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200 px-3 py-1.5 text-xs font-semibold cursor-pointer shadow-xs"
                       >
                         Reset Emergency Stop
                       </button>
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-amber-500/30 bg-amber-950/20 p-4 space-y-2">
-                    <div className="font-mono text-[10px] uppercase text-amber-300">
+                  <div className="rounded-2xl border border-amber-200 dark:border-amber-500/30 bg-amber-50/70 dark:bg-amber-950/20 p-4 space-y-2">
+                    <div className="font-mono text-[10px] uppercase text-amber-800 dark:text-amber-300 font-semibold">
                       Security Policy Lockdown Mode
                     </div>
-                    <div className="text-sm font-bold text-white" data-testid="hub-security-mode">
+                    <div className="text-sm font-bold text-slate-900 dark:text-white" data-testid="hub-security-mode">
                       Current Mode: {uxState.securityMode}
                     </div>
                     <div className="flex flex-wrap gap-2 pt-1">
@@ -1453,8 +1453,8 @@ export const ProductionControlHubModal: React.FC<ProductionControlHubModalProps>
                           onClick={() => postUxAction("/api/ux/security/lockdown", { mode })}
                           className={`rounded-xl px-3 py-1.5 text-xs font-mono font-bold cursor-pointer ${
                             uxState.securityMode === mode
-                              ? "bg-amber-500 text-slate-950"
-                              : "bg-slate-800 text-slate-300"
+                              ? "bg-amber-500 text-slate-950 shadow-xs"
+                              : "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-700"
                           }`}
                         >
                           {mode}

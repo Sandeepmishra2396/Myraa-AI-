@@ -381,6 +381,21 @@ export class ConversationManager {
         geminiState: "READY",
         epoch: forEpoch,
       });
+
+      // Synchronize durable memories on connection so frontend UI immediately reflects memories across restarts
+      import("../server_memory.ts")
+        .then(async ({ loadMemories }) => {
+          try {
+            const memories = await loadMemories();
+            if (Array.isArray(memories) && !flags.isClientClosed && clientWs.readyState === 1) {
+              this._send(clientWs, {
+                type: "memory_sync",
+                memories,
+              });
+            }
+          } catch {}
+        })
+        .catch(() => {});
     };
 
     /**

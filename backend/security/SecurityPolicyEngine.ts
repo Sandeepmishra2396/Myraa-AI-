@@ -933,9 +933,16 @@ export class SecurityPolicyEngine {
         };
       }
 
-      // Verify confirmation token (supports both sora_conf_ and Planner Checkpoint IDs)
+      // Verify confirmation token (supports both sora_conf_, local operator verbal/chat approval, and Planner Checkpoint IDs)
       let isTokenValid = false;
       let rejectReason = "";
+
+      const isLocalOperatorApproval =
+        Boolean(context.isLocal) &&
+        typeof providedToken === "string" &&
+        ["approve", "confirm", "approved", "confirmed", "yes", "user_confirmed", "operator_approved"].includes(
+          providedToken.trim().toLowerCase(),
+        );
 
       if (providedToken.startsWith("sora_conf_")) {
         const verifyRes = this.verifyAndConsumeConfirmation(
@@ -946,6 +953,8 @@ export class SecurityPolicyEngine {
         );
         isTokenValid = verifyRes.valid;
         rejectReason = verifyRes.reason || "Invalid confirmation token.";
+      } else if (isLocalOperatorApproval) {
+        isTokenValid = true;
       } else {
         // Planner Checkpoint ID: verify it exists and is approved for this tool
         try {

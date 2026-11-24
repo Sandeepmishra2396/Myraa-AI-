@@ -203,7 +203,7 @@ export const FloatingAvatarApp: React.FC = () => {
         </button>
 
         {/* State Label */}
-        <span className="text-[10px] font-mono tracking-wider uppercase text-white/70 px-1 font-semibold">
+        <span className="text-[10px] font-mono tracking-wider uppercase text-white px-1 font-semibold">
           {characterState === "talking"
             ? "TALKING"
             : characterState === "thinking"
@@ -219,7 +219,7 @@ export const FloatingAvatarApp: React.FC = () => {
           className={`p-1.5 rounded-full transition cursor-pointer ${
             transparentBackground
               ? "text-cyan-400 bg-cyan-500/20 hover:bg-cyan-500/30"
-              : "text-white/40 hover:text-white/80 hover:bg-white/10"
+              : "text-white/60 hover:text-white hover:bg-white/10"
           }`}
           title={
             transparentBackground
@@ -233,7 +233,7 @@ export const FloatingAvatarApp: React.FC = () => {
         {/* Open Main Window */}
         <button
           onClick={() => window.myraa?.focusMain?.()}
-          className="p-1.5 rounded-full text-white/40 hover:text-white/80 hover:bg-white/10 transition cursor-pointer"
+          className="p-1.5 rounded-full text-white/60 hover:text-white hover:bg-white/10 transition cursor-pointer"
           title="Open Full MYRAA Application"
         >
           <Maximize2 size={12} />
@@ -242,7 +242,7 @@ export const FloatingAvatarApp: React.FC = () => {
         {/* Close/Hide Floating Window */}
         <button
           onClick={() => window.myraa?.closeFloating?.()}
-          className="p-1.5 rounded-full text-white/40 hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
+          className="p-1.5 rounded-full text-white/60 hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
           title="Hide Floating Avatar"
         >
           <X size={12} />

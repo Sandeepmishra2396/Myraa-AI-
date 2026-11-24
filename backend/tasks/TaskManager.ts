@@ -143,10 +143,27 @@ let desktopAgentVerified = false;
  * even if MYRAA's node process is killed.
  */
 export function spawnDesktopAgent(): void {
+  const localAppData = process.env.LOCALAPPDATA || "";
+  const tesseractCandidates = [
+    process.env.TESSERACT_PATH,
+    localAppData ? path.join(localAppData, "Programs", "Tesseract-OCR", "tesseract.exe") : "",
+    "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+    "C:\\Program Files (x86)\\Tesseract-OCR\\tesseract.exe",
+  ].filter(Boolean) as string[];
+
+  const resolvedTesseract = tesseractCandidates.find((p) => {
+    try {
+      return fs.existsSync(p);
+    } catch {
+      return false;
+    }
+  });
+
   const agentEnv = {
     ...process.env,
     SORA_AGENT_HOST: "127.0.0.1",
     SORA_AGENT_PORT: "8765",
+    ...(resolvedTesseract ? { TESSERACT_PATH: resolvedTesseract } : {}),
   };
 
   // Preferred path (packaged app): a PyInstaller-frozen agent exe that embeds
@@ -172,7 +189,6 @@ export function spawnDesktopAgent(): void {
   }
 
   // Development fallback: run the agent from source using a local Python.
-  const localAppData = process.env.LOCALAPPDATA || "";
   const candidates = [
     process.env.SORA_PYTHON,
     path.join(localAppData, "Programs", "Python", "Python314", "python.exe"),

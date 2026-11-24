@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -30,10 +31,19 @@ def _capture() -> "Any":
     try:
         from PIL import ImageGrab
 
-        img = ImageGrab.grab(all_screens=True)
-        return img
-    except Exception as e:  # noqa: BLE001
-        raise ToolError(f"Screen capture failed: {e}")
+        return ImageGrab.grab(all_screens=True)
+    except Exception:
+        try:
+            from PIL import ImageGrab
+
+            return ImageGrab.grab(all_screens=False)
+        except Exception:
+            try:
+                import pyautogui
+
+                return pyautogui.screenshot()
+            except Exception as e:  # noqa: BLE001
+                raise ToolError(f"Screen capture failed: {e}")
 
 
 def _capture_region(bbox):
@@ -41,8 +51,15 @@ def _capture_region(bbox):
         from PIL import ImageGrab
 
         return ImageGrab.grab(bbox=bbox, all_screens=False)
-    except Exception as e:  # noqa: BLE001
-        raise ToolError(f"Region capture failed: {e}")
+    except Exception:
+        try:
+            import pyautogui
+
+            # bbox is (left, top, right, bottom)
+            region = (bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1])
+            return pyautogui.screenshot(region=region)
+        except Exception as e:  # noqa: BLE001
+            raise ToolError(f"Region capture failed: {e}")
 
 
 def _active_window_bbox():
@@ -95,6 +112,14 @@ def _run_ocr(img) -> str:
     exe = os.environ.get("TESSERACT_PATH") or _find_tesseract_exe()
     if exe:
         pytesseract.pytesseract.tesseract_cmd = exe
+        tessdata_dir = os.path.join(os.path.dirname(exe), "tessdata")
+        if os.path.isdir(tessdata_dir) and not os.environ.get("TESSDATA_PREFIX"):
+            os.environ["TESSDATA_PREFIX"] = tessdata_dir
+    else:
+        raise ToolError(
+            "OCR failed: Tesseract OCR engine was not found on this system. "
+            "Please ensure Tesseract is installed or specify TESSERACT_PATH."
+        )
     try:
         return pytesseract.image_to_string(img)
     except Exception as e:  # noqa: BLE001
@@ -104,12 +129,41 @@ def _run_ocr(img) -> str:
 
 
 def _find_tesseract_exe() -> Optional[str]:
-    candidates = [
+    # 1. System PATH lookup
+    which_path = shutil.which("tesseract") or shutil.which("tesseract.exe")
+    if which_path and os.path.isfile(which_path):
+        return which_path
+
+    # 2. Common Windows user and system directories
+    candidates = []
+
+    # Per-user AppData installation (e.g. C:\Users\<User>\AppData\Local\Programs\Tesseract-OCR\tesseract.exe)
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        candidates.append(os.path.join(local_app_data, "Programs", "Tesseract-OCR", "tesseract.exe"))
+
+    try:
+        candidates.append(str(Path.home() / "AppData" / "Local" / "Programs" / "Tesseract-OCR" / "tesseract.exe"))
+    except Exception:
+        pass
+
+    # Program Files (64-bit and 32-bit)
+    prog_files = os.environ.get("PROGRAMFILES", r"C:\Program Files")
+    candidates.append(os.path.join(prog_files, "Tesseract-OCR", "tesseract.exe"))
+
+    prog_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    candidates.append(os.path.join(prog_files_x86, "Tesseract-OCR", "tesseract.exe"))
+
+    # Explicit drive letter fallbacks
+    candidates.extend([
         r"C:\Program Files\Tesseract-OCR\tesseract.exe",
         r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-    ]
+        r"C:\Tesseract-OCR\tesseract.exe",
+        r"D:\Tesseract-OCR\tesseract.exe",
+    ])
+
     for c in candidates:
-        if os.path.exists(c):
+        if c and os.path.isfile(c):
             return c
     return None
 

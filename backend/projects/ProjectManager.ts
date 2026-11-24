@@ -195,6 +195,21 @@ export class ProjectManager {
   }
 
   /**
+   * Deletes an existing task from the active project.
+   */
+  async deleteTask(taskId: string): Promise<boolean> {
+    const project = await this.store.getActiveProject();
+    if (!project) return false;
+
+    const initialLen = project.tasks.length;
+    project.tasks = project.tasks.filter((t) => t.id !== taskId);
+    if (project.tasks.length === initialLen) return false;
+
+    await this.store.saveProject(project);
+    return true;
+  }
+
+  /**
    * Updates the last session resume context ("last time hum kaha tak aaye the?").
    */
   async updateLastSession(

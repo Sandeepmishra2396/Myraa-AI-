@@ -72,33 +72,33 @@ export function ApiKeyGate({ children }: { children: ReactNode }) {
   if (phase === "ready") return <>{children}</>;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#050509] text-white">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-50 text-slate-900 dark:bg-[#050509] dark:text-white">
       {/* Ambient glows to match the app's aesthetic */}
-      <div className="pointer-events-none absolute -left-40 -top-40 h-[420px] w-[420px] rounded-full bg-indigo-700/20 blur-[130px]" />
-      <div className="pointer-events-none absolute -bottom-40 -right-40 h-[480px] w-[480px] rounded-full bg-cyan-700/15 blur-[150px]" />
+      <div className="pointer-events-none absolute -left-40 -top-40 h-[420px] w-[420px] rounded-full bg-indigo-500/10 dark:bg-indigo-700/20 blur-[130px]" />
+      <div className="pointer-events-none absolute -bottom-40 -right-40 h-[480px] w-[480px] rounded-full bg-cyan-500/10 dark:bg-cyan-700/15 blur-[150px]" />
 
       {phase === "checking" ? (
-        <div className="flex flex-col items-center gap-4 text-white/60">
-          <Loader2 className="h-7 w-7 animate-spin" />
+        <div className="flex flex-col items-center gap-4 text-slate-500 dark:text-white/60">
+          <Loader2 className="h-7 w-7 animate-spin text-indigo-500" />
           <span className="text-sm tracking-wide">Starting MYRAA…</span>
         </div>
       ) : (
         <form
           onSubmit={submit}
-          className="relative z-10 w-[min(92vw,460px)] rounded-3xl border border-white/10 bg-white/[0.04] p-8 shadow-[0_30px_80px_rgba(0,0,0,0.6)] backdrop-blur-2xl"
+          className="relative z-10 w-[min(92vw,460px)] rounded-3xl border border-slate-200 dark:border-white/10 bg-white/95 dark:bg-white/[0.04] p-8 shadow-2xl backdrop-blur-2xl text-slate-900 dark:text-white"
         >
           <div className="mb-6 flex flex-col items-center text-center">
-            <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500/30 to-cyan-500/20 ring-1 ring-white/10">
-              <KeyRound className="h-6 w-6 text-indigo-200" />
+            <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500/20 to-cyan-500/20 dark:from-indigo-500/30 dark:to-cyan-500/20 ring-1 ring-slate-200 dark:ring-white/10">
+              <KeyRound className="h-6 w-6 text-indigo-600 dark:text-indigo-200" />
             </div>
-            <h1 className="text-xl font-semibold tracking-tight">Welcome to MYRAA</h1>
-            <p className="mt-2 text-sm leading-relaxed text-white/55">
+            <h1 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-white">Welcome to MYRAA</h1>
+            <p className="mt-2 text-sm leading-relaxed text-slate-600 dark:text-white/55">
               MYRAA runs on your own Google Gemini API key. Paste it below to get
               started — it stays on this computer and is never shared.
             </p>
           </div>
 
-          <label className="mb-1.5 block text-xs font-medium uppercase tracking-wider text-white/40">
+          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-white/40">
             Gemini API / Auth key
           </label>
           <input
@@ -108,11 +108,11 @@ export function ApiKeyGate({ children }: { children: ReactNode }) {
             onChange={(e) => setValue(e.target.value)}
             placeholder="AIza… or AQ.…"
             spellCheck={false}
-            className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition focus:border-indigo-400/60 focus:ring-2 focus:ring-indigo-500/20"
+            className="w-full rounded-xl border border-slate-300 dark:border-white/10 bg-slate-50 dark:bg-black/40 px-4 py-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-white/40 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
           />
 
           {error && (
-            <p className="mt-3 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-300 ring-1 ring-red-500/20">
+            <p className="mt-3 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-300 ring-1 ring-red-500/20">
               {error}
             </p>
           )}
@@ -131,15 +131,15 @@ export function ApiKeyGate({ children }: { children: ReactNode }) {
             )}
           </button>
 
-          <div className="mt-5 flex items-center justify-between text-xs text-white/40">
+          <div className="mt-5 flex items-center justify-between text-xs text-slate-500 dark:text-white/40">
             <span className="inline-flex items-center gap-1.5">
-              <ShieldCheck className="h-3.5 w-3.5" /> Stored locally only
+              <ShieldCheck className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" /> Stored locally only
             </span>
             <a
               href="https://aistudio.google.com/app/apikey"
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1 text-indigo-300 transition hover:text-indigo-200"
+              className="inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-300 font-medium transition hover:underline"
             >
               Get a free key <ExternalLink className="h-3.5 w-3.5" />
             </a>

@@ -35,11 +35,16 @@ import {
   MoreVertical,
   ChevronDown,
   ChevronUp,
+  PanelRight,
+  Sun,
+  Moon,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Memory, MemoryCategory } from "./lib/memoryTypes";
 import { MemoryDashboard } from "./components/MemoryDashboard";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { ChatInterface, ChatMessage, ChatAttachment } from "./components/ChatInterface";
+import { ProjectsDashboard } from "./components/ProjectsDashboard";
 import { ResearchWorkspace } from "./components/ResearchWorkspace";
 import { AgentWorkspace } from "./components/AgentWorkspace";
 import { VisionModal } from "./components/VisionModal";
@@ -49,6 +54,7 @@ import { MyraaWakeWordDetector } from "./lib/wakeWord";
 import { CloudPairingModal, StoredRemoteSession, STORAGE_KEY } from "./components/remote/CloudPairingModal";
 import { authenticatedRemoteFetch, getAccessTokenExpiryInfo } from "./lib/remoteAuth";
 import { ProductionControlHubModal } from "./components/ux/ProductionUxPanels";
+import { RuntimeStatusIndicator } from "./components/ux/RuntimeStatusIndicator";
 import {
   DecisionConfirmationModal,
   DecisionConfirmationData,
@@ -89,6 +95,68 @@ export default function App() {
     }
   });
 
+  const [operatorToken, setOperatorToken] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    try {
+      const stored = localStorage.getItem("myraa_operator_session");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        return parsed?.tokens?.accessToken || "";
+      }
+    } catch {}
+    return "";
+  });
+
+  // Ensure valid desktop operator session or remote session
+  useEffect(() => {
+    const initSession = async () => {
+      if (remoteSession?.accessToken) {
+        const expiry = getAccessTokenExpiryInfo(remoteSession);
+        if (!expiry.isExpired) return;
+      }
+      if (operatorToken) {
+        const expiry = getAccessTokenExpiryInfo(operatorToken);
+        if (!expiry.isExpired) return;
+      }
+      try {
+        const stored = localStorage.getItem("myraa_operator_session");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed?.tokens?.accessToken) {
+            const exp = getAccessTokenExpiryInfo(parsed.tokens.accessToken);
+            if (!exp.isExpired) {
+              setOperatorToken(parsed.tokens.accessToken);
+              return;
+            }
+          }
+        }
+      } catch {}
+
+      try {
+        const res = await fetch("/api/security/session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            deviceId: "desktop_local",
+            identityId: "local_operator",
+            role: "admin",
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.tokens?.accessToken) {
+            localStorage.setItem("myraa_operator_session", JSON.stringify(data));
+            setOperatorToken(data.tokens.accessToken);
+          }
+        }
+      } catch (err) {
+        console.warn("Operator session auto-init deferred:", err);
+      }
+    };
+
+    initSession();
+  }, []);
+
   const getAuthHeaders = (): Record<string, string> => {
     if (remoteSession) {
       const expiry = getAccessTokenExpiryInfo(remoteSession);
@@ -97,6 +165,21 @@ export default function App() {
         : remoteSession.token;
       if (token) return { Authorization: `Bearer ${token}` };
     }
+    if (operatorToken) {
+      const expiry = getAccessTokenExpiryInfo(operatorToken);
+      if (!expiry.isExpired) {
+        return { Authorization: `Bearer ${operatorToken}` };
+      }
+    }
+    try {
+      const stored = localStorage.getItem("myraa_operator_session");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed?.tokens?.accessToken) {
+          return { Authorization: `Bearer ${parsed.tokens.accessToken}` };
+        }
+      }
+    } catch {}
     return getStoredRemoteAuthHeaders();
   };
 
@@ -447,6 +530,15 @@ export default function App() {
     return "idle";
   };
   const [modelCaption, setModelCaption] = useState<string>("");
+  const [showChat, setShowChat] = useState<boolean>(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      id: "greeting",
+      role: "model",
+      content: "Hello! I am MYRAA, your personal AI voice companion. You can talk to me directly using your voice, or type prompts and share files right here. How can I assist you today?",
+      timestamp: Date.now(),
+    },
+  ]);
   const [activeProjectorUrl, setActiveProjectorUrl] = useState<string | null>(null);
   const activeProjectorUrlRef = useRef<string | null>(null);
   useEffect(() => {
@@ -477,6 +569,7 @@ export default function App() {
   // Myraa recollections database core state
   const [memories, setMemories] = useState<Memory[]>([]);
   const [showMemoryDashboard, setShowMemoryDashboard] = useState<boolean>(false);
+  const [showProjectsDashboard, setShowProjectsDashboard] = useState<boolean>(false);
   const [showResearchWorkspace, setShowResearchWorkspace] = useState<boolean>(false);
   const [showAgentWorkspace, setShowAgentWorkspace] = useState<boolean>(false);
   const [showVisionModal, setShowVisionModal] = useState<boolean>(false);
@@ -627,30 +720,39 @@ export default function App() {
 
   // Fetch initial recollections from backend database
   useEffect(() => {
-    fetch("/api/memories")
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          setMemories(data);
+    const token = operatorToken || remoteSession?.accessToken;
+    if (!token) return; // Wait until operator or device token is available to prevent 401 Unauthorized
+    const loadMemories = async () => {
+      try {
+        const res = await fetch("/api/memories", { headers: getAuthHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            setMemories(data);
+          }
         }
-      })
-      .catch(err => console.error("Initial persistent recollections load failure:", err));
-  }, []);
+      } catch (err) {
+        console.error("Initial persistent recollections load failure:", err);
+      }
+    };
+    loadMemories();
+  }, [operatorToken, remoteSession?.accessToken]);
 
   const handleAddManualMemory = async (category: MemoryCategory, text: string) => {
     try {
       const resp = await fetch("/api/memories", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ category, text })
       });
-      if (resp.status === 202) {
-        console.log("Memory proposal queued for operator confirmation.");
-        return;
-      }
-      const saved = await resp.json();
-      if (saved && saved.id) {
-        setMemories((prev) => [...prev, saved]);
+      if (resp.ok || resp.status === 202) {
+        const refreshed = await fetch("/api/memories", { headers: getAuthHeaders() });
+        if (refreshed.ok) {
+          const data = await refreshed.json();
+          if (Array.isArray(data)) {
+            setMemories(data);
+          }
+        }
       }
     } catch (err) {
       console.error("Manual database recollect upload error:", err);
@@ -660,14 +762,40 @@ export default function App() {
   const handleDeleteMemory = async (id: string) => {
     try {
       const resp = await fetch(`/api/memories/${id}`, {
-        method: "DELETE"
+        method: "DELETE",
+        headers: getAuthHeaders(),
       });
-      const resObj = await resp.json();
-      if (resObj && resObj.success) {
+      if (resp.ok || resp.status === 202) {
         setMemories((prev) => prev.filter(m => m.id !== id));
+        const refreshed = await fetch("/api/memories", { headers: getAuthHeaders() });
+        if (refreshed.ok) {
+          const data = await refreshed.json();
+          if (Array.isArray(data)) {
+            setMemories(data);
+          }
+        }
       }
     } catch (err) {
       console.error("Manual memory delete execution failed:", err);
+    }
+  };
+
+  const handleUpdateMemory = async (id: string, text: string, category?: MemoryCategory) => {
+    try {
+      const resp = await fetch(`/api/memories/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+        body: JSON.stringify({ text, category }),
+      });
+      if (resp.ok || resp.status === 202) {
+        setMemories((prev) =>
+          prev.map((m) =>
+            m.id === id ? { ...m, text, category: category || m.category, updatedAt: new Date().toISOString() } : m
+          )
+        );
+      }
+    } catch (err) {
+      console.error("Manual memory update execution failed:", err);
     }
   };
 
@@ -698,6 +826,22 @@ export default function App() {
           // Auto-clear the other caption when user starts talking
           setModelCaption("");
           setCharacterState("thinking");
+          setChatMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last && last.role === "user" && Date.now() - last.timestamp < 3500 && !last.attachments) {
+              return [...prev.slice(0, -1), { ...last, content: text }];
+            }
+            return [
+              ...prev,
+              {
+                id: `user-voice-${Date.now()}`,
+                role: "user",
+                content: text,
+                timestamp: Date.now(),
+                status: "sent",
+              },
+            ];
+          });
         } else if (role === "model") {
           setModelCaption((prev) => {
             const next = prev + text;
@@ -707,6 +851,22 @@ export default function App() {
           });
           // Clear user caption when model replies
           setUserCaption("");
+          setChatMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last && last.role === "model" && last.status === "streaming") {
+              return [...prev.slice(0, -1), { ...last, content: last.content + text }];
+            }
+            return [
+              ...prev,
+              {
+                id: `model-voice-${Date.now()}`,
+                role: "model",
+                content: text,
+                timestamp: Date.now(),
+                status: "streaming",
+              },
+            ];
+          });
         }
       },
       onProsodyChange: (prosody: any) => {
@@ -1039,6 +1199,30 @@ export default function App() {
   // Navigation panel toggle state (3-dots toggle on top left)
   const [showNavigation, setShowNavigation] = useState<boolean>(true);
 
+  // Live Context panel toggle state (PanelRight toggle on top right header)
+  const [showLiveContext, setShowLiveContext] = useState<boolean>(true);
+
+  // Theme Mode: Light Blue Theme (Active Default) / Dark Theme (Fallback)
+  const [themeMode, setThemeMode] = useState<"light" | "dark">(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("myraa_theme_mode");
+      if (saved === "dark" || saved === "light") return saved;
+    }
+    return "light";
+  });
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("myraa_theme_mode", themeMode);
+      document.documentElement.setAttribute("data-theme", themeMode);
+      if (themeMode === "dark") {
+        document.documentElement.classList.add("dark");
+      } else {
+        document.documentElement.classList.remove("dark");
+      }
+    }
+  }, [themeMode]);
+
   // Compact Context Card detailed accordion toggle state
   const [showDetailedContext, setShowDetailedContext] = useState<boolean>(false);
 
@@ -1253,52 +1437,76 @@ export default function App() {
     }
   }, [lastCodeChange, contextSuggestions]);
 
-  const handleSendTextMessage = (e?: React.FormEvent) => {
+  const handleSendTextMessage = (e?: React.FormEvent, customText?: string, attachments?: ChatAttachment[]) => {
     if (e) e.preventDefault();
-    const text = textInput.trim();
-    if (!text) return;
+    const text = (customText !== undefined ? customText : textInput).trim();
+    if (!text && (!attachments || attachments.length === 0)) return;
+
+    const messageContent = text || (attachments && attachments.length > 0 ? `[Attached ${attachments.length} file(s)]` : "");
+
+    // Synchronize to chatMessages
+    const newMsg: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: messageContent,
+      timestamp: Date.now(),
+      attachments: attachments && attachments.length > 0 ? attachments : undefined,
+      status: "sent",
+    };
+    setChatMessages((prev) => [...prev, newMsg]);
 
     if (sessionRef.current) {
       if (state === "disconnected") {
         sessionRef.current.connect().then(() => {
-          sessionRef.current?.sendTextMessage(text);
+          sessionRef.current?.sendTextMessage(messageContent);
         });
       } else {
-        sessionRef.current.sendTextMessage(text);
+        sessionRef.current.sendTextMessage(messageContent);
       }
     }
-    setUserCaption(text);
+    setUserCaption(messageContent);
     setModelCaption("");
     setCharacterState("thinking");
     setTextInput("");
   };
 
+  // Finalize streaming messages when speaking/thinking ends
+  useEffect(() => {
+    if (characterState !== "thinking" && state !== "speaking") {
+      setChatMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.role === "model" && last.status === "streaming") {
+          return [...prev.slice(0, -1), { ...last, status: "sent" }];
+        }
+        return prev;
+      });
+    }
+  }, [characterState, state]);
+
   const handleFocusChat = () => {
-    setShowTextInput(true);
-    setTimeout(() => {
-      promptInputRef.current?.focus();
-    }, 60);
+    setShowChat(true);
   };
 
   return (
     <div
       id="myraa-holographic-desktop"
+      data-theme={themeMode}
       className="relative w-full h-screen overflow-hidden bg-gradient-to-b from-black via-[#030712] to-[#0A101D] text-[#F4F7FB] flex flex-col justify-between p-3 sm:p-5 select-none font-sans theme-transition"
     >
       {/* Ambient Atmospheric Glow (Black -> Deep Navy -> Subtle Violet/Cyan Glow, Item 15) */}
-      <div className={`absolute top-[-10%] left-[-5%] w-[550px] h-[550px] rounded-full blur-[160px] pointer-events-none transition-all duration-1000 ${
+      <div className={`ambient-glow-1 absolute top-[-10%] left-[-5%] w-[550px] h-[550px] rounded-full blur-[160px] pointer-events-none transition-all duration-1000 ${
         state === "speaking" ? "bg-violet-900/18" :
         state === "listening" ? "bg-cyan-900/16" :
         characterState === "thinking" ? "bg-blue-900/14" :
         "bg-blue-950/12"
       }`} />
-      <div className={`absolute bottom-[-10%] right-[-5%] w-[650px] h-[650px] rounded-full blur-[180px] pointer-events-none transition-all duration-1000 ${
+      <div className={`ambient-glow-2 absolute bottom-[-10%] right-[-5%] w-[650px] h-[650px] rounded-full blur-[180px] pointer-events-none transition-all duration-1000 ${
         state === "speaking" ? "bg-purple-900/16" :
         state === "listening" ? "bg-sky-950/14" :
         characterState === "thinking" ? "bg-indigo-950/14" :
         "bg-violet-950/10"
       }`} />
-      <div className={`absolute top-[35%] right-[20%] w-[450px] h-[450px] rounded-full blur-[150px] pointer-events-none transition-all duration-1000 ${
+      <div className={`ambient-glow-3 absolute top-[35%] right-[20%] w-[450px] h-[450px] rounded-full blur-[150px] pointer-events-none transition-all duration-1000 ${
         state === "speaking" ? "bg-violet-900/12" :
         state === "listening" ? "bg-cyan-950/10" :
         characterState === "thinking" ? "bg-blue-950/10" :
@@ -1306,7 +1514,7 @@ export default function App() {
       }`} />
 
       {/* Decorative subtle OS grid pattern */}
-      <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.012)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.012)_1px,transparent_1px)] bg-[size:36px_36px] pointer-events-none opacity-25" />
+      <div className="os-grid-pattern absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.012)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.012)_1px,transparent_1px)] bg-[size:36px_36px] pointer-events-none opacity-25" />
 
       {/* 1. HEADER SECTION (Top Bar: MYRAA ● ONLINE) */}
       <header className="relative z-30 flex items-center justify-between w-full max-w-7xl mx-auto px-2 pb-2.5 pt-1 select-none border-b border-[#202938]/60">
@@ -1316,8 +1524,8 @@ export default function App() {
             onClick={() => setShowNavigation(!showNavigation)}
             className={`p-2 rounded-xl transition cursor-pointer flex items-center justify-center ${
               showNavigation
-                ? "text-[#00F0FF] bg-[#111722] border border-[#00F0FF]/30 hover:border-[#00F0FF]/60"
-                : "text-[#8994A6] hover:text-[#F4F7FB] hover:bg-[#111722]/80 border border-transparent"
+                ? "text-[#0284C7] dark:text-[#00F0FF] bg-sky-50 dark:bg-[#111722] border border-[#0284C7]/40 dark:border-[#00F0FF]/30 hover:border-[#0284C7]/70"
+                : "text-slate-600 hover:text-slate-900 dark:text-[#8994A6] dark:hover:text-[#F4F7FB] hover:bg-slate-100 dark:hover:bg-[#111722]/80 border border-transparent"
             }`}
             title={showNavigation ? "Hide Navigation (Collapse)" : "Show Navigation (Expand)"}
             data-testid="toggle-navigation-btn"
@@ -1326,25 +1534,26 @@ export default function App() {
           </button>
 
           <button
+            data-testid="core-status-btn"
             onClick={() => setShowCoreStatus(!showCoreStatus)}
-            className="flex items-center gap-2.5 p-1.5 rounded-xl hover:bg-[#111722]/80 transition cursor-pointer text-left group"
+            className="flex items-center gap-2.5 p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-[#111722]/80 transition cursor-pointer text-left group"
             title="MYRAA Core Architecture Status"
           >
             <div className="flex items-center gap-3">
-              <span className="text-base sm:text-lg font-bold tracking-[0.25em] text-[#F4F7FB] uppercase font-display group-hover:text-[#00F0FF] transition-colors">
+              <span className="text-base sm:text-lg font-bold tracking-[0.25em] text-slate-900 dark:text-[#F4F7FB] uppercase font-display group-hover:text-[#0284C7] dark:group-hover:text-[#00F0FF] transition-colors">
                 MYRAA
               </span>
               <div className="flex items-center gap-1.5 text-xs font-mono">
                 <span
                   className={`w-2 h-2 rounded-full ${
                     state === "listening" || state === "speaking"
-                      ? "bg-[#00F0FF] shadow-[0_0_8px_#00F0FF] animate-pulse"
+                      ? "bg-[#0284C7] dark:bg-[#00F0FF] shadow-[0_0_8px_#0284C7] animate-pulse"
                       : state === "connecting"
                       ? "bg-[#F59E0B] shadow-[0_0_8px_#F59E0B] animate-pulse"
                       : "bg-[#10B981] shadow-[0_0_8px_#10B981]"
                   }`}
                 />
-                <span className="tracking-widest uppercase font-semibold text-emerald-400">
+                <span className="tracking-widest uppercase font-semibold text-emerald-600 dark:text-emerald-400">
                   {state === "listening"
                     ? "LISTENING"
                     : state === "speaking"
@@ -1365,79 +1574,79 @@ export default function App() {
                 initial={{ opacity: 0, y: 8, scale: 0.96 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 8, scale: 0.96 }}
-                className="absolute left-0 top-full mt-2 z-50 w-80 p-4 rounded-2xl neural-glass-elevated border border-[#202938] shadow-2xl space-y-3.5 backdrop-blur-2xl"
+                className="absolute left-0 top-full mt-2 z-50 w-80 p-4 rounded-2xl neural-glass-elevated border border-slate-200 dark:border-[#202938] text-slate-900 dark:text-[#F4F7FB] shadow-2xl space-y-3.5 backdrop-blur-2xl"
               >
-                <div className="flex items-center justify-between pb-2.5 border-b border-[#202938]/70">
+                <div className="flex items-center justify-between pb-2.5 border-b border-slate-200 dark:border-[#202938]/70">
                   <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-[#00F0FF] shadow-[0_0_8px_#00F0FF]" />
-                    <h3 className="text-xs font-mono font-bold tracking-widest text-[#F4F7FB] uppercase">
+                    <span className="w-2 h-2 rounded-full bg-[#0284C7] dark:bg-[#00F0FF] shadow-[0_0_8px_#0284C7]" />
+                    <h3 className="text-xs font-mono font-bold tracking-widest text-slate-900 dark:text-[#F4F7FB] uppercase">
                       MYRAA CORE
                     </h3>
                   </div>
-                  <span className="text-[10px] font-mono text-[#8994A6]">ARCH v2.5</span>
+                  <span className="text-[10px] font-mono text-slate-500 dark:text-[#8994A6]">ARCH v2.5</span>
                 </div>
 
                 <div className="space-y-2.5 text-xs font-mono">
                   {/* Voice Engine */}
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-[#8994A6]">
+                    <div className="flex items-center gap-2 text-slate-600 dark:text-[#8994A6]">
                       <span className={`w-1.5 h-1.5 rounded-full ${
-                        state === "listening" ? "bg-[#00F0FF] shadow-[0_0_6px_#00F0FF] animate-pulse" :
+                        state === "listening" ? "bg-[#0284C7] dark:bg-[#00F0FF] shadow-[0_0_6px_#0284C7] animate-pulse" :
                         state === "speaking" ? "bg-[#8B5CF6] shadow-[0_0_6px_#8B5CF6] animate-pulse" :
-                        "bg-emerald-400 shadow-[0_0_6px_#10B981]"
+                        "bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_6px_#10B981]"
                       }`} />
                       <span>Voice Engine</span>
                     </div>
-                    <span className="text-[#F4F7FB] font-medium">
+                    <span className="text-slate-900 dark:text-[#F4F7FB] font-medium">
                       {state === "listening" ? "Listening" : state === "speaking" ? "Speaking" : "Ready"}
                     </span>
                   </div>
 
                   {/* Adaptive Brain */}
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-[#8994A6]">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#10B981]" />
+                    <div className="flex items-center gap-2 text-slate-600 dark:text-[#8994A6]">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_6px_#10B981]" />
                       <span>Adaptive Brain</span>
                     </div>
-                    <span className="text-emerald-400 font-medium">Active</span>
+                    <span className="text-emerald-600 dark:text-emerald-400 font-medium">Active</span>
                   </div>
 
                   {/* Memory */}
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-[#8994A6]">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#10B981]" />
+                    <div className="flex items-center gap-2 text-slate-600 dark:text-[#8994A6]">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_6px_#10B981]" />
                       <span>Memory</span>
                     </div>
-                    <span className="text-emerald-400 font-medium">
+                    <span className="text-emerald-600 dark:text-emerald-400 font-medium">
                       {memories.length > 0 ? `${memories.length} recollections` : "Active"}
                     </span>
                   </div>
 
                   {/* Context */}
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-[#8994A6]">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#00F0FF] shadow-[0_0_6px_#00F0FF]" />
+                    <div className="flex items-center gap-2 text-slate-600 dark:text-[#8994A6]">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#0284C7] dark:bg-[#00F0FF] shadow-[0_0_6px_#0284C7]" />
                       <span>Context</span>
                     </div>
-                    <span className="text-[#00F0FF] font-medium">12 sources</span>
+                    <span className="text-[#0284C7] dark:text-[#00F0FF] font-medium">12 sources</span>
                   </div>
 
                   {/* Knowledge Graph */}
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-[#8994A6]">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#10B981]" />
+                    <div className="flex items-center gap-2 text-slate-600 dark:text-[#8994A6]">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_6px_#10B981]" />
                       <span>Knowledge Graph</span>
                     </div>
-                    <span className="text-emerald-400 font-medium">Connected</span>
+                    <span className="text-emerald-600 dark:text-emerald-400 font-medium">Connected</span>
                   </div>
 
                   {/* Security */}
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-[#8994A6]">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#10B981]" />
+                    <div className="flex items-center gap-2 text-slate-600 dark:text-[#8994A6]">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_6px_#10B981]" />
                       <span>Security</span>
                     </div>
-                    <span className="text-emerald-400 font-medium">Protected</span>
+                    <span className="text-emerald-600 dark:text-emerald-400 font-medium">Protected</span>
                   </div>
                 </div>
 
@@ -1452,21 +1661,22 @@ export default function App() {
 
         {/* Nav / Tools: Security Center, Settings */}
         <div className="flex items-center gap-2 sm:gap-2.5">
+          <RuntimeStatusIndicator />
           {/* 8. Security Indicator & Security Center Popover */}
           <div className="relative">
             <button
-              data-testid="open-control-hub-btn"
+              data-testid="security-center-btn"
               onClick={() => setShowSecurityCenter(!showSecurityCenter)}
               className={`neural-pill px-2.5 py-1.5 rounded-xl flex items-center gap-1.5 text-xs font-mono transition cursor-pointer ${
                 showSecurityCenter
-                  ? "border-emerald-500/60 text-emerald-300 bg-[#111722]"
-                  : "text-[#8994A6] hover:text-[#F4F7FB]"
+                  ? "border-emerald-500/60 text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-[#111722]"
+                  : "text-slate-600 dark:text-[#8994A6] hover:text-slate-900 dark:hover:text-[#F4F7FB]"
               }`}
               title="Security Center"
             >
-              <ShieldCheck size={13} className="text-emerald-400" />
-              <span className="text-[#F4F7FB] font-medium hidden xs:inline">Protected</span>
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#10B981]" />
+              <ShieldCheck size={13} className="text-emerald-500 dark:text-emerald-400" />
+              <span className="text-slate-800 dark:text-[#F4F7FB] font-medium hidden xs:inline">Protected</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_6px_#10B981]" />
             </button>
 
             {/* SECURITY CENTER POPOVER */}
@@ -1477,57 +1687,57 @@ export default function App() {
                   initial={{ opacity: 0, y: 8, scale: 0.96 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: 8, scale: 0.96 }}
-                  className="absolute right-0 top-full mt-2.5 z-50 w-80 p-4 rounded-2xl neural-glass-elevated border border-[#202938] shadow-2xl space-y-3.5 backdrop-blur-2xl"
+                  className="absolute right-0 top-full mt-2.5 z-50 w-80 p-4 rounded-2xl neural-glass-elevated border border-slate-200 dark:border-[#202938] text-slate-900 dark:text-[#F4F7FB] shadow-2xl space-y-3.5 backdrop-blur-2xl"
                 >
-                  <div className="flex items-center justify-between pb-2.5 border-b border-[#202938]/70">
+                  <div className="flex items-center justify-between pb-2.5 border-b border-slate-200 dark:border-[#202938]/70">
                     <div className="flex items-center gap-2">
-                      <ShieldCheck size={15} className="text-emerald-400" />
-                      <h3 className="text-xs font-mono font-bold tracking-widest text-[#F4F7FB] uppercase">
+                      <ShieldCheck size={15} className="text-emerald-500 dark:text-emerald-400" />
+                      <h3 className="text-xs font-mono font-bold tracking-widest text-slate-900 dark:text-[#F4F7FB] uppercase">
                         SECURITY CENTER
                       </h3>
                     </div>
-                    <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                    <span className="text-[10px] font-mono text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
                       ZERO TRUST
                     </span>
                   </div>
 
                   <div className="space-y-2.5 text-xs font-mono">
                     <div className="flex items-center justify-between">
-                      <span className="text-[#8994A6]">Policy Engine</span>
-                      <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#10B981]" />
+                      <span className="text-slate-600 dark:text-[#8994A6]">Policy Engine</span>
+                      <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-medium">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_6px_#10B981]" />
                         Active
                       </span>
                     </div>
 
                     <div className="flex items-center justify-between">
-                      <span className="text-[#8994A6]">Risk Engine</span>
-                      <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#10B981]" />
+                      <span className="text-slate-600 dark:text-[#8994A6]">Risk Engine</span>
+                      <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-medium">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_6px_#10B981]" />
                         Active
                       </span>
                     </div>
 
                     <div className="flex items-center justify-between">
-                      <span className="text-[#8994A6]">Tool Firewall</span>
-                      <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#10B981]" />
+                      <span className="text-slate-600 dark:text-[#8994A6]">Tool Firewall</span>
+                      <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-medium">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_6px_#10B981]" />
                         Active
                       </span>
                     </div>
 
                     <div className="flex items-center justify-between">
-                      <span className="text-[#8994A6]">Confirmation</span>
-                      <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#10B981]" />
+                      <span className="text-slate-600 dark:text-[#8994A6]">Confirmation</span>
+                      <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-medium">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_6px_#10B981]" />
                         Active
                       </span>
                     </div>
 
                     <div className="flex items-center justify-between">
-                      <span className="text-[#8994A6]">Audit</span>
-                      <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#10B981]" />
+                      <span className="text-slate-600 dark:text-[#8994A6]">Audit</span>
+                      <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-medium">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_6px_#10B981]" />
                         Active
                       </span>
                     </div>
@@ -1535,23 +1745,23 @@ export default function App() {
 
                   {/* SYSTEM STATUS Banner */}
                   <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-between font-mono">
-                    <span className="text-[10px] text-[#8994A6] uppercase tracking-wider">
+                    <span className="text-[10px] text-slate-600 dark:text-[#8994A6] uppercase tracking-wider">
                       SYSTEM STATUS
                     </span>
-                    <span className="text-xs font-bold text-emerald-400 flex items-center gap-1">
+                    <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
                       <span>SECURE</span>
                       <Check size={12} />
                     </span>
                   </div>
 
                   {/* Safe Controls footer (Discreet, not a huge red button on Home screen!) */}
-                  <div className="pt-2 border-t border-[#202938]/60 flex items-center justify-between text-[10px] font-mono">
+                  <div className="pt-2 border-t border-slate-200 dark:border-[#202938]/60 flex items-center justify-between text-[10px] font-mono">
                     <button
                       onClick={() => {
                         setShowSecurityCenter(false);
                         setShowControlHub(true);
                       }}
-                      className="text-[#00F0FF] hover:underline cursor-pointer"
+                      className="text-[#0284C7] dark:text-[#00F0FF] hover:underline cursor-pointer font-medium"
                     >
                       Open Full Hub →
                     </button>
@@ -1568,7 +1778,7 @@ export default function App() {
                           } catch {}
                         }
                       }}
-                      className="text-rose-400/80 hover:text-rose-300 transition cursor-pointer"
+                      className="text-rose-600 hover:text-rose-700 dark:text-rose-400/80 dark:hover:text-rose-300 transition cursor-pointer"
                     >
                       Safe Halt
                     </button>
@@ -1578,16 +1788,43 @@ export default function App() {
             </AnimatePresence>
           </div>
 
+          {/* Live Context Toggle Button */}
+          <button
+            onClick={() => setShowLiveContext(!showLiveContext)}
+            className={`neural-pill px-2.5 py-1.5 rounded-xl flex items-center gap-1.5 text-xs font-mono transition cursor-pointer ${
+              showLiveContext
+                ? "border-[#00F0FF]/60 text-[#00F0FF] bg-[#111722]"
+                : "text-[#8994A6] hover:text-[#F4F7FB]"
+            }`}
+            title={showLiveContext ? "Hide Live Context (Collapse)" : "Show Live Context (Expand)"}
+            data-testid="toggle-live-context-btn"
+          >
+            <PanelRight size={13} className={showLiveContext ? "text-[#00F0FF]" : "text-[#8994A6]"} />
+            <span className="hidden xs:inline">Context</span>
+          </button>
+
           <button
             onClick={() => setShowSettings(!showSettings)}
-            className={`neural-pill p-2 rounded-xl flex items-center justify-center transition cursor-pointer ${
+            className={`neural-pill px-2.5 py-1.5 rounded-xl flex items-center gap-1.5 text-xs font-mono transition cursor-pointer ${
               showSettings
                 ? "border-[#00F0FF]/60 text-[#00F0FF] bg-[#111722]"
                 : "text-[#8994A6] hover:text-[#F4F7FB]"
             }`}
             title="Myraa Configuration"
+            data-testid="toggle-settings-btn"
           >
-            <SettingsIcon size={14} className={showSettings ? "animate-spin [animation-duration:6s]" : ""} />
+            <SettingsIcon size={13} className={showSettings ? "animate-spin [animation-duration:6s] text-[#00F0FF]" : "text-[#8994A6]"} />
+            <span className="hidden xs:inline">Settings</span>
+          </button>
+
+          {/* Theme Mode Toggle (Light Blue / Dark Fallback) */}
+          <button
+            onClick={() => setThemeMode(themeMode === "light" ? "dark" : "light")}
+            className="neural-pill p-2 rounded-xl flex items-center justify-center transition cursor-pointer text-[#8994A6] hover:text-[#00F0FF]"
+            title={themeMode === "light" ? "Switch to Dark Theme (Fallback)" : "Switch to Light Blue Theme"}
+            data-testid="toggle-theme-mode-btn"
+          >
+            {themeMode === "light" ? <Moon size={14} className="text-slate-600 hover:text-blue-600" /> : <Sun size={14} className="text-amber-400" />}
           </button>
 
           {window.myraa?.isDesktop && (
@@ -1603,27 +1840,22 @@ export default function App() {
       </header>
 
       {/* 2. MAIN 3-COLUMN DASHBOARD STAGE */}
-      <main className="relative z-20 flex-1 w-full max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-3 lg:gap-4 items-center py-2 min-h-0 overflow-hidden">
+      <main className="relative z-20 flex-1 w-full max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-3 lg:gap-4 items-stretch py-1 sm:py-2 min-h-0 overflow-hidden">
         
         {/* LEFT COLUMN: NAVIGATION (Item 17: HOME, CHAT, MEMORY, PROJECTS, RESEARCH, VISION, AGENTS, CONTROL, SETTINGS) */}
-        <AnimatePresence>
-          {showNavigation && (
-            <motion.div
-              initial={{ opacity: 0, x: -16, width: 0 }}
-              animate={{ opacity: 1, x: 0, width: "auto" }}
-              exit={{ opacity: 0, x: -16, width: 0 }}
-              transition={{ duration: 0.2 }}
-              className="hidden md:flex md:col-span-3 h-full max-h-[580px] flex-col justify-between neural-glass-panel rounded-2xl p-4 overflow-y-auto"
-            >
+        {showNavigation && (
+          <div
+            className="hidden md:flex md:col-span-3 h-full flex-col justify-between neural-glass-panel rounded-2xl p-4 overflow-y-auto transition-all duration-300"
+          >
               <div className="space-y-3">
-                <div className="flex items-center justify-between pb-2 border-b border-[#202938]/60">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-[#202938]/60">
                   <div className="flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#00F0FF] shadow-[0_0_6px_#00F0FF]" />
-                    <span className="text-[11px] font-mono font-bold tracking-wider text-[#8994A6] uppercase">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#0284C7] dark:bg-[#00F0FF] shadow-[0_0_6px_#0284C7]" />
+                    <span className="text-[11px] font-mono font-bold tracking-wider text-slate-500 dark:text-[#8994A6] uppercase">
                       NAVIGATION
                     </span>
                   </div>
-                  <span className="text-[10px] font-mono text-[#8994A6]">OS READY</span>
+                  <span className="text-[10px] font-mono text-slate-500 dark:text-[#8994A6]">OS READY</span>
                 </div>
 
                 {/* The Navigation Items */}
@@ -1631,152 +1863,171 @@ export default function App() {
                   {/* 1. HOME */}
                   <button
                     onClick={() => {
+                      setShowChat(false);
                       setShowResearchWorkspace(false);
                       setShowAgentWorkspace(false);
                       setShowMemoryDashboard(false);
+                      setShowProjectsDashboard(false);
                       setShowSettings(false);
                       setShowControlHub(false);
                       setShowVisionModal(false);
                       setShowCodeDetails(false);
                     }}
-                    className="w-full px-3 py-2 rounded-xl hover:bg-[#111722]/80 text-[#8994A6] hover:text-[#F4F7FB] text-left transition-all flex items-center justify-between group cursor-pointer"
+                    className="w-full px-3 py-2 rounded-xl hover:bg-slate-100 dark:hover:bg-[#111722]/80 text-slate-600 dark:text-[#8994A6] hover:text-slate-900 dark:hover:text-[#F4F7FB] text-left transition-all flex items-center justify-between group cursor-pointer"
                   >
                     <div className="flex items-center gap-2.5">
-                      <span className="text-xs text-[#00F0FF]">🏠</span>
-                      <span className="font-mono font-semibold tracking-wider text-[#F4F7FB] text-[11px] group-hover:text-[#00F0FF]">HOME</span>
+                      <span className="text-xs text-[#0284C7] dark:text-[#00F0FF]">🏠</span>
+                      <span className="font-mono font-semibold tracking-wider text-slate-900 dark:text-[#F4F7FB] text-[11px] group-hover:text-[#0284C7] dark:group-hover:text-[#00F0FF]">HOME</span>
                     </div>
-                    <span className="text-[9px] font-mono text-[#8994A6]">DASHBOARD</span>
+                    <span className="text-[9px] font-mono text-slate-500 dark:text-[#8994A6]">DASHBOARD</span>
                   </button>
 
                   {/* 2. CHAT */}
                   <button
-                    onClick={handleFocusChat}
-                    className="w-full px-3 py-2 rounded-xl hover:bg-[#111722]/80 text-[#8994A6] hover:text-[#F4F7FB] text-left transition-all flex items-center justify-between group cursor-pointer"
+                    onClick={() => setShowChat(!showChat)}
+                    className={`w-full px-3 py-2 rounded-xl text-left transition-all flex items-center justify-between group cursor-pointer ${
+                      showChat
+                        ? "bg-sky-50 dark:bg-[#111722] border border-[#0284C7]/40 dark:border-[#3B82F6]/50 text-slate-900 dark:text-[#F4F7FB]"
+                        : "hover:bg-slate-100 dark:hover:bg-[#111722]/80 text-slate-600 dark:text-[#8994A6] hover:text-slate-900 dark:hover:text-[#F4F7FB]"
+                    }`}
+                    data-testid="nav-chat-btn"
                   >
                     <div className="flex items-center gap-2.5">
-                      <span className="text-xs text-[#3B82F6]">💬</span>
-                      <span className="font-mono font-semibold tracking-wider text-[#F4F7FB] text-[11px] group-hover:text-[#3B82F6]">CHAT</span>
+                      <span className="text-xs text-[#0284C7] dark:text-[#3B82F6]">💬</span>
+                      <span className="font-mono font-semibold tracking-wider text-slate-900 dark:text-[#F4F7FB] text-[11px] group-hover:text-[#0284C7] dark:group-hover:text-[#3B82F6]">CHAT</span>
                     </div>
-                    <span className="text-[9px] font-mono text-[#8994A6]">PROMPT</span>
+                    <span className="text-[9px] font-mono text-slate-500 dark:text-[#8994A6]">{chatMessages.length > 1 ? `${chatMessages.length} MSGS` : "READY"}</span>
                   </button>
 
                   {/* 3. MEMORY */}
                   <button
                     onClick={() => setShowMemoryDashboard(true)}
                     className={`w-full px-3 py-2 rounded-xl text-left transition-all flex items-center justify-between group cursor-pointer ${
-                      showMemoryDashboard ? "bg-[#111722] border border-[#00F0FF]/40 text-[#F4F7FB]" : "hover:bg-[#111722]/80 text-[#8994A6] hover:text-[#F4F7FB]"
+                      showMemoryDashboard ? "bg-purple-50 dark:bg-[#111722] border border-purple-400/40 dark:border-[#00F0FF]/40 text-slate-900 dark:text-[#F4F7FB]" : "hover:bg-slate-100 dark:hover:bg-[#111722]/80 text-slate-600 dark:text-[#8994A6] hover:text-slate-900 dark:hover:text-[#F4F7FB]"
                     }`}
+                    data-testid="nav-memory-btn"
                   >
                     <div className="flex items-center gap-2.5">
                       <span className="text-xs text-[#8B5CF6]">🧠</span>
-                      <span className="font-mono font-semibold tracking-wider text-[#F4F7FB] text-[11px] group-hover:text-[#8B5CF6]">MEMORY</span>
+                      <span className="font-mono font-semibold tracking-wider text-slate-900 dark:text-[#F4F7FB] text-[11px] group-hover:text-[#8B5CF6]">MEMORY</span>
                     </div>
-                    <span className="text-[9px] font-mono text-[#8994A6]">{memories.length > 0 ? `${memories.length} REC` : "SYNC"}</span>
+                    <span className="text-[9px] font-mono text-slate-500 dark:text-[#8994A6]">{memories.length > 0 ? `${memories.length} REC` : "SYNC"}</span>
                   </button>
 
                   {/* 4. PROJECTS */}
                   <button
-                    onClick={() => setShowCodeDetails(!showCodeDetails)}
+                    onClick={() => setShowProjectsDashboard(true)}
                     className={`w-full px-3 py-2 rounded-xl text-left transition-all flex items-center justify-between group cursor-pointer ${
-                      showCodeDetails ? "bg-[#111722] border border-[#3B82F6]/40 text-[#F4F7FB]" : "hover:bg-[#111722]/80 text-[#8994A6] hover:text-[#F4F7FB]"
+                      showProjectsDashboard ? "bg-sky-50 dark:bg-[#111722] border border-[#0284C7]/40 dark:border-[#3B82F6]/40 text-slate-900 dark:text-[#F4F7FB]" : "hover:bg-slate-100 dark:hover:bg-[#111722]/80 text-slate-600 dark:text-[#8994A6] hover:text-slate-900 dark:hover:text-[#F4F7FB]"
                     }`}
+                    data-testid="nav-projects-btn"
                   >
                     <div className="flex items-center gap-2.5">
-                      <span className="text-xs text-blue-400">📁</span>
-                      <span className="font-mono font-semibold tracking-wider text-[#F4F7FB] text-[11px] group-hover:text-blue-400">PROJECTS</span>
+                      <span className="text-xs text-blue-600 dark:text-blue-400">📁</span>
+                      <span className="font-mono font-semibold tracking-wider text-slate-900 dark:text-[#F4F7FB] text-[11px] group-hover:text-blue-600 dark:group-hover:text-blue-400">PROJECTS</span>
                     </div>
-                    <span className="text-[9px] font-mono text-[#8994A6]">{lastCodeChange ? "ACTIVE" : "LIVE"}</span>
+                    <span className="text-[9px] font-mono text-slate-500 dark:text-[#8994A6]">{lastCodeChange ? "ACTIVE" : "LIVE"}</span>
                   </button>
 
                   {/* 5. RESEARCH */}
                   <button
                     onClick={() => setShowResearchWorkspace(true)}
                     className={`w-full px-3 py-2 rounded-xl text-left transition-all flex items-center justify-between group cursor-pointer ${
-                      showResearchWorkspace ? "bg-[#111722] border border-[#00F0FF]/40 text-[#F4F7FB]" : "hover:bg-[#111722]/80 text-[#8994A6] hover:text-[#F4F7FB]"
+                      showResearchWorkspace ? "bg-sky-50 dark:bg-[#111722] border border-[#0284C7]/40 dark:border-[#00F0FF]/40 text-slate-900 dark:text-[#F4F7FB]" : "hover:bg-slate-100 dark:hover:bg-[#111722]/80 text-slate-600 dark:text-[#8994A6] hover:text-slate-900 dark:hover:text-[#F4F7FB]"
                     }`}
+                    data-testid="nav-research-btn"
                   >
                     <div className="flex items-center gap-2.5">
-                      <span className="text-xs text-[#00F0FF]">🔎</span>
-                      <span className="font-mono font-semibold tracking-wider text-[#F4F7FB] text-[11px] group-hover:text-[#00F0FF]">RESEARCH</span>
+                      <span className="text-xs text-[#0284C7] dark:text-[#00F0FF]">🔎</span>
+                      <span className="font-mono font-semibold tracking-wider text-slate-900 dark:text-[#F4F7FB] text-[11px] group-hover:text-[#0284C7] dark:group-hover:text-[#00F0FF]">RESEARCH</span>
                     </div>
-                    <span className="text-[9px] font-mono text-[#8994A6]">EVIDENCE</span>
+                    <span className="text-[9px] font-mono text-slate-500 dark:text-[#8994A6]">EVIDENCE</span>
                   </button>
 
                   {/* 6. VISION */}
                   <button
+                    data-testid="nav-vision-btn"
                     onClick={() => setShowVisionModal(true)}
                     className={`w-full px-3 py-2 rounded-xl text-left transition-all flex items-center justify-between group cursor-pointer ${
                       continuousScreenEnabled || isScreenSharing
-                        ? "bg-[#111722] border border-emerald-500/40 text-[#F4F7FB]"
-                        : "hover:bg-[#111722]/80 text-[#8994A6] hover:text-[#F4F7FB]"
+                        ? "bg-emerald-50 dark:bg-[#111722] border border-emerald-500/40 text-slate-900 dark:text-[#F4F7FB]"
+                        : "hover:bg-slate-100 dark:hover:bg-[#111722]/80 text-slate-600 dark:text-[#8994A6] hover:text-slate-900 dark:hover:text-[#F4F7FB]"
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
-                      <span className={`text-xs ${continuousScreenEnabled || isScreenSharing ? "text-emerald-400" : "text-[#8994A6]"}`}>👁</span>
-                      <span className="font-mono font-semibold tracking-wider text-[#F4F7FB] text-[11px] group-hover:text-emerald-400">VISION</span>
+                      <span className={`text-xs ${continuousScreenEnabled || isScreenSharing ? "text-emerald-500" : "text-slate-400 dark:text-[#8994A6]"}`}>👁</span>
+                      <span className="font-mono font-semibold tracking-wider text-slate-900 dark:text-[#F4F7FB] text-[11px] group-hover:text-emerald-500">VISION</span>
                     </div>
-                    <span className="text-[9px] font-mono text-emerald-400">{continuousScreenEnabled || isScreenSharing ? "ACTIVE" : "READY"}</span>
+                    <span className="text-[9px] font-mono text-emerald-600 dark:text-emerald-400">{continuousScreenEnabled || isScreenSharing ? "ACTIVE" : "READY"}</span>
                   </button>
 
                   {/* 7. AGENTS */}
                   <button
+                    data-testid="nav-agents-btn"
                     onClick={() => setShowAgentWorkspace(true)}
                     className={`w-full px-3 py-2 rounded-xl text-left transition-all flex items-center justify-between group cursor-pointer ${
-                      showAgentWorkspace ? "bg-[#111722] border border-[#8B5CF6]/40 text-[#F4F7FB]" : "hover:bg-[#111722]/80 text-[#8994A6] hover:text-[#F4F7FB]"
+                      showAgentWorkspace ? "bg-purple-50 dark:bg-[#111722] border border-[#8B5CF6]/40 text-slate-900 dark:text-[#F4F7FB]" : "hover:bg-slate-100 dark:hover:bg-[#111722]/80 text-slate-600 dark:text-[#8994A6] hover:text-slate-900 dark:hover:text-[#F4F7FB]"
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
                       <span className="text-xs text-[#8B5CF6]">🤖</span>
-                      <span className="font-mono font-semibold tracking-wider text-[#F4F7FB] text-[11px] group-hover:text-[#8B5CF6]">AGENTS</span>
+                      <span className="font-mono font-semibold tracking-wider text-slate-900 dark:text-[#F4F7FB] text-[11px] group-hover:text-[#8B5CF6]">AGENTS</span>
                     </div>
                     <span className="text-[9px] font-mono text-[#8B5CF6]">PIPELINE</span>
                   </button>
 
                   {/* 8. CONTROL */}
                   <button
+                    data-testid="nav-control-btn"
                     onClick={() => setShowControlHub(true)}
                     className={`w-full px-3 py-2 rounded-xl text-left transition-all flex items-center justify-between group cursor-pointer ${
-                      showControlHub ? "bg-[#111722] border border-amber-500/40 text-[#F4F7FB]" : "hover:bg-[#111722]/80 text-[#8994A6] hover:text-[#F4F7FB]"
+                      showControlHub ? "bg-amber-50 dark:bg-[#111722] border border-amber-500/40 text-slate-900 dark:text-[#F4F7FB]" : "hover:bg-slate-100 dark:hover:bg-[#111722]/80 text-slate-600 dark:text-[#8994A6] hover:text-slate-900 dark:hover:text-[#F4F7FB]"
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
-                      <span className="text-xs text-amber-400">⚡</span>
-                      <span className="font-mono font-semibold tracking-wider text-[#F4F7FB] text-[11px] group-hover:text-amber-400">CONTROL</span>
+                      <span className="text-xs text-amber-500">⚡</span>
+                      <span className="font-mono font-semibold tracking-wider text-slate-900 dark:text-[#F4F7FB] text-[11px] group-hover:text-amber-500">CONTROL</span>
                     </div>
-                    <span className="text-[9px] font-mono text-[#8994A6]">HUB</span>
+                    <span className="text-[9px] font-mono text-slate-500 dark:text-[#8994A6]">HUB</span>
                   </button>
 
                   {/* 9. SETTINGS */}
                   <button
                     onClick={() => setShowSettings(true)}
                     className={`w-full px-3 py-2 rounded-xl text-left transition-all flex items-center justify-between group cursor-pointer ${
-                      showSettings ? "bg-[#111722] border border-[#8B5CF6]/40 text-[#F4F7FB]" : "hover:bg-[#111722]/80 text-[#8994A6] hover:text-[#F4F7FB]"
+                      showSettings ? "bg-purple-50 dark:bg-[#111722] border border-[#8B5CF6]/40 text-slate-900 dark:text-[#F4F7FB]" : "hover:bg-slate-100 dark:hover:bg-[#111722]/80 text-slate-600 dark:text-[#8994A6] hover:text-slate-900 dark:hover:text-[#F4F7FB]"
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
-                      <span className="text-xs text-[#8994A6] group-hover:text-[#F4F7FB]">⚙</span>
-                      <span className="font-mono font-semibold tracking-wider text-[#F4F7FB] text-[11px] group-hover:text-[#F4F7FB]">SETTINGS</span>
+                      <span className="text-xs text-slate-500 group-hover:text-slate-900 dark:text-[#8994A6] dark:group-hover:text-[#F4F7FB]">⚙</span>
+                      <span className="font-mono font-semibold tracking-wider text-slate-900 dark:text-[#F4F7FB] text-[11px] group-hover:text-slate-900 dark:group-hover:text-[#F4F7FB]">SETTINGS</span>
                     </div>
-                    <span className="text-[9px] font-mono text-[#8994A6]">CONFIG</span>
+                    <span className="text-[9px] font-mono text-slate-500 dark:text-[#8994A6]">CONFIG</span>
                   </button>
                 </div>
               </div>
 
-              <div className="pt-3 border-t border-[#202938]/60 flex items-center justify-between text-[10px] font-mono text-[#8994A6]">
+              <div className="pt-3 border-t border-slate-200 dark:border-[#202938]/60 flex items-center justify-between text-[10px] font-mono text-slate-500 dark:text-[#8994A6]">
                 <span>SYSTEM</span>
-                <span className="text-[#00F0FF]/90 font-medium">9 MODULES ONLINE</span>
+                <span className="text-[#0284C7] dark:text-[#00F0FF]/90 font-medium">9 MODULES ONLINE</span>
               </div>
-            </motion.div>
+            </div>
           )}
-        </AnimatePresence>
 
         {/* CENTER COLUMN: MYRAA AVATAR STAGE */}
-        <div className={`col-span-12 ${showNavigation ? "md:col-span-6" : "md:col-span-9"} h-full flex flex-col items-center justify-between relative min-h-[380px] py-2 transition-all duration-300`}>
-          
+        <div
+          className={`col-span-12 ${
+            showNavigation && showLiveContext
+              ? "md:col-span-6"
+              : showNavigation || showLiveContext
+              ? "md:col-span-9"
+              : "md:col-span-12"
+          } h-full flex flex-col items-center justify-center neural-glass-panel rounded-2xl p-2 sm:p-3 overflow-hidden transition-all duration-300 relative`}
+        >
           {/* Holographic Projector Screen Widget (if website opened) */}
           <AnimatePresence>
             {activeProjectorUrl && (
-              <div className="absolute inset-x-0 top-0 z-40 flex justify-center p-2">
+              <div className="absolute inset-x-0 top-3 z-40 flex justify-center p-2">
                 <motion.div
                   initial={{ opacity: 0, y: -20, scale: 0.95 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -1812,219 +2063,228 @@ export default function App() {
             )}
           </AnimatePresence>
 
-          {/* AVATAR RENDERER STAGE CONTAINER */}
-          <div className="relative w-full flex-1 flex items-center justify-center min-h-[280px]">
+          {/* AVATAR RENDERER STAGE CONTAINER
+               flex-1 + min-h-0 let the stage stretch to fill all available
+               vertical space. The status pill floats as absolute overlay
+               so it never consumes layout height from the stage. */}
+          <div className="relative w-full h-full flex-1 min-h-0 flex items-center justify-center">
             <MyraaCoreVisualizer
               session={sessionRef.current}
               state={state}
               themeColor={themeColor}
               activeEmotion={activeEmotion}
               characterState={characterState}
+              avatarMode="video"
               isResearching={showResearchWorkspace}
               hasError={!!errorText}
               errorText={errorText}
             />
-          </div>
 
-          {/* AVATAR STATE PILL & CAPTION OVERLAY */}
-          <div className="relative z-30 flex flex-col items-center gap-2.5 w-full max-w-md px-4 mt-1">
-            {/* Status Pill: ● Listening / ● Speaking / ● Standby */}
-            <div className="neural-pill px-3.5 py-1 rounded-full flex items-center gap-2 shadow-lg">
-              <span className={`w-2 h-2 rounded-full ${
-                state === "speaking" ? "bg-[#8B5CF6] shadow-[0_0_8px_#8B5CF6] animate-pulse" :
-                state === "listening" ? "bg-[#00F0FF] shadow-[0_0_8px_#00F0FF] animate-pulse" :
-                state === "connecting" ? "bg-[#F59E0B] animate-spin" :
-                "bg-[#8994A6]"
-              }`} />
-              <span className="text-xs font-mono uppercase tracking-wider text-[#F4F7FB] font-medium">
-                {state === "speaking" ? "Speaking" :
-                 state === "listening" ? "Listening" :
-                 state === "connecting" ? "Connecting..." :
-                 "Standby"}
-              </span>
-              {characterState === "thinking" && (
-                <span className="text-[10px] font-mono text-[#00F0FF] animate-pulse">· Thinking</span>
-              )}
+            {/* AVATAR STATE PILL & CAPTION OVERLAY — absolute so they don't
+                shrink the stage. Anchored to bottom-centre of the stage. */}
+            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 w-full max-w-md px-4 pointer-events-none">
+              {/* Status Pill: ● Listening / ● Speaking / ● Standby */}
+              <div className="neural-pill px-3.5 py-1.5 rounded-full flex items-center gap-2 shadow-lg pointer-events-auto">
+                <span className={`w-2 h-2 rounded-full ${
+                  state === "speaking" ? "bg-[#8B5CF6] shadow-[0_0_8px_#8B5CF6] animate-pulse" :
+                  state === "listening" ? "bg-[#00F0FF] shadow-[0_0_8px_#00F0FF] animate-pulse" :
+                  state === "connecting" ? "bg-[#F59E0B] animate-spin" :
+                  "bg-emerald-400 shadow-[0_0_6px_#10B981]"
+                }`} />
+                <span className="text-xs font-mono uppercase tracking-wider text-[#F4F7FB] font-medium">
+                  {state === "speaking" ? "Speaking" :
+                   state === "listening" ? "Listening" :
+                   state === "connecting" ? "Connecting..." :
+                   "Standby"}
+                </span>
+                {characterState === "thinking" && (
+                  <span className="text-[10px] font-mono text-[#00F0FF] animate-pulse">· Thinking</span>
+                )}
+              </div>
+
+              {/* User Caption / Model Caption Fading Stream */}
+              <AnimatePresence>
+                {userCaption && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -5 }}
+                    className="neural-glass-subtle px-3.5 py-2 rounded-xl text-xs font-sans text-[#F4F7FB] border border-[#202938] max-w-sm text-center pointer-events-none"
+                  >
+                    <span className="text-[10px] font-mono text-[#8994A6] mr-1.5 uppercase">You:</span>
+                    &quot;{userCaption}&quot;
+                  </motion.div>
+                )}
+                {modelCaption && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -5 }}
+                    className="neural-glass-elevated px-4 py-2.5 rounded-xl text-xs font-sans text-[#F4F7FB] border border-[#00F0FF]/25 max-w-md text-center shadow-xl pointer-events-none"
+                  >
+                    <span className="text-[10px] font-mono text-[#00F0FF] mr-1.5 uppercase font-semibold">MYRAA:</span>
+                    &quot;{modelCaption}&quot;
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
-
-            {/* User Caption / Model Caption Fading Stream */}
-            <AnimatePresence>
-              {userCaption && (
-                <motion.div
-                  initial={{ opacity: 0, y: 5 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -5 }}
-                  className="neural-glass-subtle px-3.5 py-2 rounded-xl text-xs font-sans text-[#F4F7FB] border border-[#202938] max-w-sm text-center"
-                >
-                  <span className="text-[10px] font-mono text-[#8994A6] mr-1.5 uppercase">You:</span>
-                  &quot;{userCaption}&quot;
-                </motion.div>
-              )}
-              {modelCaption && (
-                <motion.div
-                  initial={{ opacity: 0, y: 5 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -5 }}
-                  className="neural-glass-elevated px-4 py-2.5 rounded-xl text-xs font-sans text-[#F4F7FB] border border-[#00F0FF]/25 max-w-md text-center shadow-xl"
-                >
-                  <span className="text-[10px] font-mono text-[#00F0FF] mr-1.5 uppercase font-semibold">MYRAA:</span>
-                  &quot;{modelCaption}&quot;
-                </motion.div>
-              )}
-            </AnimatePresence>
           </div>
 
         </div>
 
         {/* RIGHT COLUMN: COMPACT CONTEXT CARD (Neural Glass OS) */}
-        <div className="hidden md:flex md:col-span-3 h-full max-h-[580px] flex-col justify-between neural-glass-panel rounded-2xl p-4 overflow-y-auto">
-          <div className="space-y-3.5">
-            <div className="flex items-center justify-between pb-2.5 border-b border-[#202938]/70">
-              <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] shadow-[0_0_6px_#10B981] animate-pulse" />
-                <span className="text-[11px] font-mono font-bold tracking-widest text-[#F4F7FB] uppercase">
-                  LIVE CONTEXT
-                </span>
-              </div>
-              <button
-                onClick={() => setShowDetailedContext(!showDetailedContext)}
-                className="flex items-center gap-1 text-[10px] font-mono text-[#8994A6] hover:text-[#00F0FF] transition cursor-pointer bg-[#111722] px-2 py-0.5 rounded-lg border border-[#202938] hover:border-[#00F0FF]/30"
-                title={showDetailedContext ? "Collapse detailed telemetry" : "Expand detailed telemetry"}
-                data-testid="toggle-detailed-context-btn"
-              >
-                <span>{showDetailedContext ? "LESS" : "MORE"}</span>
-                {showDetailedContext ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-              </button>
-            </div>
-
-            {/* The 5 Core Items Prominently Displayed on Home Screen */}
-            <div className="space-y-3 text-xs">
-              {/* 1. Current App */}
-              <div>
-                <div className="text-[10px] font-mono font-semibold text-[#8994A6] uppercase tracking-wider">
-                  CURRENT APP
-                </div>
-                <div className="text-sm font-semibold text-[#F4F7FB] mt-0.5 flex items-center justify-between">
-                  <span>{liveContext.app}</span>
-                  <span className="text-[9px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">ACTIVE</span>
-                </div>
-              </div>
-
-              {/* 2. Current Project */}
-              <div>
-                <div className="text-[10px] font-mono font-semibold text-[#8994A6] uppercase tracking-wider">
-                  CURRENT PROJECT
-                </div>
-                <div className="text-sm font-semibold text-[#F4F7FB] mt-0.5">
-                  {liveContext.project}
-                </div>
-              </div>
-
-              {/* 3. Current File */}
-              <div>
-                <div className="text-[10px] font-mono font-semibold text-[#8994A6] uppercase tracking-wider">
-                  CURRENT FILE
-                </div>
-                <div className="text-xs font-mono text-[#00F0FF] mt-0.5 truncate" title={lastCodeChange?.filePath || liveContext.file}>
-                  {lastCodeChange?.filePath || liveContext.file}
-                </div>
-              </div>
-
-              {/* 4. Current Task */}
-              <div>
-                <div className="text-[10px] font-mono font-semibold text-[#8994A6] uppercase tracking-wider">
-                  CURRENT TASK
-                </div>
-                <div className="text-xs font-medium text-[#F4F7FB] mt-0.5">
-                  {liveContext.task}
-                </div>
-              </div>
-
-              {/* 5. Confidence */}
-              <div className="pt-2 border-t border-[#202938]/60">
-                <div className="text-[10px] font-mono font-semibold text-[#8994A6] uppercase tracking-wider">
-                  CONFIDENCE
-                </div>
-                <div className="text-sm font-mono font-bold text-[#10B981] mt-0.5 flex items-center gap-1.5">
-                  <span>{liveContext.confidence}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Expandable detailed context accordion */}
-            <AnimatePresence>
-              {showDetailedContext && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="pt-2.5 border-t border-[#202938]/60 space-y-2.5 overflow-hidden text-xs font-mono"
-                >
-                  <div className="flex items-center justify-between text-[#8994A6]">
-                    <span>Screen Perception</span>
-                    <span className={continuousScreenEnabled || isScreenSharing ? "text-emerald-400 font-medium" : "text-[#8994A6]"}>
-                      {continuousScreenEnabled || isScreenSharing ? "ACTIVE (OCR)" : "STANDBY"}
+        {showLiveContext && (
+          <div
+            className="hidden md:flex md:col-span-3 h-full flex-col justify-between neural-glass-panel rounded-2xl p-4 overflow-y-auto transition-all duration-300"
+          >
+              <div className="space-y-3.5">
+                <div className="flex items-center justify-between pb-2.5 border-b border-slate-200 dark:border-[#202938]/70">
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] shadow-[0_0_6px_#10B981] animate-pulse" />
+                    <span className="text-[11px] font-mono font-bold tracking-widest text-slate-900 dark:text-[#F4F7FB] uppercase">
+                      LIVE CONTEXT
                     </span>
                   </div>
+                  <button
+                    onClick={() => setShowDetailedContext(!showDetailedContext)}
+                    className="flex items-center gap-1 text-[10px] font-mono text-slate-600 hover:text-[#0284C7] dark:text-[#8994A6] dark:hover:text-[#00F0FF] transition cursor-pointer bg-slate-100 dark:bg-[#111722] px-2 py-0.5 rounded-lg border border-slate-200 dark:border-[#202938] hover:border-[#0284C7]/40"
+                    title={showDetailedContext ? "Collapse detailed telemetry" : "Expand detailed telemetry"}
+                    data-testid="toggle-detailed-context-btn"
+                  >
+                    <span>{showDetailedContext ? "LESS" : "MORE"}</span>
+                    {showDetailedContext ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                  </button>
+                </div>
 
-                  <div className="flex items-center justify-between text-[#8994A6]">
-                    <span>Fusion Latency</span>
-                    <span className="text-[#00F0FF] font-medium">~180ms</span>
-                  </div>
-
-                  <div className="flex items-center justify-between text-[#8994A6]">
-                    <span>Unified Sources</span>
-                    <span className="text-emerald-400 font-medium">12 Connected</span>
-                  </div>
-
-                  {lastCodeChange && (
-                    <div className="mt-2 p-2 rounded-xl bg-[#111722] border border-[#202938] space-y-1">
-                      <div className="flex items-center justify-between text-[10px]">
-                        <span className="text-[#8994A6]">DIFF LINES</span>
-                        <span className="text-amber-400 font-bold">+{lastCodeChange.linesChanged}</span>
-                      </div>
-                      <p className="text-[10px] text-[#8994A6] truncate">{lastCodeChange.summary}</p>
+                {/* The 5 Core Items Prominently Displayed on Home Screen */}
+                <div className="space-y-3 text-xs">
+                  {/* 1. Current App */}
+                  <div>
+                    <div className="text-[10px] font-mono font-semibold text-slate-500 dark:text-[#8994A6] uppercase tracking-wider">
+                      CURRENT APP
                     </div>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+                    <div className="text-sm font-semibold text-slate-900 dark:text-[#F4F7FB] mt-0.5 flex items-center justify-between">
+                      <span>{liveContext.app}</span>
+                      <span className="text-[9px] font-mono text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">ACTIVE</span>
+                    </div>
+                  </div>
 
-          <div className="pt-3 border-t border-[#202938]/60 flex items-center justify-between text-[10px] font-mono text-[#8994A6]">
-            <span>CONTEXT FUSION</span>
-            <span className="text-emerald-400 font-medium">ACTIVE · SYNCD</span>
-          </div>
-        </div>
+                  {/* 2. Current Project */}
+                  <div>
+                    <div className="text-[10px] font-mono font-semibold text-slate-500 dark:text-[#8994A6] uppercase tracking-wider">
+                      CURRENT PROJECT
+                    </div>
+                    <div className="text-sm font-semibold text-slate-900 dark:text-[#F4F7FB] mt-0.5">
+                      {liveContext.project}
+                    </div>
+                  </div>
+
+                  {/* 3. Current File */}
+                  <div>
+                    <div className="text-[10px] font-mono font-semibold text-slate-500 dark:text-[#8994A6] uppercase tracking-wider">
+                      CURRENT FILE
+                    </div>
+                    <div className="text-xs font-mono text-[#0284C7] dark:text-[#00F0FF] mt-0.5 truncate font-medium" title={lastCodeChange?.filePath || liveContext.file}>
+                      {lastCodeChange?.filePath || liveContext.file}
+                    </div>
+                  </div>
+
+                  {/* 4. Current Task */}
+                  <div>
+                    <div className="text-[10px] font-mono font-semibold text-slate-500 dark:text-[#8994A6] uppercase tracking-wider">
+                      CURRENT TASK
+                    </div>
+                    <div className="text-xs font-medium text-slate-900 dark:text-[#F4F7FB] mt-0.5">
+                      {liveContext.task}
+                    </div>
+                  </div>
+
+                  {/* 5. Confidence */}
+                  <div className="pt-2 border-t border-slate-200 dark:border-[#202938]/60">
+                    <div className="text-[10px] font-mono font-semibold text-slate-500 dark:text-[#8994A6] uppercase tracking-wider">
+                      CONFIDENCE
+                    </div>
+                    <div className="text-sm font-mono font-bold text-emerald-600 dark:text-[#10B981] mt-0.5 flex items-center gap-1.5">
+                      <span>{liveContext.confidence}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Expandable detailed context accordion */}
+                <AnimatePresence>
+                  {showDetailedContext && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="pt-2.5 border-t border-slate-200 dark:border-[#202938]/60 space-y-2.5 overflow-hidden text-xs font-mono"
+                    >
+                      <div className="flex items-center justify-between text-slate-600 dark:text-[#8994A6]">
+                        <span>Screen Perception</span>
+                        <span className={continuousScreenEnabled || isScreenSharing ? "text-emerald-600 dark:text-emerald-400 font-medium" : "text-slate-500 dark:text-[#8994A6]"}>
+                          {continuousScreenEnabled || isScreenSharing ? "ACTIVE (OCR)" : "STANDBY"}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between text-slate-600 dark:text-[#8994A6]">
+                        <span>Fusion Latency</span>
+                        <span className="text-[#0284C7] dark:text-[#00F0FF] font-medium">~180ms</span>
+                      </div>
+
+                      <div className="flex items-center justify-between text-slate-600 dark:text-[#8994A6]">
+                        <span>Unified Sources</span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">12 Connected</span>
+                      </div>
+
+                      {lastCodeChange && (
+                        <div className="mt-2 p-2 rounded-xl bg-slate-100 dark:bg-[#111722] border border-slate-200 dark:border-[#202938] space-y-1">
+                          <div className="flex items-center justify-between text-[10px]">
+                            <span className="text-slate-600 dark:text-[#8994A6]">DIFF LINES</span>
+                            <span className="text-amber-600 dark:text-amber-400 font-bold">+{lastCodeChange.linesChanged}</span>
+                          </div>
+                          <p className="text-[10px] text-slate-600 dark:text-[#8994A6] truncate">{lastCodeChange.summary}</p>
+                        </div>
+                      )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
+              <div className="pt-3 border-t border-slate-200 dark:border-[#202938]/60 flex items-center justify-between text-[10px] font-mono text-slate-500 dark:text-[#8994A6]">
+                <span>CONTEXT FUSION</span>
+                <span className="text-emerald-600 dark:text-emerald-400 font-medium">ACTIVE · SYNCD</span>
+              </div>
+            </div>
+          )}
 
       </main>
 
       {/* 3. PROACTIVE AI SUGGESTION CARD (Phase 21) & PERCEPTION BAR */}
-      <div className="relative z-20 w-full max-w-2xl mx-auto px-2 py-1">
+      <div className="relative z-20 w-full max-w-3xl mx-auto px-2 py-0.5 shrink-0">
         <AnimatePresence>
           {proactiveCard ? (
             <motion.div
               initial={{ opacity: 0, y: 10, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 10, scale: 0.98 }}
-              className="neural-glass-elevated rounded-2xl p-4 border border-[#202938] shadow-2xl space-y-3 relative backdrop-blur-xl"
+              className="neural-glass-elevated rounded-2xl p-4 border border-slate-200 dark:border-[#202938] shadow-2xl space-y-3 relative backdrop-blur-xl"
             >
               {/* Header: ⚡ MYRAA SUGGESTION */}
-              <div className="flex items-center justify-between pb-2 border-b border-[#202938]/60">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-[#202938]/60">
                 <div className="flex items-center gap-2">
-                  <span className="text-[#00F0FF] animate-pulse">⚡</span>
-                  <span className="text-xs font-mono font-bold tracking-wider text-[#F4F7FB] uppercase">
+                  <span className="text-[#0284C7] dark:text-[#00F0FF] animate-pulse">⚡</span>
+                  <span className="text-xs font-mono font-bold tracking-wider text-slate-900 dark:text-[#F4F7FB] uppercase">
                     MYRAA SUGGESTION
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                  <span className="text-[10px] font-mono text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
                     {proactiveCard.confidence ? `${proactiveCard.confidence} CONFIDENCE` : "PREDICTIVE AI"}
                   </span>
                   <button
                     onClick={handleDismissProactive}
-                    className="text-[#8994A6] hover:text-[#F4F7FB] transition cursor-pointer p-0.5"
+                    className="text-slate-500 hover:text-slate-900 dark:text-[#8994A6] dark:hover:text-[#F4F7FB] transition cursor-pointer p-0.5"
                     title="Dismiss"
                   >
                     <X size={14} />
@@ -2033,7 +2293,7 @@ export default function App() {
               </div>
 
               {/* Message */}
-              <div className="text-xs sm:text-sm font-sans text-[#F4F7FB] leading-relaxed">
+              <div className="text-xs sm:text-sm font-sans text-slate-800 dark:text-[#F4F7FB] leading-relaxed">
                 {proactiveCard.message}
               </div>
 
@@ -2041,7 +2301,7 @@ export default function App() {
               <div className="flex items-center justify-end gap-2.5 pt-1">
                 <button
                   onClick={handleDismissProactive}
-                  className="px-3.5 py-1.5 rounded-xl text-xs font-mono text-[#8994A6] hover:text-[#F4F7FB] hover:bg-white/5 border border-transparent transition cursor-pointer"
+                  className="px-3.5 py-1.5 rounded-xl text-xs font-mono text-slate-600 dark:text-[#8994A6] hover:text-slate-900 dark:hover:text-[#F4F7FB] hover:bg-slate-100 dark:hover:bg-white/5 border border-transparent transition cursor-pointer"
                 >
                   Dismiss
                 </button>
@@ -2051,7 +2311,7 @@ export default function App() {
                   className={`px-4 py-1.5 rounded-xl text-xs font-mono font-medium transition cursor-pointer flex items-center gap-1.5 ${
                     proactiveCard.verified
                       ? "bg-emerald-500 text-white"
-                      : "bg-[#3B82F6] hover:bg-[#2563EB] text-white shadow-[0_0_15px_rgba(59,130,246,0.35)]"
+                      : "bg-[#0284C7] hover:bg-sky-600 text-white shadow-[0_0_15px_rgba(2,132,199,0.35)]"
                   }`}
                 >
                   {proactiveCard.verified ? (
@@ -2074,20 +2334,20 @@ export default function App() {
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 6 }}
-                className="neural-glass-subtle py-2 px-3.5 rounded-xl flex items-center justify-between text-xs font-mono border border-[#202938] text-[#8994A6]"
+                className="neural-glass-subtle py-2 px-3.5 rounded-xl flex items-center justify-between text-xs font-mono border border-slate-200 dark:border-[#202938] text-slate-600 dark:text-[#8994A6]"
               >
                 <div className="flex items-center gap-2 overflow-hidden">
-                  <span className="text-[#00F0FF] animate-pulse">⚡</span>
+                  <span className="text-[#0284C7] dark:text-[#00F0FF] animate-pulse">⚡</span>
                   {lastCodeChange ? (
-                    <span className="truncate text-[#F4F7FB]">
-                      MYRAA noticed code modifications in <strong className="text-[#00F0FF]">{lastCodeChange.filePath}</strong> ({lastCodeChange.linesChanged} lines)
+                    <span className="truncate text-slate-800 dark:text-[#F4F7FB]">
+                      MYRAA noticed code modifications in <strong className="text-[#0284C7] dark:text-[#00F0FF]">{lastCodeChange.filePath}</strong> ({lastCodeChange.linesChanged} lines)
                     </span>
                   ) : contextSuggestions.length > 0 ? (
-                    <span className="truncate text-[#F4F7FB]">
-                      MYRAA noticed: <strong className="text-[#00F0FF]">{contextSuggestions[0].title}</strong> — {contextSuggestions[0].description}
+                    <span className="truncate text-slate-800 dark:text-[#F4F7FB]">
+                      MYRAA noticed: <strong className="text-[#0284C7] dark:text-[#00F0FF]">{contextSuggestions[0].title}</strong> — {contextSuggestions[0].description}
                     </span>
                   ) : (
-                    <span className="truncate text-[#8994A6]">
+                    <span className="truncate text-slate-600 dark:text-[#8994A6]">
                       MYRAA noticed active session: neural glass perception engine tracking workspace context in real-time.
                     </span>
                   )}
@@ -2097,7 +2357,7 @@ export default function App() {
                   {lastCodeChange && (
                     <button
                       onClick={() => setShowCodeDetails(true)}
-                      className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-[#111722] border border-[#202938] text-[#00F0FF] hover:bg-[#00F0FF]/10 transition cursor-pointer"
+                      className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-sky-50 dark:bg-[#111722] border border-sky-300 dark:border-[#202938] text-[#0284C7] dark:text-[#00F0FF] hover:bg-sky-100 dark:hover:bg-[#00F0FF]/10 transition cursor-pointer"
                     >
                       View Diff
                     </button>
@@ -2105,14 +2365,14 @@ export default function App() {
                   {contextSuggestions.length > 0 && (
                     <button
                       onClick={() => handleApplySuggestion(contextSuggestions[0].id)}
-                      className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-[#00F0FF]/15 border border-[#00F0FF]/40 text-[#00F0FF] hover:bg-[#00F0FF]/25 transition cursor-pointer"
+                      className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-[#0284C7]/15 border border-[#0284C7]/40 text-[#0284C7] hover:bg-[#0284C7]/25 transition cursor-pointer"
                     >
                       Apply
                     </button>
                   )}
                   <button
                     onClick={() => setDismissNotice(true)}
-                    className="text-[#8994A6] hover:text-[#F4F7FB] text-xs px-1 cursor-pointer"
+                    className="text-slate-500 hover:text-slate-900 dark:text-[#8994A6] dark:hover:text-[#F4F7FB] text-xs px-1 cursor-pointer"
                   >
                     ×
                   </button>
@@ -2124,7 +2384,7 @@ export default function App() {
       </div>
 
       {/* 4. BOTTOM INTERACTION DOCK — VOICE AS HERO FEATURE */}
-      <footer className="relative z-30 w-full max-w-3xl mx-auto flex flex-col items-center gap-2 mb-1">
+      <footer className="relative z-30 w-full max-w-3xl mx-auto flex flex-col items-center gap-2 mb-0.5 shrink-0">
 
         {/* Optional Collapsible Text Prompt Bar */}
         <AnimatePresence>
@@ -2134,7 +2394,7 @@ export default function App() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 8, scale: 0.98 }}
               onSubmit={handleSendTextMessage}
-              className="w-full max-w-xl flex items-center gap-2 neural-glass-elevated px-3 py-2 rounded-2xl border border-[#202938] shadow-2xl mb-1"
+              className="w-full max-w-xl flex items-center gap-2 neural-glass-elevated px-3 py-2 rounded-2xl border border-slate-200 dark:border-[#202938] shadow-2xl mb-1"
             >
               <input
                 ref={promptInputRef}
@@ -2142,7 +2402,7 @@ export default function App() {
                 value={textInput}
                 onChange={(e) => setTextInput(e.target.value)}
                 placeholder="Type a prompt for MYRAA..."
-                className="w-full bg-transparent border-none text-xs sm:text-sm font-sans text-[#F4F7FB] placeholder-[#8994A6]/60 focus:outline-none px-1"
+                className="w-full bg-transparent border-none text-xs sm:text-sm font-sans text-slate-900 dark:text-[#F4F7FB] placeholder-slate-400 dark:placeholder-[#8994A6]/60 focus:outline-none px-1"
               />
               {textInput.trim() && (
                 <button
@@ -2171,21 +2431,17 @@ export default function App() {
           {/* Left: Chat Prompt Toggle */}
           <div className="flex items-center gap-1.5">
             <button
-              onClick={() => {
-                setShowTextInput(!showTextInput);
-                if (!showTextInput) {
-                  setTimeout(() => promptInputRef.current?.focus(), 60);
-                }
-              }}
+              onClick={() => setShowChat(!showChat)}
               className={`p-2 sm:px-3 sm:py-2 rounded-xl text-xs font-mono transition flex items-center gap-1.5 cursor-pointer ${
-                showTextInput
-                  ? "bg-[#111722] border border-[#00F0FF]/50 text-[#00F0FF]"
-                  : "bg-[#111722]/80 border border-[#202938] text-[#8994A6] hover:text-[#F4F7FB]"
+                showChat
+                  ? "bg-[#0284C7]/15 border border-[#0284C7]/60 text-[#0284C7] dark:bg-[#111722] dark:border-[#00F0FF]/50 dark:text-[#00F0FF]"
+                  : "bg-white/80 dark:bg-[#111722]/80 border border-slate-200 dark:border-[#202938] text-slate-600 dark:text-[#8994A6] hover:text-slate-900 dark:hover:text-[#F4F7FB]"
               }`}
-              title="Toggle Text Input"
+              title="Toggle MYRAA Chat Interface"
+              data-testid="dock-chat-toggle-btn"
             >
-              <MessageSquare size={13} className={showTextInput ? "text-[#00F0FF]" : "text-[#8994A6]"} />
-              <span className="hidden sm:inline">Prompt</span>
+              <MessageSquare size={13} className={showChat ? "text-[#0284C7] dark:text-[#00F0FF]" : "text-slate-500 dark:text-[#8994A6]"} />
+              <span className="hidden sm:inline">Chat</span>
             </button>
           </div>
 
@@ -2196,10 +2452,10 @@ export default function App() {
               state === "speaking"
                 ? "bg-[#8B5CF6]/15 border border-[#8B5CF6]/70 shadow-[0_0_35px_rgba(139,92,246,0.35)]"
                 : state === "listening"
-                ? "bg-[#00F0FF]/15 border border-[#00F0FF]/70 shadow-[0_0_35px_rgba(0,240,255,0.35)]"
+                ? "bg-[#0284C7]/15 border border-[#0284C7]/70 shadow-[0_0_35px_rgba(2,132,199,0.35)]"
                 : characterState === "thinking" || state === "connecting"
-                ? "bg-[#3B82F6]/15 border border-[#3B82F6]/70 shadow-[0_0_30px_rgba(59,130,246,0.3)]"
-                : "bg-[#111722]/90 border border-[#202938] hover:border-[#00F0FF]/40 shadow-lg hover:shadow-[0_0_20px_rgba(0,240,255,0.15)]"
+                ? "bg-[#0284C7]/15 border border-[#0284C7]/70 shadow-[0_0_30px_rgba(2,132,199,0.3)]"
+                : "bg-white/90 dark:bg-[#111722]/90 border border-slate-200 dark:border-[#202938] hover:border-[#0284C7]/40 dark:hover:border-[#00F0FF]/40 shadow-lg hover:shadow-[0_0_20px_rgba(2,132,199,0.15)]"
             }`}
             title={state === "disconnected" ? "Tap to speak with MYRAA" : "Tap to pause voice session"}
           >
@@ -2207,13 +2463,13 @@ export default function App() {
             <div className="flex items-center gap-2 text-xs sm:text-sm font-medium transition-colors">
               <span className={`text-sm sm:text-base transition-transform group-hover:scale-110 ${
                 state === "speaking" ? "text-[#8B5CF6]" :
-                state === "listening" ? "text-[#00F0FF]" :
-                characterState === "thinking" ? "text-[#3B82F6]" :
-                "text-[#F4F7FB] group-hover:text-[#00F0FF]"
+                state === "listening" ? "text-[#0284C7] dark:text-[#00F0FF]" :
+                characterState === "thinking" ? "text-[#0284C7] dark:text-[#3B82F6]" :
+                "text-slate-800 dark:text-[#F4F7FB] group-hover:text-[#0284C7]"
               }`}>
                 🎙
               </span>
-              <span className="text-[#F4F7FB] font-sans tracking-wide">
+              <span className="text-slate-900 dark:text-[#F4F7FB] font-sans tracking-wide">
                 {state === "speaking"
                   ? "MYRAA is speaking..."
                   : state === "listening"
@@ -2234,21 +2490,21 @@ export default function App() {
                   <span>Speaking...</span>
                 </span>
               ) : characterState === "thinking" || state === "connecting" ? (
-                <span className="flex items-center gap-1.5 text-[#3B82F6] font-semibold tracking-wider">
-                  <span className="w-2.5 h-2.5 rounded-full border-2 border-[#3B82F6] border-t-transparent animate-spin" />
+                <span className="flex items-center gap-1.5 text-[#0284C7] dark:text-[#3B82F6] font-semibold tracking-wider">
+                  <span className="w-2.5 h-2.5 rounded-full border-2 border-[#0284C7] dark:border-[#3B82F6] border-t-transparent animate-spin" />
                   <span>Thinking...</span>
                 </span>
               ) : state === "listening" ? (
-                <span className="flex items-center gap-1.5 text-[#00F0FF] font-semibold tracking-wider">
+                <span className="flex items-center gap-1.5 text-[#0284C7] dark:text-[#00F0FF] font-semibold tracking-wider">
                   <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00F0FF] opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-[#00F0FF]"></span>
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#0284C7] dark:bg-[#00F0FF] opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-[#0284C7] dark:bg-[#00F0FF]"></span>
                   </span>
                   <span>Listening...</span>
                 </span>
               ) : (
-                <span className="flex items-center gap-1.5 text-emerald-400 font-semibold tracking-wider">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#10B981]" />
+                <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-semibold tracking-wider">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_6px_#10B981]" />
                   <span>Ready</span>
                 </span>
               )}
@@ -2256,18 +2512,18 @@ export default function App() {
           </button>
 
           {/* Right Dock Controls: Vision, Screen & Waveform */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 border-l border-[#202938] pl-2 sm:pl-3">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 border-l border-slate-200 dark:border-[#202938] pl-2 sm:pl-3">
             {/* Vision Pill */}
             <button
               onClick={() => setShowVisionModal(true)}
               className={`px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl text-xs font-mono transition flex items-center gap-1.5 cursor-pointer ${
                 continuousScreenEnabled || isScreenSharing
-                  ? "bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 font-semibold"
-                  : "bg-[#111722]/80 border border-[#202938] text-[#8994A6] hover:text-[#F4F7FB]"
+                  ? "bg-emerald-50 dark:bg-emerald-500/15 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 font-semibold"
+                  : "bg-white/80 dark:bg-[#111722]/80 border border-slate-200 dark:border-[#202938] text-slate-600 dark:text-[#8994A6] hover:text-slate-900 dark:hover:text-[#F4F7FB]"
               }`}
               title="Continuous Vision"
             >
-              <Eye size={12} className={continuousScreenEnabled || isScreenSharing ? "text-emerald-400" : ""} />
+              <Eye size={12} className={continuousScreenEnabled || isScreenSharing ? "text-emerald-500" : "text-slate-500 dark:text-[#8994A6]"} />
               <span className="hidden sm:inline">Vision</span>
             </button>
 
@@ -2276,12 +2532,12 @@ export default function App() {
               onClick={isScreenSharing ? stopScreenSharing : startScreenSharing}
               className={`px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl text-xs font-mono transition flex items-center gap-1.5 cursor-pointer ${
                 isScreenSharing
-                  ? "bg-[#00F0FF]/15 border border-[#00F0FF]/40 text-[#00F0FF] font-semibold"
-                  : "bg-[#111722]/80 border border-[#202938] text-[#8994A6] hover:text-[#F4F7FB]"
+                  ? "bg-sky-50 dark:bg-[#00F0FF]/15 border border-sky-400 dark:border-[#00F0FF]/40 text-[#0284C7] dark:text-[#00F0FF] font-semibold"
+                  : "bg-white/80 dark:bg-[#111722]/80 border border-slate-200 dark:border-[#202938] text-slate-600 dark:text-[#8994A6] hover:text-slate-900 dark:hover:text-[#F4F7FB]"
               }`}
               title="Share Screen"
             >
-              <Monitor size={12} className={isScreenSharing ? "text-[#00F0FF] animate-pulse" : ""} />
+              <Monitor size={12} className={isScreenSharing ? "text-[#0284C7] dark:text-[#00F0FF] animate-pulse" : "text-slate-500 dark:text-[#8994A6]"} />
               <span className="hidden sm:inline">Screen</span>
             </button>
 
@@ -2412,21 +2668,21 @@ export default function App() {
             exit={{ opacity: 0, scale: 0.85, x: 50 }}
             className={`absolute bottom-6 md:bottom-10 right-6 md:right-10 z-50 w-72 p-4 rounded-2xl border ${
               isScreenSharingPaused 
-                ? "border-amber-500/20 bg-slate-950/70" 
-                : "border-cyan-500/20 bg-slate-950/70"
+                ? "border-amber-300 bg-white/95 text-slate-900 shadow-2xl dark:border-amber-500/20 dark:bg-slate-950/70 dark:text-slate-200" 
+                : "border-sky-300 bg-white/95 text-slate-900 shadow-2xl dark:border-cyan-500/20 dark:bg-slate-950/70 dark:text-slate-200"
             } backdrop-blur-2xl shadow-2xl overflow-hidden`}
           >
             {/* Header / Indicator */}
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${isScreenSharingPaused ? "bg-amber-400" : "bg-cyan-400 animate-pulse"}`} />
-                <span className="text-[10px] font-bold font-mono tracking-widest text-slate-200">
+                <div className={`w-2 h-2 rounded-full ${isScreenSharingPaused ? "bg-amber-500 dark:bg-amber-400" : "bg-sky-500 dark:bg-cyan-400 animate-pulse"}`} />
+                <span className="text-[10px] font-bold font-mono tracking-widest text-slate-800 dark:text-slate-200">
                   {isScreenSharingPaused ? "SCREEN VISION PAUSED" : "SCREEN VISION ACTIVE"}
                 </span>
               </div>
               <button 
                 onClick={stopScreenSharing}
-                className="text-slate-400 hover:text-white transition-colors duration-150 p-1 rounded-lg hover:bg-white/5 cursor-pointer"
+                className="text-slate-400 hover:text-slate-800 dark:hover:text-white transition-colors duration-150 p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer"
                 title="Stop Sharing"
               >
                 <X size={14} />
@@ -2434,7 +2690,7 @@ export default function App() {
             </div>
 
             {/* Smart Video PIP Preview Holder */}
-            <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-slate-900 border border-white/5 mb-3 flex items-center justify-center group select-none">
+            <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-white/5 mb-3 flex items-center justify-center group select-none">
               <video
                 ref={(el) => {
                   if (el && screenStreamRef.current && el.srcObject !== screenStreamRef.current) {
@@ -2453,15 +2709,15 @@ export default function App() {
 
               {isScreenSharingPaused && (
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <span className="text-[10px] uppercase tracking-widest font-mono text-amber-400 font-bold px-2 py-1 bg-amber-950/40 border border-amber-500/20 rounded-md">
+                  <span className="text-[10px] uppercase tracking-widest font-mono text-amber-700 dark:text-amber-400 font-bold px-2 py-1 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-500/20 rounded-md">
                     Transmission Paused
                   </span>
                 </div>
               )}
               
               {!isScreenSharingPaused && screenVisionMode && (
-                <div className="absolute top-2 left-2 flex items-center gap-1.5 px-2 py-0.5 rounded bg-cyan-950/50 border border-cyan-400/20 text-[9px] font-mono text-cyan-300">
-                  <span className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-ping" />
+                <div className="absolute top-2 left-2 flex items-center gap-1.5 px-2 py-0.5 rounded bg-sky-100/90 dark:bg-cyan-950/50 border border-sky-300 dark:border-cyan-400/20 text-[9px] font-mono text-sky-800 dark:text-cyan-300">
+                  <span className="w-1.5 h-1.5 bg-sky-500 dark:bg-cyan-400 rounded-full animate-ping" />
                   <span>Streaming FPS: 0.5</span>
                 </div>
               )}
@@ -2472,7 +2728,7 @@ export default function App() {
               {isScreenSharingPaused ? (
                 <button
                   onClick={resumeScreenSharing}
-                  className="flex-1 py-1.5 px-2 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 rounded-lg text-xs font-mono font-medium text-cyan-300 flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                  className="flex-1 py-1.5 px-2 bg-sky-50 hover:bg-sky-100 border border-sky-200 dark:bg-cyan-500/10 dark:hover:bg-cyan-500/20 dark:border-cyan-500/20 rounded-lg text-xs font-mono font-semibold text-sky-700 dark:text-cyan-300 flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                   title="Resume Streaming Feed"
                 >
                   <Play size={10} />
@@ -2481,7 +2737,7 @@ export default function App() {
               ) : (
                 <button
                   onClick={pauseScreenSharing}
-                  className="flex-1 py-1.5 px-2 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 rounded-lg text-xs font-mono font-medium text-amber-300 flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                  className="flex-1 py-1.5 px-2 bg-amber-50 hover:bg-amber-100 border border-amber-200 dark:bg-amber-500/10 dark:hover:bg-amber-500/20 dark:border-amber-500/20 rounded-lg text-xs font-mono font-semibold text-amber-700 dark:text-amber-300 flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                   title="Pause Streaming Feed"
                 >
                   <Pause size={10} />
@@ -2491,7 +2747,7 @@ export default function App() {
 
               <button
                 onClick={switchScreenShare}
-                className="py-1.5 px-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-mono text-slate-300 hover:text-white flex items-center justify-center gap-1 transition-all cursor-pointer"
+                className="py-1.5 px-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 hover:text-slate-900 dark:bg-white/5 dark:hover:bg-white/10 dark:border-white/10 dark:text-slate-300 dark:hover:text-white rounded-lg text-xs font-mono flex items-center justify-center gap-1 transition-all cursor-pointer"
                 title="Choose Another Screen or Window"
               >
                 <RefreshCw size={11} />
@@ -2500,7 +2756,7 @@ export default function App() {
 
               <button
                 onClick={stopScreenSharing}
-                className="py-1.5 px-2 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 rounded-lg text-xs font-mono text-rose-400 flex items-center justify-center gap-1 transition-all cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
+                className="py-1.5 px-2 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 dark:bg-rose-500/10 dark:hover:bg-rose-500/20 dark:border-rose-500/20 dark:text-rose-400 rounded-lg text-xs font-mono flex items-center justify-center gap-1 transition-all cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
                 title="Terminate Stream"
               >
                 <Square size={9} />
@@ -2509,15 +2765,15 @@ export default function App() {
             </div>
 
             {/* Core Mode Configuration Toggle */}
-            <div className="pt-2 border-t border-white/5 flex items-center justify-between text-left">
+            <div className="pt-2 border-t border-slate-200 dark:border-white/5 flex items-center justify-between text-left">
               <div className="flex flex-col">
-                <span className="text-[10px] font-bold font-mono text-slate-200">SCREEN VISION MODE</span>
-                <span className="text-[8px] text-slate-400 uppercase font-mono max-w-[150px]">Gemini Auto-Analysis</span>
+                <span className="text-[10px] font-bold font-mono text-slate-800 dark:text-slate-200">SCREEN VISION MODE</span>
+                <span className="text-[8px] text-slate-500 dark:text-slate-400 uppercase font-mono max-w-[150px]">Gemini Auto-Analysis</span>
               </div>
               <button
                 onClick={() => setScreenVisionMode(!screenVisionMode)}
                 className={`w-10 h-5 rounded-full p-0.5 transition-colors duration-200 focus:outline-none cursor-pointer ${
-                  screenVisionMode ? "bg-cyan-500" : "bg-white/10"
+                  screenVisionMode ? "bg-sky-500 dark:bg-cyan-500" : "bg-slate-300 dark:bg-white/10"
                 }`}
               >
                 <div
@@ -2539,6 +2795,16 @@ export default function App() {
           memories={memories}
           onAddMemory={handleAddManualMemory}
           onDeleteMemory={handleDeleteMemory}
+          onUpdateMemory={handleUpdateMemory}
+          themeColor={themeColor}
+        />
+      </ErrorBoundary>
+
+      {/* Phase 5B: Projects sliding core panel */}
+      <ErrorBoundary fallbackTitle="Projects Dashboard Recovered">
+        <ProjectsDashboard
+          isOpen={showProjectsDashboard}
+          onClose={() => setShowProjectsDashboard(false)}
           themeColor={themeColor}
         />
       </ErrorBoundary>
@@ -2556,6 +2822,32 @@ export default function App() {
           onSessionUpdate={(updated) => setRemoteSession(updated)}
           memories={memories}
           onOpenMemoryDashboard={() => setShowMemoryDashboard(true)}
+        />
+      </ErrorBoundary>
+
+      {/* Phase 4: Light Theme Chat Interface */}
+      <ErrorBoundary fallbackTitle="Chat Interface Recovered">
+        <ChatInterface
+          isOpen={showChat}
+          onClose={() => setShowChat(false)}
+          messages={chatMessages}
+          onClearMessages={() =>
+            setChatMessages([
+              {
+                id: "greeting",
+                role: "model",
+                content: "Conversation cleared. How can I help you next?",
+                timestamp: Date.now(),
+              },
+            ])
+          }
+          sessionState={state}
+          characterState={characterState}
+          onToggleVoice={handleToggleConnection}
+          onSendMessage={(text, attachments) => handleSendTextMessage(undefined, text, attachments)}
+          themeColor={themeColor}
+          onOpenVision={() => setShowVisionModal(true)}
+          onOpenMemory={() => setShowMemoryDashboard(true)}
         />
       </ErrorBoundary>
 

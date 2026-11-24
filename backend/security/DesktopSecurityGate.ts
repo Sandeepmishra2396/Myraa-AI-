@@ -274,11 +274,18 @@ export class DesktopSecurityGate {
     const normalizedInput = this._normalizeCode(inputCode);
     const normalizedTarget = this._normalizeCode(this._passcode);
 
+    const isHindiTarget = normalizedTarget.includes("मम्मी") || normalizedTarget.includes("बेटा");
+    const isEnglishTarget = normalizedTarget.includes("mummy") || normalizedTarget.includes("beta");
+
     const isMatch =
       normalizedInput === normalizedTarget ||
       normalizedInput.replace(/\s+/g, "") === normalizedTarget.replace(/\s+/g, "") ||
       normalizedInput.includes(normalizedTarget) ||
-      (normalizedTarget.length >= 4 && normalizedInput.length >= 4 && normalizedTarget.includes(normalizedInput));
+      (normalizedTarget.length >= 4 && normalizedInput.length >= 4 && normalizedTarget.includes(normalizedInput)) ||
+      ((isHindiTarget || isEnglishTarget) && (
+        (normalizedInput.includes("mummy") && normalizedInput.includes("beta")) ||
+        (normalizedInput.includes("मम्मी") && normalizedInput.includes("बेटा"))
+      ));
 
     if (isMatch) {
       this._status = "UNLOCKED";

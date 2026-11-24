@@ -103,6 +103,10 @@ export class MyraAudioSession {
   private isModelTurnActive = false;
   /** Timer to cleanly transition back to listening once all buffered audio has finished playing. */
   private _speechEndTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Timestamp until which mic frames are dropped locally due to server QUEUE_FULL backpressure */
+  private _queueFullCooldownUntil = 0;
+  /** Timestamp of last logged audio warning to prevent console log flooding */
+  private _lastAudioWarningLogTime = 0;
 
   
   // State Callbacks
@@ -401,6 +405,9 @@ export class MyraAudioSession {
         const base64 = base64ArrayBuffer(pcmBuffer);
 
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          if (Date.now() < this._queueFullCooldownUntil) {
+            return;
+          }
           micFramesSent++;
           if (micFramesSent === 1 || micFramesSent % 150 === 0) {
             console.log(`[Myraa Audio] Mic streaming frame #${micFramesSent}`);
@@ -907,6 +914,7 @@ export class MyraAudioSession {
           this.reconnectController.setGeminiState("RECREATING");
         } else if (data.status === "connected" || data.status === "gemini_recreated") {
           this.reconnectAttempts = 0;
+          this._queueFullCooldownUntil = 0;
           this.reconnectController.markStableReady();
           this.setState("listening");
         } else if (data.status === "gemini_degraded") {
@@ -1029,7 +1037,14 @@ export class MyraAudioSession {
 
       // Handle explicit audio queue overflow / validation warnings (SEC-P4-A01)
       if (data.type === "audio_warning") {
-        console.warn("[Myraa Audio] Server audio warning:", data.reason || "unknown");
+        const now = Date.now();
+        if (data.reason === "QUEUE_FULL") {
+          this._queueFullCooldownUntil = now + 400; // Pause mic transmission for 400ms to allow server queue to drain
+        }
+        if (now - this._lastAudioWarningLogTime > 3000) {
+          console.warn("[Myraa Audio] Server audio warning:", data.reason || "unknown", `(queue=${data.queueSize ?? '?'}/${data.maxFrames ?? '?'})`);
+          this._lastAudioWarningLogTime = now;
+        }
         if (this.onAudioWarning) {
           this.onAudioWarning(data);
         }

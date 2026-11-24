@@ -1336,16 +1336,16 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
   return (
     <div
       id="myraa-playwright-automation-hud"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-xl animate-fade-in text-left select-none"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 dark:bg-slate-950/90 backdrop-blur-xl animate-fade-in text-left select-none"
     >
-      <div className="relative w-full max-w-5xl h-[88vh] flex flex-col rounded-3xl border border-white/10 bg-slate-900/85 shadow-[0_0_90px_rgba(168,85,247,0.4)] overflow-hidden">
+      <div className="relative w-full max-w-5xl h-[88vh] flex flex-col rounded-3xl border border-slate-200 dark:border-white/10 bg-white/95 dark:bg-slate-900/85 text-slate-900 dark:text-white shadow-2xl overflow-hidden">
         
         {/* Ambient aesthetic light streams */}
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(168,85,247,0.1),transparent_50%)] pointer-events-none" />
-        <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:16px_16px] pointer-events-none opacity-20" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(168,85,247,0.08),transparent_50%)] pointer-events-none" />
+        <div className="absolute inset-0 bg-[linear-gradient(rgba(0,0,0,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(0,0,0,0.02)_1px,transparent_1px)] dark:bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:16px_16px] pointer-events-none opacity-20" />
 
         {/* 1. TABS NAVIGATION RAIL */}
-        <div className="relative z-10 px-4 pt-4 pb-1 border-b border-white/5 bg-slate-950/70 flex items-end justify-between gap-4">
+        <div className="relative z-10 px-4 pt-4 pb-1 border-b border-slate-200 dark:border-white/5 bg-slate-100/80 dark:bg-slate-950/70 flex items-end justify-between gap-4">
           <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none max-w-[80%]">
             {tabs.map((tab) => {
               const isActive = tab.id === activeTabId;
@@ -1355,18 +1355,18 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
                   onClick={() => setActiveTabId(tab.id)}
                   className={`flex items-center gap-2 px-4 py-2.5 rounded-t-xl transition-all duration-200 cursor-pointer text-xs font-mono select-none outline-none ${
                     isActive 
-                      ? "bg-slate-900 border border-b-transparent border-white/10 text-white font-semibold shadow-inner" 
-                      : "text-slate-500 hover:text-slate-300 bg-transparent hover:bg-white/5"
+                      ? "bg-white border border-b-transparent border-slate-200 text-slate-900 font-semibold shadow-sm dark:bg-slate-900 dark:border-white/10 dark:text-white" 
+                      : "text-slate-500 hover:text-slate-800 bg-transparent hover:bg-slate-200/50 dark:text-slate-500 dark:hover:text-slate-300 dark:hover:bg-white/5"
                   }`}
                 >
-                  <Globe size={11} className={tab.isLoading ? "animate-spin text-purple-400" : isActive ? "text-indigo-400" : "text-slate-500"} />
+                  <Globe size={11} className={tab.isLoading ? "animate-spin text-purple-600 dark:text-purple-400" : isActive ? "text-indigo-600 dark:text-indigo-400" : "text-slate-500"} />
                   <span className="truncate max-w-[120px]">{tab.title}</span>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       handleCloseTab(tab.id);
                     }}
-                    className="p-0.5 rounded hover:bg-white/10 text-slate-500 hover:text-white transition"
+                    className="p-0.5 rounded hover:bg-slate-200 text-slate-400 hover:text-slate-700 dark:hover:bg-white/10 dark:text-slate-500 dark:hover:text-white transition"
                   >
                     <X size={10} />
                   </button>
@@ -1376,7 +1376,7 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
 
             <button
               onClick={() => handleNewTab()}
-              className="p-1 px-1.5 ml-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 text-slate-400 hover:text-white transition-all cursor-pointer"
+              className="p-1 px-1.5 ml-1 rounded-lg bg-slate-200/60 hover:bg-slate-200 border border-slate-300 text-slate-700 hover:text-slate-900 dark:bg-white/5 dark:hover:bg-white/10 dark:border-white/5 dark:text-slate-400 dark:hover:text-white transition-all cursor-pointer"
               title="Spawn New Tab"
             >
               <Plus size={14} />
@@ -1389,11 +1389,11 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
               onClick={() => setShowDebugPanel(!showDebugPanel)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[10px] font-mono tracking-wider font-extrabold cursor-pointer transition ${
                 showDebugPanel 
-                  ? "bg-amber-900/20 border-amber-500/30 text-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.15)]" 
-                  : "bg-white/5 border-white/5 text-slate-400 hover:text-white"
+                  ? "bg-amber-100 border-amber-300 text-amber-800 dark:bg-amber-900/20 dark:border-amber-500/30 dark:text-amber-400 shadow-sm" 
+                  : "bg-slate-200/60 border-slate-300 text-slate-700 hover:text-slate-900 dark:bg-white/5 dark:border-white/5 dark:text-slate-400 dark:hover:text-white"
               }`}
             >
-              <Terminal size={12} className={showDebugPanel ? "text-amber-400 animate-pulse" : ""} />
+              <Terminal size={12} className={showDebugPanel ? "text-amber-600 dark:text-amber-400 animate-pulse" : ""} />
               <span>DEBUG PANEL {showDebugPanel ? "ON" : "OFF"}</span>
             </button>
 
@@ -1401,8 +1401,8 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
               onClick={() => setShowLocalConsole(!showLocalConsole)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[10px] font-mono tracking-wider font-extrabold cursor-pointer transition ${
                 showLocalConsole 
-                  ? "bg-purple-900/20 border-purple-500/30 text-purple-400" 
-                  : "bg-white/5 border-white/5 text-slate-400 hover:text-white"
+                  ? "bg-purple-100 border-purple-300 text-purple-800 dark:bg-purple-900/20 dark:border-purple-500/30 dark:text-purple-400" 
+                  : "bg-slate-200/60 border-slate-300 text-slate-700 hover:text-slate-900 dark:bg-white/5 dark:border-white/5 dark:text-slate-400 dark:hover:text-white"
               }`}
             >
               <Cpu size={12} />
@@ -1411,7 +1411,7 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
 
             <button
               onClick={onClose}
-              className="p-1.5 px-3 rounded-xl bg-rose-950/20 hover:bg-rose-950/40 border border-rose-500/30 text-rose-300 hover:text-rose-100 transition font-sans text-xs cursor-pointer flex items-center gap-1"
+              className="p-1.5 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 dark:bg-rose-950/20 dark:hover:bg-rose-950/40 dark:border-rose-500/30 dark:text-rose-300 dark:hover:text-rose-100 transition font-sans text-xs cursor-pointer flex items-center gap-1"
             >
               <X size={13} /> Close
             </button>
@@ -1419,12 +1419,12 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
         </div>
 
         {/* 2. CHROME NAVIGATION INTERFACE BAR */}
-        <div className="relative z-10 px-5 py-3 border-b border-white/5 bg-slate-900/80 flex items-center gap-3.5 shadow-md">
+        <div className="relative z-10 px-5 py-3 border-b border-slate-200 dark:border-white/5 bg-slate-50 dark:bg-slate-900/80 flex items-center gap-3.5 shadow-sm">
           <div className="flex items-center gap-2">
             <button
               onClick={handleBack}
               disabled={!activeTab || activeTab.currentIndex <= 0}
-              className="p-2 rounded-xl transition text-slate-400 hover:text-white hover:bg-white/5 disabled:opacity-25 disabled:hover:bg-transparent cursor-pointer"
+              className="p-2 rounded-xl transition text-slate-500 hover:text-slate-900 hover:bg-slate-200/60 disabled:opacity-25 disabled:hover:bg-transparent dark:text-slate-400 dark:hover:text-white dark:hover:bg-white/5 cursor-pointer"
               title="Back"
             >
               <ArrowLeft size={16} />
@@ -1433,7 +1433,7 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
             <button
               onClick={handleForward}
               disabled={!activeTab || activeTab.currentIndex >= activeTab.history.length - 1}
-              className="p-2 rounded-xl transition text-slate-400 hover:text-white hover:bg-white/5 disabled:opacity-25 disabled:hover:bg-transparent cursor-pointer"
+              className="p-2 rounded-xl transition text-slate-500 hover:text-slate-900 hover:bg-slate-200/60 disabled:opacity-25 disabled:hover:bg-transparent dark:text-slate-400 dark:hover:text-white dark:hover:bg-white/5 cursor-pointer"
               title="Forward"
             >
               <ArrowRight size={16} />
@@ -1442,7 +1442,7 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
             <button
               onClick={handleRefresh}
               disabled={!activeTab || activeTab.url === "about:blank"}
-              className="p-2 rounded-xl transition text-slate-400 hover:text-white hover:bg-white/5 disabled:opacity-20 cursor-pointer"
+              className="p-2 rounded-xl transition text-slate-500 hover:text-slate-900 hover:bg-slate-200/60 disabled:opacity-20 dark:text-slate-400 dark:hover:text-white dark:hover:bg-white/5 cursor-pointer"
               title="Refresh"
             >
               <RefreshCw size={14} className={activeTab?.isLoading ? "animate-spin" : ""} />
@@ -1450,7 +1450,7 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
 
             <button
               onClick={() => navigateToUrl("about:blank")}
-              className="p-2 rounded-xl transition text-slate-400 hover:text-white hover:bg-white/5 cursor-pointer"
+              className="p-2 rounded-xl transition text-slate-500 hover:text-slate-900 hover:bg-slate-200/60 dark:text-slate-400 dark:hover:text-white dark:hover:bg-white/5 cursor-pointer"
               title="Home Start Page"
             >
               <Home size={15} />
@@ -1463,12 +1463,12 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               placeholder="Type web address or search query..."
-              className="w-full py-2 pl-10 pr-12 rounded-xl border border-white/10 bg-slate-950/70 text-slate-200 placeholder-slate-600 text-xs focus:outline-none focus:border-purple-500/40 focus:ring-1 focus:ring-purple-500/40 tracking-wide transition font-mono"
+              className="w-full py-2 pl-10 pr-12 rounded-xl border border-slate-300 dark:border-white/10 bg-white dark:bg-slate-950/70 text-slate-900 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-600 text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30 tracking-wide transition font-mono"
             />
-            <Search size={14} className="absolute left-3.5 text-slate-500" />
+            <Search size={14} className="absolute left-3.5 text-slate-400 dark:text-slate-500" />
             <button
               type="submit"
-              className="absolute right-2 text-[10px] font-mono tracking-widest uppercase font-bold text-slate-400 hover:text-purple-400 transition"
+              className="absolute right-2 text-[10px] font-mono tracking-widest uppercase font-bold text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-purple-400 transition"
             >
               Go
             </button>
@@ -1479,7 +1479,7 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
         <div className="relative z-10 flex-1 flex overflow-hidden">
           
           {/* MAIN WEBPAGE ZONE */}
-          <div className="flex-1 flex flex-col overflow-hidden bg-[#07070c] relative">
+          <div className="flex-1 flex flex-col overflow-hidden bg-slate-50 dark:bg-[#07070c] relative">
             
             {activeTab?.url === "about:blank" ? (
               

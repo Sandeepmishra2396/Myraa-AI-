@@ -153,21 +153,21 @@ export const CloudPairingModal: React.FC<CloudPairingModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xl p-4 font-sans text-slate-100">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 dark:bg-black/80 backdrop-blur-xl p-4 font-sans text-slate-900 dark:text-slate-100">
       {/* Ambient background glows */}
-      <div className="pointer-events-none absolute -left-32 -top-32 h-96 w-96 rounded-full bg-indigo-600/15 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-32 -right-32 h-96 w-96 rounded-full bg-purple-600/15 blur-3xl" />
+      <div className="pointer-events-none absolute -left-32 -top-32 h-96 w-96 rounded-full bg-indigo-500/10 dark:bg-indigo-600/15 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-32 -right-32 h-96 w-96 rounded-full bg-purple-500/10 dark:bg-purple-600/15 blur-3xl" />
 
-      <div className="relative z-10 w-full max-w-md rounded-3xl border border-white/10 bg-slate-900/90 p-6 md:p-8 shadow-2xl">
+      <div className="relative z-10 w-full max-w-md rounded-3xl border border-slate-200 dark:border-white/10 bg-white/95 dark:bg-slate-900/90 p-6 md:p-8 shadow-2xl">
         {/* Header Icon */}
         <div className="mb-6 flex flex-col items-center text-center">
           <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-tr from-indigo-500 to-purple-600 shadow-lg shadow-indigo-500/25">
             <Shield className="h-7 w-7 text-white" />
           </div>
-          <h2 className="text-xl font-bold tracking-tight text-white">
+          <h2 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">
             {canBootstrap ? "Cloud Instance Setup" : "Cloud Device Pairing"}
           </h2>
-          <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
+          <p className="mt-1.5 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
             {canBootstrap
               ? "Welcome to your deployed MYRAA instance. Generate your initial setup PIN to claim admin ownership."
               : "This cloud MYRAA instance requires device authentication before voice streaming can connect."}
@@ -176,20 +176,20 @@ export const CloudPairingModal: React.FC<CloudPairingModalProps> = ({
 
         {/* Error Notice */}
         {pairingError && (
-          <div className="mb-4 rounded-xl border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-300 flex items-start gap-2">
-            <AlertCircle className="h-4 w-4 shrink-0 text-rose-400 mt-0.5" />
+          <div className="mb-4 rounded-xl border border-rose-500/30 bg-rose-50 dark:bg-rose-950/40 p-3 text-xs text-rose-700 dark:text-rose-300 flex items-start gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0 text-rose-500 dark:text-rose-400 mt-0.5" />
             <span className="leading-snug">{pairingError}</span>
           </div>
         )}
 
         {/* Bootstrap One-Click Generation Banner */}
         {canBootstrap && !bootstrapCode && (
-          <div className="mb-5 rounded-2xl border border-indigo-500/30 bg-indigo-950/30 p-4">
-            <div className="flex items-center gap-2 text-xs font-semibold text-indigo-300 mb-1.5">
-              <Sparkles className="h-4 w-4 text-indigo-400" />
+          <div className="mb-5 rounded-2xl border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/80 dark:bg-indigo-950/30 p-4">
+            <div className="flex items-center gap-2 text-xs font-semibold text-indigo-700 dark:text-indigo-300 mb-1.5">
+              <Sparkles className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
               <span>First-Device Admin Claim</span>
             </div>
-            <p className="text-[11px] leading-relaxed text-slate-300 mb-3">
+            <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300 mb-3">
               No devices are currently registered. Click below to atomically generate your one-time initial setup PIN.
             </p>
             <button
@@ -218,7 +218,7 @@ export const CloudPairingModal: React.FC<CloudPairingModalProps> = ({
           <div>
             <label
               htmlFor="cloud-pairing-pin-code"
-              className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5"
+              className="block text-[11px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1.5"
             >
               6-Character Pairing Code
             </label>
@@ -230,7 +230,7 @@ export const CloudPairingModal: React.FC<CloudPairingModalProps> = ({
               value={pinCode}
               onChange={(e) => setPinCode(e.target.value.toUpperCase().replace(/[^0-9A-Z]/g, ""))}
               placeholder="e.g. K9W4MZ"
-              className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-4 py-3 text-center text-xl font-mono font-bold tracking-[0.3em] text-white uppercase placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/70 px-4 py-3 text-center text-xl font-mono font-bold tracking-[0.3em] text-slate-900 dark:text-white uppercase placeholder:text-slate-400 dark:placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
               autoFocus
               required
             />
@@ -239,7 +239,7 @@ export const CloudPairingModal: React.FC<CloudPairingModalProps> = ({
           <div>
             <label
               htmlFor="cloud-pairing-device-name"
-              className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5"
+              className="block text-[11px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1.5"
             >
               Device Name
             </label>
@@ -250,7 +250,7 @@ export const CloudPairingModal: React.FC<CloudPairingModalProps> = ({
               value={deviceName}
               onChange={(e) => setDeviceName(e.target.value)}
               placeholder="My Browser"
-              className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2 text-xs text-slate-200 placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/70 px-3 py-2 text-xs text-slate-900 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
               required
             />
           </div>
@@ -275,21 +275,21 @@ export const CloudPairingModal: React.FC<CloudPairingModalProps> = ({
         </form>
 
         {/* Informational Footer */}
-        <div className="mt-6 pt-4 border-t border-slate-800 text-[11px] text-slate-400 space-y-2">
-          <div className="font-semibold text-slate-300 flex items-center gap-1.5">
-            <Lock className="h-3 w-3 text-indigo-400" />
+        <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-800 text-[11px] text-slate-600 dark:text-slate-400 space-y-2">
+          <div className="font-semibold text-slate-800 dark:text-slate-300 flex items-center gap-1.5">
+            <Lock className="h-3 w-3 text-indigo-500 dark:text-indigo-400" />
             <span>Transport & Session Security</span>
           </div>
           <p className="leading-relaxed">
             All non-localhost audio streaming routes exclusively via{" "}
-            <span className="font-mono text-slate-300">/remote-live</span> over encrypted WSS.
+            <span className="font-mono text-slate-800 dark:text-slate-300">/remote-live</span> over encrypted WSS.
           </p>
           {onOpenControlHub && (
             <button
               type="button"
               data-testid="cloud-pairing-open-control-hub-btn"
               onClick={onOpenControlHub}
-              className="mt-2 w-full rounded-xl border border-cyan-500/40 bg-cyan-950/30 py-2 px-3 text-center font-mono text-[11px] uppercase tracking-wider text-cyan-200 hover:bg-cyan-900/40 transition-colors cursor-pointer"
+              className="mt-2 w-full rounded-xl border border-sky-300 dark:border-cyan-500/40 bg-sky-50 dark:bg-cyan-950/30 py-2 px-3 text-center font-mono text-[11px] uppercase tracking-wider text-sky-800 dark:text-cyan-200 hover:bg-sky-100 dark:hover:bg-cyan-900/40 transition-colors cursor-pointer"
             >
               Open MYRAA Production Control Hub (Standalone Mode)
             </button>

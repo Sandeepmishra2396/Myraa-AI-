@@ -11,7 +11,8 @@ export interface AvatarRendererProps {
   themeColor: string;
   session?: MyraAudioSession | null;
   mouseNorm?: { x: number; y: number };
-  avatarMode?: "video" | "vrm";
+  avatarMode?: "image" | "video" | "vrm";
+  imageSrc?: string;
   isFloatingMode?: boolean;
   enableChromaKey?: boolean;
   isResearching?: boolean;
@@ -27,12 +28,22 @@ export const AvatarRenderer: React.FC<AvatarRendererProps> = ({
   session = null,
   mouseNorm = { x: 0.5, y: 0.4 },
   avatarMode = "video",
+  imageSrc = "/assets/myraa-avatar.png",
   isFloatingMode = false,
   enableChromaKey = false,
   isResearching = false,
   hasError = false,
   errorText = null,
 }) => {
+  // Image state for Image avatar mode
+  const [imageLoaded, setImageLoaded] = useState<boolean>(false);
+  const [imageError, setImageError] = useState<boolean>(false);
+
+  useEffect(() => {
+    setImageError(false);
+    setImageLoaded(false);
+  }, [imageSrc]);
+
   // Video element refs for MP4 playback
   const idleVideoRef = useRef<HTMLVideoElement | null>(null);
   const thinkingVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -317,7 +328,52 @@ export const AvatarRenderer: React.FC<AvatarRendererProps> = ({
       )}
 
       {/* ================================================================ */}
-      {/* 4. ACTIVE AVATAR: MP4 Video Mode (Primary Default)                */}
+      {/* 4. ACTIVE AVATAR: Image Avatar Mode (Primary Default)             */}
+      {/*    Full 16:9 center stage — portrait PNG centered+contained.     */}
+      {/* ================================================================ */}
+      {avatarMode === "image" && !imageError && (
+        <div
+          className="absolute inset-0 flex items-center justify-center transition-all duration-300 ease-out z-15"
+          style={{
+            transform:
+              characterState === "talking"
+                ? "scale(calc(1 + var(--audio-level, 0) * 0.015)) translateY(calc(var(--audio-level, 0) * -4px))"
+                : "scale(1) translateY(0px)",
+          }}
+        >
+          {/* Loading spinner shown while image bytes arrive */}
+          {!imageLoaded && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+              <div className="w-10 h-10 rounded-full border-2 border-cyan-400/25 border-t-cyan-400/80 animate-spin" />
+            </div>
+          )}
+
+          {/*
+           * The portrait PNG (576×1024) lives inside a 16:9 landscape stage.
+           * h-full + w-auto + object-contain keeps the full character visible
+           * without distortion. max-h-full prevents any vertical overflow.
+           * The image naturally centres itself because the parent is flex
+           * items-center justify-center.
+           */}
+          <img
+            src={imageSrc}
+            alt="MYRAA AI Avatar"
+            onLoad={() => setImageLoaded(true)}
+            onError={() => {
+              console.warn(`[AvatarRenderer] Failed to load avatar image: ${imageSrc}. Using fallback.`);
+              setImageError(true);
+            }}
+            className={`h-full w-auto max-h-full max-w-full object-contain pointer-events-none select-none transition-opacity duration-700 drop-shadow-[0_8px_40px_rgba(0,0,0,0.5)] ${
+              imageLoaded ? "opacity-100 animate-fade-in" : "opacity-0"
+            }`}
+            style={{ objectFit: "contain", objectPosition: "center bottom" }}
+            draggable={false}
+          />
+        </div>
+      )}
+
+      {/* ================================================================ */}
+      {/* 5. MP4 Video Mode (Secondary Engine / Fallback)                   */}
       {/* ================================================================ */}
       {avatarMode === "video" && !videoError && (
         <div
@@ -346,7 +402,8 @@ export const AvatarRenderer: React.FC<AvatarRendererProps> = ({
             muted
             playsInline
             autoPlay
-            className={`absolute inset-0 w-full h-full object-cover rounded-[2.5rem] transition-opacity duration-700 ease-in-out ${
+            preload="auto"
+            className={`absolute inset-0 w-full h-full object-contain rounded-[2rem] transition-opacity duration-700 ease-in-out ${
               enableChromaKey
                 ? "opacity-0 pointer-events-none"
                 : characterState === "idle" || characterState === "sitting" || characterState === "walking"
@@ -364,7 +421,8 @@ export const AvatarRenderer: React.FC<AvatarRendererProps> = ({
             loop
             muted
             playsInline
-            className={`absolute inset-0 w-full h-full object-cover rounded-[2.5rem] transition-opacity duration-700 ease-in-out ${
+            preload="auto"
+            className={`absolute inset-0 w-full h-full object-contain rounded-[2rem] transition-opacity duration-700 ease-in-out ${
               enableChromaKey
                 ? "opacity-0 pointer-events-none"
                 : characterState === "thinking"
@@ -382,7 +440,8 @@ export const AvatarRenderer: React.FC<AvatarRendererProps> = ({
             loop
             muted
             playsInline
-            className={`absolute inset-0 w-full h-full object-cover rounded-[2.5rem] transition-opacity duration-700 ease-in-out ${
+            preload="auto"
+            className={`absolute inset-0 w-full h-full object-contain rounded-[2rem] transition-opacity duration-700 ease-in-out ${
               enableChromaKey
                 ? "opacity-0 pointer-events-none"
                 : characterState === "talking"
@@ -421,9 +480,9 @@ export const AvatarRenderer: React.FC<AvatarRendererProps> = ({
 
       {/* ================================================================ */}
       {/* 6. FALLBACK LAYER: 2D PNG Avatar                                 */}
-      {/*    Active if videoError is true or when 3D is still loading      */}
+      {/*    Active if image/video error is true or when 3D is still loading*/}
       {/* ================================================================ */}
-      {((avatarMode === "video" && videoError) || (avatarMode === "vrm" && !is3DLoaded)) && (
+      {((avatarMode === "image" && imageError) || (avatarMode === "video" && videoError) || (avatarMode === "vrm" && !is3DLoaded)) && (
         <div
           className="relative w-full h-full flex items-center justify-center transition-all duration-700 ease-in-out pointer-events-none z-15"
           style={{
