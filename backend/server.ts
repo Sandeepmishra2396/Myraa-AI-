@@ -1068,16 +1068,19 @@ async function startServer() {
     await conversationManager.handleConnection(clientWs);
   });
 
-  // Serve custom static assets
-  app.use(
-    "/assets",
-    (await import("express")).default.static(
-      path.join(process.cwd(), "assets"),
-    ),
-  );
-
   // Vite dev middleware (dev) or static dist (prod)
   if (process.env.NODE_ENV !== "production") {
+    // Serve custom static assets in development
+    const rootAssetsPath = path.join(process.cwd(), "assets");
+    if (fs.existsSync(rootAssetsPath)) {
+      app.use(
+        "/assets",
+        (await import("express")).default.static(rootAssetsPath, {
+          fallthrough: true,
+        }),
+      );
+    }
+
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: {
@@ -1102,8 +1105,44 @@ async function startServer() {
   } else {
     const { default: express } = await import("express");
     const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (_req, res) => {
+    const distAssetsPath = path.join(distPath, "assets");
+    const rootAssetsPath = path.join(process.cwd(), "assets");
+
+    // Primary: serve compiled production frontend assets with immutable caching
+    if (fs.existsSync(distAssetsPath)) {
+      app.use(
+        "/assets",
+        express.static(distAssetsPath, {
+          maxAge: "1y",
+          immutable: true,
+          fallthrough: true,
+        }),
+      );
+    }
+
+    // Fallback: serve root custom assets directory
+    if (fs.existsSync(rootAssetsPath)) {
+      app.use(
+        "/assets",
+        express.static(rootAssetsPath, {
+          fallthrough: true,
+        }),
+      );
+    }
+
+    // Secondary: serve root dist files (favicon, icon, manifest, models, worklets)
+    app.use(
+      express.static(distPath, {
+        fallthrough: true,
+      }),
+    );
+
+    // SPA fallback: serve index.html for client navigation, strictly excluding /assets/* and /api/*
+    app.get("*", (req, res) => {
+      if (req.path.startsWith("/assets/") || req.path.startsWith("/api/")) {
+        res.status(404).type("text/plain").send("Not Found");
+        return;
+      }
       res.sendFile(path.join(distPath, "index.html"));
     });
   }

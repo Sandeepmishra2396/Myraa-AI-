@@ -133,6 +133,21 @@ function saveSettingsFile(data: Record<string, unknown>): void {
 }
 
 // ---------------------------------------------------------------------------
+// RFC 6454 / WHATWG Canonical Origin Normalization
+// Strictly normalizes scheme, hostname, and port tuple (strips default ports)
+// ---------------------------------------------------------------------------
+export function normalizeOrigin(val: string | undefined | null): string | null {
+  if (!val || typeof val !== "string") return null;
+  try {
+    const u = new URL(val.trim());
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return u.origin.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Step-up challenge ownership registry (FINDING-AUD-03)
 // Maps challengeId -> owning operator sessionId to block cross-session verification.
 // ---------------------------------------------------------------------------
@@ -400,18 +415,66 @@ export function createHttpApp(): express.Application {
 
     if (origin) {
       let allowed = false;
+      const isLocalOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+
       if (!isProd) {
         // Development: allow localhost and 127.0.0.1 origins
-        const isLocalOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
         if (isLocalOrigin) allowed = true;
       } else {
-        // Production: strictly explicit origins from process.env.CORS_ORIGINS (comma-separated). No wildcard!
+        const clientOrigin = normalizeOrigin(origin);
+        if (!clientOrigin) {
+          // Reject malformed or non-http(s) origins immediately
+          return res.status(403).json({ error: "CORS_ORIGIN_DENIED: Origin not permitted." });
+        }
+
+        // 1. Production: strictly explicit origins from process.env.CORS_ORIGINS (comma-separated). No wildcard!
         const configuredOrigins = (process.env.CORS_ORIGINS || "")
           .split(",")
-          .map((o) => o.trim())
-          .filter(Boolean);
-        if (configuredOrigins.includes(origin)) {
+          .map((o) => normalizeOrigin(o.trim()))
+          .filter((o): o is string => Boolean(o));
+        if (configuredOrigins.includes(clientOrigin)) {
           allowed = true;
+        }
+
+        // 2. Canonical trusted public origin derived from Render configuration
+        if (!allowed && process.env.RENDER_EXTERNAL_URL) {
+          const renderUrlOrigin = normalizeOrigin(process.env.RENDER_EXTERNAL_URL);
+          if (renderUrlOrigin && clientOrigin === renderUrlOrigin) {
+            allowed = true;
+          }
+        }
+
+        if (!allowed && process.env.RENDER_EXTERNAL_HOSTNAME) {
+          const renderHostOrigin = normalizeOrigin(`https://${process.env.RENDER_EXTERNAL_HOSTNAME.trim()}`);
+          if (renderHostOrigin && clientOrigin === renderHostOrigin) {
+            allowed = true;
+          }
+        }
+
+        // 3. Strict RFC 6454 / WHATWG same-origin matching against current request (scheme, hostname, port tuple)
+        // Safely bounded by trusted deployment configuration so an arbitrary incoming Host header cannot establish trust.
+        if (!allowed) {
+          const reqProto = String(req.headers["x-forwarded-proto"] || req.protocol || "http").toLowerCase();
+          const reqHost = String(req.get("host") || "").trim();
+          if (reqHost) {
+            const reqCanonicalOrigin = normalizeOrigin(`${reqProto}://${reqHost}`);
+            if (reqCanonicalOrigin && clientOrigin === reqCanonicalOrigin) {
+              const reqHostname = new URL(reqCanonicalOrigin).hostname.toLowerCase();
+              const isTrustedDeploymentHost =
+                reqHostname === "localhost" ||
+                reqHostname === "127.0.0.1" ||
+                reqHostname === "::1" ||
+                (process.env.RENDER_EXTERNAL_HOSTNAME &&
+                  reqHostname === process.env.RENDER_EXTERNAL_HOSTNAME.trim().toLowerCase()) ||
+                (process.env.RENDER_EXTERNAL_URL &&
+                  reqHostname === new URL(process.env.RENDER_EXTERNAL_URL).hostname.toLowerCase()) ||
+                configuredOrigins.some((co) => new URL(co).hostname.toLowerCase() === reqHostname);
+
+              if (isTrustedDeploymentHost) {
+                allowed = true;
+              }
+            }
+          }
         }
       }
 

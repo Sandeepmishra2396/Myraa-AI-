@@ -188,6 +188,58 @@ describe("Phase 30 — Production Hardening & Release Readiness Suite", () => {
       expect(res.headers.get("access-control-allow-origin")).not.toBe("*");
       expect(res.headers.get("access-control-allow-origin")).toBeNull();
     });
+
+    it("3.4 permits same-origin requests in production when Origin matches host or Render external host", async () => {
+      process.env.NODE_ENV = "production";
+      delete process.env.CORS_ORIGINS;
+      process.env.RENDER_EXTERNAL_HOSTNAME = "myraa-ai-q0h3.onrender.com";
+      process.env.RENDER_EXTERNAL_URL = "https://myraa-ai-q0h3.onrender.com";
+      const url = await startTestServer();
+      const serverHost = new URL(url).host;
+
+      // Same-origin matching server host
+      const resHost = await fetch(`${url}/api/config`, {
+        headers: { Origin: `http://${serverHost}` },
+      });
+      expect(resHost.status).toBe(200);
+      expect(resHost.headers.get("access-control-allow-origin")).toBe(`http://${serverHost}`);
+
+      // Same-origin matching canonical Render external HTTPS URL
+      const resRender = await fetch(`${url}/api/config`, {
+        headers: { Origin: "https://myraa-ai-q0h3.onrender.com" },
+      });
+      expect(resRender.status).toBe(200);
+      expect(resRender.headers.get("access-control-allow-origin")).toBe("https://myraa-ai-q0h3.onrender.com");
+
+      // HTTP origin with same hostname rejected (scheme mismatch)
+      const resHttp = await fetch(`${url}/api/config`, {
+        headers: { Origin: "http://myraa-ai-q0h3.onrender.com" },
+      });
+      expect(resHttp.status).toBe(403);
+      expect(resHttp.headers.get("access-control-allow-origin")).toBeNull();
+
+      // Different port rejected
+      const resPort = await fetch(`${url}/api/config`, {
+        headers: { Origin: "https://myraa-ai-q0h3.onrender.com:8443" },
+      });
+      expect(resPort.status).toBe(403);
+      expect(resPort.headers.get("access-control-allow-origin")).toBeNull();
+
+      // Malformed origin rejected
+      const resMalformed = await fetch(`${url}/api/config`, {
+        headers: { Origin: "not-a-valid-origin" },
+      });
+      expect(resMalformed.status).toBe(403);
+      expect(resMalformed.headers.get("access-control-allow-origin")).toBeNull();
+
+      // Untrusted foreign origin still blocked with 403
+      const resEvil = await fetch(`${url}/api/config`, {
+        headers: { Origin: "https://evil-attacker.example" },
+      });
+      expect(resEvil.status).toBe(403);
+      const evilData = await resEvil.json() as any;
+      expect(evilData.error).toContain("CORS_ORIGIN_DENIED");
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
